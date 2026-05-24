@@ -1,0 +1,125 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Status
+
+This repository currently contains the specification (`filink.md`, in German) and the architecture decisions captured in this file. There is no source code, build system, dependency manifest, or test suite yet — but the architecture is now decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer) and implementation can begin.
+
+## What "Fichtelink" is
+
+A self-service mailing-list and contact-list platform, originally motivated by school parent groups (e.g. "Eltern der Klasse 9c"). Users register themselves, create or join lists, and the system both stores structured per-user data and forwards email sent to a list's address to its members. The spec is in German; UI/data terms in code should generally follow the spec's German vocabulary (`Liste`, `Vorlage`, `Eintrag`, `Benutzergruppe`, …) unless a translation decision is made later.
+
+## Core domain model (from `filink.md`)
+
+The data model in the spec uses these entities — keep these names and relationships in mind, as much of the access-control logic depends on them:
+
+- **USER** — registers themselves, has email.
+- **LIST** — a list with a title, an email address, and a `LISTTEMPLATE`. Created by a user, who becomes a `LIST_ADMIN`. Lists are public-visible, public-editable, or private. Private lists are joined via an invitation link (shareable as URL / QR code).
+- **LIST_ADMIN** / **LIST_ACCESS** — admins of a list; users who have accepted invitations (the "Benutzergruppe" of a list).
+- **LISTTEMPLATE** + **LIST_ATTRIBUT** + **LIST_ATTRIBUT_VALUE** — templates define fields (text, email, phone, number, choice with optional usage cap, checkbox, user-relationship). Templates are super-admin only. `Must_be_public` on an attribute means a user cannot hide that field.
+- **LIST_RECORD** + **LIST_RECORD_VALUE** — one record per user per list (each user can have at most one entry per list). A record is owned by its creator; only the owner edits it.
+- **LIST_RECORD_ACCESS** — per-value visibility, scoped by audience (another `List_ID`, with `0` meaning public). Each owner controls visibility per field per user group.
+- **FORM** / **FORM_PART** / **FORM_PART_ASSET** / **FORM_ACCESS** — composable forms (static HTML parts + a dynamic list part) with assets (images) and per-user access.
+
+### Important access-control / hierarchy rules
+
+- Visibility of a list-record field is per-audience. The audience is a `List_ID`, so "show this field to members of list X" is the primitive.
+- Lists form an implicit hierarchy via admin overlap: if an admin of list A is a member of list B, then B is a possible **übergeordnete** (parent) list of A. The spec uses this to e.g. let the Elternbeirat send mail to a class list.
+- Every user is automatically a member of every public list's Benutzergruppe.
+
+## Mailing-list behavior (must be implemented carefully)
+
+- The server pulls mail via **IMAP IDLE** on a single **catch-all** address; per-list addresses are virtual (no real mailboxes).
+- Incoming mail to a list address is **not stored** — only the reception and forwarding are logged.
+- **Sender-is-member path:** before forwarding, the server sends the sender a confirmation email with a release link. Mail is only forwarded after that link is clicked. This is the anti-spoofing mechanism — do not skip it.
+- **Sender-is-not-member path:** the release link goes to a list admin, who decides whether to forward.
+- **Anonymization:** if the sender is a member but has not consented to publishing their address, the From: address is rewritten to an auto-generated alias on the list-server domain before forwarding. Replies to that alias must be routed back to the original sender by the server.
+- A list admin can configure who is permitted to send to the list — including members of a parent (übergeordnete) list, per the hierarchy rule above.
+
+## Architecture decisions (mail layer)
+
+These were agreed with the project owner on 2026-05-24. The application stack (Django, Phoenix, …) is **not yet decided** and is independent of this layer.
+
+### Mail transport
+
+- **External mail provider, not a self-hosted MTA.** Rationale: spam-filter quality scales with provider size; running DNS/SPF/DKIM/DMARC, IP-reputation, and blacklist monitoring is inappropriate for the volunteer-run target audience. This deliberately reverses an earlier "run Postfix + LMTP" proposal.
+- **Receive via IMAP IDLE on a single catch-all mailbox** (spec-conform). Per-list addresses remain virtual, resolved by the app.
+- **Send via the same provider's SMTP submission**, so outbound IP reputation is the provider's, not ours.
+- **Provider-agnostic.** Target deployment is volunteer-run school parent associations / Fördervereine on the smallest paid tier (~1 mailbox, ~5 GB). Hard requirements on any supported provider: catch-all + IMAP IDLE + SMTP submission. Concrete fits today: Mailbox.org Standard, Migadu Micro. Gmail / Google Workspace does **not** fit (no catch-all on cheap tiers) — call this out in user-facing setup docs so volunteers don't pick a tariff that can't host the install.
+
+### Required state store
+
+Anti-loop detection, bounce correlation, reply-routing, and double-receive suppression all depend on persisting message metadata. The concrete database is tied to the still-open stack decision, but the table shape is fixed:
+
+- **Outbound**: `Message-ID`, original-sender, recipient (list member), alias-token (for anonymization or bounce routing), sent-at, `list_id`.
+- **Inbound**: `Message-ID`, From, To-alias, received-at, decision (`forwarded` / `pending-approval` / `rejected` / `suppressed`), reason, optional link to the matching Outbound row.
+
+This one structure carries: bounce correlation, rebounce detection, double-receive suppression, OOO/autoresponder suppression, and reply-routing back to the original sender.
+
+### Autoresponder / loop suppression
+
+A message addressed to a list must be **suppressed** (not forwarded) if **any** of the following is true. None of these signals alone is reliable; combine all of them:
+
+- `Auto-Submitted` header is present with any value other than `no` (RFC 3834).
+- Empty `Return-Path: <>` (bounce convention — also handles DSNs).
+- `Precedence: bulk` / `list` / `junk` (legacy, still widely set).
+- `In-Reply-To` / `References` matches a `Message-ID` in the Outbound table — i.e. the inbound is a reply to a mail we forwarded out. In practice this is the strongest OOO signal.
+
+Outgoing list mail must carry `List-Id`, `List-Post`, and `List-Unsubscribe` headers so RFC-conformant autoresponders skip it before any of the above triggers are needed.
+
+### Bounce handling
+
+Delivery Status Notifications (RFC 3464) arrive as ordinary inbound mail to the catch-all. The inbound pipeline parses DSNs and correlates `failed-recipient` against the Outbound table. No provider-specific webhook or API is used or needed — a deliberate consequence of provider-agnosticism.
+
+### Envelope-From / SRS
+
+Envelope-From on outbound mail to list members must **never** be the original sender — relaying via our provider IP would break the original sender's SPF and the mail would land in spam. Use the same alias mechanism as anonymization (`alias-<token>@<domain>`); for non-anonymized forwards, use a technical bounce-only alias (`bounce-<token>@<domain>`). This guarantees every DSN comes back to a token we can correlate to the original outbound row.
+
+### Retention
+
+- **IMAP server:** `EXPUNGE` processed messages after a 7-day grace period.
+- **Local metadata (Inbound/Outbound rows):** keep 30–90 days for bounce correlation.
+
+With this policy the smallest 5 GB provider tier holds long-term.
+
+## Architecture decisions (application stack)
+
+Agreed with the project owner on 2026-05-24.
+
+- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `django-allauth` covers self-registration with confirmation mails; `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
+- **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
+- **Server-rendered UI with HTMX**, no SPA. The admin and member-facing surfaces are forms-heavy with little interactivity; HTMX covers the "feels live" parts (approval queue, list-record edit) without a separate frontend toolchain.
+
+### Task queue / scheduler
+
+**`procrastinate`** — Postgres-native task queue built on `LISTEN`/`NOTIFY`. Chosen over Celery + Redis for three concrete reasons:
+
+1. **Transactional enqueue** in the same commit as the originating Inbound/Outbound row write — eliminates the queue-vs-database race where a row exists but its task never ran (or vice versa). For a system whose correctness depends on message bookkeeping, this matters.
+2. **Tasks are inspectable as ordinary Postgres rows** — debugging "why did this mail not get forwarded?" is a SQL query, not a Redis introspection problem.
+3. **One fewer service** on volunteer-run hardware: no Redis.
+
+Responsibilities:
+
+- Outbound SMTP submission with retry (exponential backoff for transient SMTP errors).
+- Release-mail dispatch when a sender-is-member Inbound row is created.
+- Admin-review dispatch when a sender-is-not-member Inbound row is created.
+- Forwarding fan-out after the release link is clicked (one task per recipient, parallelisable).
+- Reply-routing for anonymization aliases (incoming mail to `alias-<token>@<domain>` → resolve → send to original sender).
+- DSN correlation against the Outbound table.
+- Periodic IMAP `EXPUNGE` of processed messages past the 7-day grace period.
+- Periodic pruning of Inbound/Outbound metadata past retention.
+- Release-token expiry.
+
+Periodic tasks use `procrastinate`'s built-in periodic-task decorator — no separate scheduler process is needed (no Celery-Beat equivalent in the stack).
+
+### Long-lived IMAP IDLE consumer
+
+Django does not ship with a long-lived connection model, and `procrastinate`'s worker is designed for discrete tasks, not streaming. The IMAP IDLE consumer therefore runs as its **own dedicated process**: an **asyncio daemon** using `aioimaplib`, supervised by systemd. Its only job is to persist the Inbound row and enqueue downstream work to `procrastinate`; it performs no business logic itself, which keeps the streaming-IO process boring and pushes all retryable / correctness-critical work into the queue worker where retries are designed for it.
+
+The daemon must implement: explicit reconnect-with-backoff on connection drop, a fallback periodic `SEARCH`/`NOOP` poll every few minutes for missed IDLE notifications, and idempotency keyed on IMAP UID so a reconnect cannot create duplicate Inbound rows.
+
+## Notes for future work
+
+- When implementing, model `LIST_RECORD_ACCESS` audiences as a `List_ID` foreign key on the access row, with `NULL` (mapping the spec's `0`) meaning "public" — the spec leans on this primitive throughout the visibility logic.
+- The spec is the source of truth for product behavior. If a question can be answered by re-reading `filink.md`, do that before guessing.
