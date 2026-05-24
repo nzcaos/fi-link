@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-The repository is initialized on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). It currently contains the specification (`filink.md`, in German), the architecture decisions captured in this file, and a `.gitignore` for the planned Python/Django stack. There is no application code, build system, dependency manifest, or test suite yet — but the architecture is decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer, domain model) and implementation is the next concrete step.
+The repository is initialized on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). It currently contains the specification (`filink.md`, in German), the architecture decisions captured in this file, and a `.gitignore` for the planned Python/Django stack. There is no application code, build system, dependency manifest, or test suite yet — but the architecture is decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer, domain model, authentication) and implementation is the next concrete step.
 
 ## What "Fichtelink" is
 
@@ -54,6 +54,8 @@ Consequences:
 - `LIST_ACCESS` (the Benutzergruppe — those who can *see* the list) remains USER-based. PERSONs without USERs are never audience members and see nothing.
 - `LIST_ADMIN` remains USER-based for the same reason.
 - Audience-based visibility (`LIST_RECORD_ACCESS.audience = list_id`) is evaluated at runtime as "is the requesting USER in the Benutzergruppe of audience list?" — semantics unchanged.
+
+**Email belongs to PERSON, not USER.** `PERSON.email` is nullable (e.g. children can be modeled without an email). USERs inherit their addressable email through their PERSON. A consequence: **multiple USERs may share the same email address** — most commonly when both parents in a family use a shared mailbox, each registering as a separate USER under separate PERSONs that happen to share `PERSON.email`. The natural uniqueness for USER is `(person_id)`, not `(email)`. Follow-on implications: login disambiguation happens via the WebAuthn credential picker (see *Architecture decisions (authentication)*), and inbound-mail handling resolves a sender's From-address to a *set* of USERs — any of them clicking a release link satisfies the anti-spoofing check, since the check is "did someone with access to this mailbox confirm?".
 
 ### Family-association model
 
@@ -134,7 +136,46 @@ Beyond the spec's "Super-Admin manages LISTTEMPLATEs", the Super-Admin also mana
 
 Trade-off: SQL `WHERE` / `ORDER BY` / `LIKE` on encrypted columns is no longer available. Acceptable for Fichtelink — the UI shows lists row-by-row, and full-text search across PII was never a feature. Key rotation is supported via the library's multi-key mechanism (old + new active simultaneously, re-encrypt over time).
 
-`USER.email` remains plaintext — it's the primary identifier, used for login, SMTP routing, In-Reply-To correlation, and bounce addressing, and it appears in mail headers we send out. Disk-level encryption (e.g. LUKS on the VPS) is orthogonal and a deployment concern.
+`PERSON.email` remains plaintext — it is the addressable identifier used for activation links, SMTP routing of forwarded mail, In-Reply-To correlation, bounce addressing, and as From/To in mail headers we send out. Disk-level encryption (e.g. LUKS on the VPS) is orthogonal and a deployment concern.
+
+## Architecture decisions (authentication)
+
+Agreed with the project owner on 2026-05-24.
+
+### Passkeys only, no passwords
+
+Authentication is **exclusively** via WebAuthn passkeys. No password storage, no password-reset flow, no password-based login backend. Rationale: passwords can be forgotten, chosen poorly, reused across services, and leaked in third-party breaches — none of these failure modes apply to passkeys. The library is `django-allauth` (≥ 0.54), configured with the password backend disabled and WebAuthn enabled.
+
+Trade-off: users without passkey-capable devices (older Windows, no smartphone) cannot use the system at all. This is accepted deliberately — the volunteer-run target audience is overwhelmingly on devices that support passkeys (iOS 16+, Android 9+, modern macOS / Windows / Linux with current browsers), and the security gain is judged to outweigh the exclusion. Setup documentation must call this requirement out clearly.
+
+### Registration and login flow
+
+- **Registration:** user enters email → confirmation link sent to that address → on click, the browser prompts for passkey enrollment (Touch ID, Face ID, Windows Hello, or a hardware security key) → account is active.
+- **Invitation (family-triade activation):** the invitation link *is* the confirmation link — clicking it activates the stub USER previously created by the inviter and triggers passkey enrollment in a single step.
+- **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed.
+- **Multiple passkeys per account** are encouraged: the UI lets users enroll passkeys on additional devices (e.g. "iPhone", "Arbeit-Laptop") and delete individual ones. Multi-device enrollment is the primary defense against device loss and reduces the recovery burden.
+
+The usernameless flow combined with `user.displayName` cleanly handles the shared-family-email case (see *PERSON vs. USER*): both parents register passkeys under the same `PERSON.email`, and the browser shows both passkeys labeled by name when either parent signs in — even on a shared device.
+
+### Account recovery
+
+There is **no automated email-based recovery** (no "forgot password" mail link). Recovery is **human-mediated** and walks up the list-admin hierarchy:
+
+```
+Regular USER             → contacts their list admin (e.g. Elternvertreter)
+List admin (sub-list)    → contacts the parent-list admin (e.g. Vorsitz Elternbeirat)
+Top-level list admin     → contacts the Super-Admin
+Super-Admin              → out-of-band recovery via shell
+                           (e.g. `manage.py reset-passkeys --user <email>`)
+```
+
+The admin one level above triggers (manually, after recognizing the requester as the legitimate person) a resend of the activation link to the on-file email. Because the requester's data, list memberships, and family relationships are all retained, re-onboarding reduces to enrolling a new passkey — nothing else.
+
+This model deliberately removes the standard "compromised mailbox = account takeover" recovery risk: a stolen email account alone does not yield system access; an attacker would additionally need to socially engineer a human admin who knows the legitimate user. Trade-off: recovery is asynchronous and requires admin availability — accepted given the volunteer/social context this system runs in.
+
+### HTTPS requirement
+
+WebAuthn works only over HTTPS (or `localhost` for development). TLS is therefore a hard deployment requirement, not optional. Recommended path for the volunteer-run target audience: Let's Encrypt with automatic renewal via the hosting provider's standard tooling. Setup documentation must call this out — a deployment without HTTPS cannot log anyone in.
 
 ## Architecture decisions (mail layer)
 
@@ -149,7 +190,7 @@ These were agreed with the project owner on 2026-05-24 and are independent of th
 
 ### Required state store
 
-Anti-loop detection, bounce correlation, reply-routing, and double-receive suppression all depend on persisting message metadata. The concrete database is tied to the still-open stack decision, but the table shape is fixed:
+Anti-loop detection, bounce correlation, reply-routing, and double-receive suppression all depend on persisting message metadata. In PostgreSQL, two tables:
 
 - **Outbound**: `Message-ID`, original-sender, recipient (list member), alias-token (for anonymization or bounce routing), sent-at, `list_id`.
 - **Inbound**: `Message-ID`, From, To-alias, received-at, decision (`forwarded` / `pending-approval` / `rejected` / `suppressed`), reason, optional link to the matching Outbound row.
@@ -186,7 +227,7 @@ With this policy the smallest 5 GB provider tier holds long-term.
 
 Agreed with the project owner on 2026-05-24.
 
-- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `django-allauth` covers self-registration with confirmation mails; `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
+- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `django-allauth` covers self-registration and passkey-only authentication (see *Architecture decisions (authentication)*); `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
 - **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
 - **Server-rendered UI with HTMX**, no SPA. The admin and member-facing surfaces are forms-heavy with little interactivity; HTMX covers the "feels live" parts (approval queue, list-record edit) without a separate frontend toolchain.
 
