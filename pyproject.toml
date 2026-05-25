@@ -1,0 +1,25 @@
+[project]
+name = "fichtelink"
+version = "0.0.0"
+description = "Self-service mailing-list and contact-list platform for school parent groups and similar associations."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "Proprietary" }
+dependencies = [
+  "Django>=5.1,<5.3",
+  "psycopg[binary]>=3.2,<4",
+  "gunicorn>=23,<24",
+  "whitenoise>=6.7,<7",
+  "django-allauth[mfa]>=65.0,<70",
+  "django-cryptography-django5>=2.2,<3",
+  "procrastinate>=3.0,<4",
+  "aioimaplib>=1.1,<2",
+  "cryptography>=43",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fichtelink"]

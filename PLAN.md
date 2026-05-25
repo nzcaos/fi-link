@@ -6,7 +6,7 @@ Implementierungsplan für Fichtelink, geschnitten in 10 Phasen. Jede Phase ist s
 
 ## Phase 0 — Skeleton & Compose
 
-- [ ] **Ziel:** `docker compose up` startet alle vier Container; Django-Default-Seite ist via Apache-Proxy auf `fichtelink.caos.cloud` erreichbar.
+- [x] **Ziel:** `docker compose up` startet alle vier Container; Django-Default-Seite ist via Apache-Proxy auf `fichtelink.caos.cloud` erreichbar.
 
 Outputs:
 - `pyproject.toml` mit Pinned Deps (Django 5.x, psycopg, gunicorn, procrastinate, aioimaplib, django-allauth, django-cryptography, whitenoise)
