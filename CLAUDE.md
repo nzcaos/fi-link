@@ -395,6 +395,14 @@ Migrations and `collectstatic` are explicit `docker compose run --rm` steps in t
 
 Management command `manage.py bootstrap_super_admin`, invoked once at install time. It prompts for an email, creates a USER + PERSON marked as super-admin, and sends a passkey-enrollment link. There is no password — activation is by link only, identical to the regular invitation flow. Same pattern is used for `manage.py reset_passkeys --email <…>` in the manual-recovery path.
 
+## Code conventions
+
+Agreed 2026-05-25.
+
+**Model class names are English; `verbose_name` is German.** The spec uses German vocabulary (`Liste`, `Vorlage`, `Eintrag`, `Benutzergruppe`, …); the implementation uses Django-idiomatic English class names (`List`, `ListTemplate`, `ListRecord`, `ListAccess`, …) and exposes the German vocabulary to users via each model's `verbose_name`, `verbose_name_plural`, and field `verbose_name`/`help_text`. Reason: mixed English/German imports get noisy fast, and Django's own classes (`AbstractBaseUser`, `Model`, `ForeignKey`) are English-rooted regardless. The German vocabulary is preserved everywhere a user sees it (Django Admin, future templates, error messages).
+
+Field names follow the same rule (English identifier, German `verbose_name`). One exception: `Person` and `User` keep both their English name and English vocabulary, because the spec itself uses these terms in English.
+
 ## Notes for future work
 
 - When implementing, model `LIST_RECORD_ACCESS` audiences as a `List_ID` foreign key on the access row, with `NULL` (mapping the spec's `0`) meaning "public" — the spec leans on this primitive throughout the visibility logic.

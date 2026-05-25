@@ -19,7 +19,7 @@ Outputs:
 
 ## Phase 1 — Domänenmodell
 
-- [ ] **Ziel:** Alle Kern-Entitäten als Django-Models, Migrations grün, Django-Admin zeigt sie an.
+- [x] **Ziel:** Alle Kern-Entitäten als Django-Models, Migrations grün, Django-Admin zeigt sie an.
 
 Outputs:
 - Apps `accounts`, `lists`, `forms`
