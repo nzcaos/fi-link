@@ -34,13 +34,18 @@ Outputs:
 - [ ] **Ziel:** End-to-end Registrierung + Login + Recovery-CLI.
 
 Outputs:
-- `django-allauth` mit WebAuthn, Password-Backend deaktiviert
+- `py_webauthn` (Server) + `@simplewebauthn/browser` v9 als vendored UMD-Bundle in `static/vendor/`; kein `django-allauth`, kein CDN (Begründung in CLAUDE.md)
+- Models: `Passkey` (credential_id, public_key, sign_count, user, label, last_used_at), `WebAuthnChallenge` (challenge, purpose, expected_user_id, expires_at)
+- Endpunkte: `/auth/register-begin`, `/auth/register-finish`, `/auth/login-begin`, `/auth/login-finish`, `/auth/logout`
 - Registrierungs-Flow (E-Mail → Aktivierungs-Link → Passkey-Enrollment)
-- Login per discoverable credentials (`user.displayName` gesetzt)
+- Login per discoverable credentials (`user.displayName` gesetzt), Email-Feld mit `autocomplete="email webauthn"` für Conditional-UI
+- Constant-time `login-begin` (≥ 250 ms Floor, Fake-`allowCredentials` für unbekannte Emails); Resolution gegen USER-Set bei geteilter `PERSON.email`
 - Passkey-Verwaltung (Add/Delete) pro Account, HTMX-driven
+- RP-Config aus Env: `RP_ID`, `RP_ORIGIN`, `RP_NAME` (in `.env.example` ergänzen)
 - Management-Commands: `bootstrap_super_admin`, `reset_passkeys`
+- Periodischer `procrastinate`-Task: WebAuthnChallenge-Sweeper (TTL 5 min)
 
-**Verify:** Echte Registrierung + Login in zwei verschiedenen Browsern über die Live-Domain.
+**Verify:** Echte Registrierung + Login in zwei verschiedenen Browsern über die Live-Domain. Test auf Mobile (iOS Safari + Android Chrome), weil das die Geräte sind, die bei Fi-Planer die CDN-Probleme zeigten — der vendored Bundle muss dort sauber laden.
 
 ## Phase 3a — Listen-Modelle & Admin-Views
 

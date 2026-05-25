@@ -225,19 +225,48 @@ Trade-off: SQL `WHERE` / `ORDER BY` / `LIKE` on encrypted columns is no longer a
 
 ## Architecture decisions (authentication)
 
-Agreed with the project owner on 2026-05-24.
+Agreed with the project owner on 2026-05-24. **Library choice revised 2026-05-25** after reviewing the `Fi-Planer` sibling project (also volunteer-run, also school-context, also Passkey-only) which has the same flow in production. Where this section overlaps with Fi-Planer's `CLAUDE.md`, that's deliberate — same operational lessons apply.
 
 ### Passkeys only, no passwords
 
-Authentication is **exclusively** via WebAuthn passkeys. No password storage, no password-reset flow, no password-based login backend. Rationale: passwords can be forgotten, chosen poorly, reused across services, and leaked in third-party breaches — none of these failure modes apply to passkeys. The library is `django-allauth` (≥ 0.54), configured with the password backend disabled and WebAuthn enabled.
+Authentication is **exclusively** via WebAuthn passkeys. No password storage, no password-reset flow, no password-based login backend. Rationale: passwords can be forgotten, chosen poorly, reused across services, and leaked in third-party breaches — none of these failure modes apply to passkeys.
 
 Trade-off: users without passkey-capable devices (older Windows, no smartphone) cannot use the system at all. This is accepted deliberately — the volunteer-run target audience is overwhelmingly on devices that support passkeys (iOS 16+, Android 9+, modern macOS / Windows / Linux with current browsers), and the security gain is judged to outweigh the exclusion. Setup documentation must call this requirement out clearly.
+
+### Library choice and topology
+
+**Hand-rolled, not `django-allauth`.** An earlier plan named `django-allauth` (with its WebAuthn MFA module) as the auth library. That has been dropped after weighing it against our actual constraints:
+
+- allauth is centered on `User.email`. We have `Person.email`, non-unique (multiple USERs may share a family mailbox per *PERSON vs. USER*), and login resolves to a USER *set* keyed by the chosen passkey — not by email. Fitting that into allauth would mean overriding most of its email-centric flow.
+- Allauth brings its own templates, views, and signup/login state machine — which would all need overriding to fit the triade-invitation flow, the super-admin bootstrap, and the shared-family-email case.
+- The hand-rolled alternative is small (~400 LOC Python + ~100 LOC frontend glue, scaled from Fi-Planer's `auth.js`) and uses Django's built-in sessions / CSRF / cookies for everything around the WebAuthn ceremony itself.
+
+The libraries:
+
+- **Server: `py_webauthn` (Duo Labs)**, pinned to **v2.x**. Same API shape as Fi-Planer's `@simplewebauthn/server` v9 (`generate_registration_options`, `verify_registration_response`, `generate_authentication_options`, `verify_authentication_response`). Pin to the major to avoid v3-style breaking renames.
+- **Client: `@simplewebauthn/browser` v9.x**, shipped as a **vendored UMD bundle** in `fichtelink/static/vendor/simplewebauthn-browser-9.x.x.umd.min.js`. **No CDN delivery.** Fi-Planer observed mobile-device flakiness when WebAuthn JS came from a public CDN; self-hosting eliminates that failure mode and removes a third-party dependency from the security-critical login path. Whitenoise serves the bundle from `STATIC_ROOT`.
+
+In the page: a plain `<script src="/static/vendor/simplewebauthn-browser-9.x.x.umd.min.js">` provides the `SimpleWebAuthnBrowser.startRegistration(opts)` / `startAuthentication(opts)` globals. No build step, no module loader, no CDN.
+
+### Challenge storage
+
+Each `register-begin` / `login-begin` returns a challenge that must be presented again at `finish` time. Storage: **a Postgres table `webauthn_challenge`** (`challenge bytea PRIMARY KEY`, `purpose ENUM('register','login')`, `expected_user_id` nullable for discoverable-credential login, `created_at`, `expires_at` default +5 min). A `procrastinate` periodic task sweeps expired rows.
+
+Rejected: the in-memory `Map` pattern Fi-Planer uses. For Fichtelink the pending-registration rate is low (one per invitation acceptance), but losing a pending registration to a gunicorn worker restart is an avoidable irritation in a multi-worker setup. Postgres also keeps the challenge visible to all workers, which an in-memory store does not.
+
+### Enumeration resistance
+
+`login-begin` returns a **constant-time response** (≥ 250 ms floor, fake `allowCredentials` for unknown emails) regardless of whether the email is known. Same pattern as Fi-Planer (`backend/src/routes/auth.js:148`).
+
+`register-begin` is intentionally **not** enumeration-resistant — telling a returning user that their email already has an account is part of the invitation/recovery UX (they need to be steered to the device-loss flow, not silently re-registered). Same trade-off Fi-Planer makes (`auth.js:166`).
+
+For the shared-family-mailbox case: `login-begin` resolves an email to a *set* of USERs and emits `allowCredentials` containing every passkey of every matching USER. The browser shows all available passkeys; the user picks their own; the chosen credential uniquely identifies the USER.
 
 ### Registration and login flow
 
 - **Registration:** user enters email → confirmation link sent to that address → on click, the browser prompts for passkey enrollment (Touch ID, Face ID, Windows Hello, or a hardware security key) → account is active.
 - **Invitation (family-triade activation):** the invitation link *is* the confirmation link — clicking it activates the stub USER previously created by the inviter and triggers passkey enrollment in a single step.
-- **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed.
+- **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed. The login email-input field carries `autocomplete="email webauthn"` for the platform's conditional-UI / autofill path.
 - **Multiple passkeys per account** are encouraged: the UI lets users enroll passkeys on additional devices (e.g. "iPhone", "Arbeit-Laptop") and delete individual ones. Multi-device enrollment is the primary defense against device loss and reduces the recovery burden.
 
 The usernameless flow combined with `user.displayName` cleanly handles the shared-family-email case (see *PERSON vs. USER*): both parents register passkeys under the same `PERSON.email`, and the browser shows both passkeys labeled by name when either parent signs in — even on a shared device.
@@ -258,9 +287,22 @@ The admin one level above triggers (manually, after recognizing the requester as
 
 This model deliberately removes the standard "compromised mailbox = account takeover" recovery risk: a stolen email account alone does not yield system access; an attacker would additionally need to socially engineer a human admin who knows the legitimate user. Trade-off: recovery is asynchronous and requires admin availability — accepted given the volunteer/social context this system runs in.
 
-### HTTPS requirement
+### HTTPS, RP config, and the Apache proxy
 
 WebAuthn works only over HTTPS (or `localhost` for development). TLS is therefore a hard deployment requirement, not optional. Recommended path for the volunteer-run target audience: Let's Encrypt with automatic renewal via the hosting provider's standard tooling. Setup documentation must call this out — a deployment without HTTPS cannot log anyone in.
+
+The RP identity is configured via three environment variables (read at startup in `settings.py`):
+
+- `RP_ID` — bare hostname, **no scheme**, e.g. `fichtelink.caos.cloud`.
+- `RP_ORIGIN` — full URL the browser uses, e.g. `https://fichtelink.caos.cloud`. Must exactly match what the browser sees.
+- `RP_NAME` — display name shown by the authenticator (e.g. "Fichtelink").
+
+Operational gotchas (all reproduced from Fi-Planer's experience — see its `CLAUDE.md` §Topology):
+
+- Apache vhost **must** set `ProxyPreserveHost On`. Without it the proxied request reaches Django with `Host: <vm-ip>` and the WebAuthn origin check silently fails — the browser ceremony completes successfully and the server then returns 400 with a misleading "origin mismatch" error.
+- Apache `ServerName` must exactly match `RP_ID`. A mismatch produces the same silent failure mode.
+- The proxy must be root-pathed (`ProxyPass /`) — anything fancier breaks static asset paths, including the vendored SimpleWebAuthn bundle.
+- Django reads `X-Forwarded-Proto` via `SECURE_PROXY_SSL_HEADER` so it generates `https://` URLs for activation links and the WebAuthn challenge sees the correct origin.
 
 ## Architecture decisions (mail layer)
 
@@ -312,7 +354,7 @@ With this policy the smallest 5 GB provider tier holds long-term.
 
 Agreed with the project owner on 2026-05-24.
 
-- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `django-allauth` covers self-registration and passkey-only authentication (see *Architecture decisions (authentication)*); `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
+- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `py_webauthn` covers passkey-only authentication in a hand-rolled flow (see *Architecture decisions (authentication)*); `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
 - **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
 - **Server-rendered UI** — see *Frontend* below.
 
@@ -322,7 +364,7 @@ Agreed with the project owner on 2026-05-24.
 
 **Alpine.js** as the standard partner to HTMX for client-side state sprinkles — toggles, dropdowns, the per-field visibility matrix, conditional form sections. ~10 KB, no build step, attribute-driven (`x-data`, `x-show`, `x-on`).
 
-**Hand-written JavaScript** is kept minimal — WebAuthn ceremonies (via `@github/webauthn-json` as an IIFE include), QR-code generation for invitation links (`qrcode.js`), small Alpine helpers. Expected total volume well below the threshold where a build pipeline would pay back.
+**Hand-written JavaScript** is kept minimal — WebAuthn ceremonies (via `@simplewebauthn/browser` v9, vendored as a UMD bundle in `static/vendor/` and loaded as a plain `<script>` tag; see *Architecture decisions (authentication) / Library choice*), QR-code generation for invitation links (`qrcode.js`, same vendored-UMD pattern), small Alpine helpers. Expected total volume well below the threshold where a build pipeline would pay back. **No CDN delivery for any of these** — vendored from the project's `static/vendor/` and served by Whitenoise.
 
 **TypeScript is deferred, not adopted.** Trigger to revisit: hand-written client JS exceeding ~500 lines, or emerging as a cohesive library worth typing (e.g. a typed WebAuthn wrapper plus reusable components). Migration would be a single-binary `esbuild` step in a Docker multi-stage build — non-breaking for everything else.
 
