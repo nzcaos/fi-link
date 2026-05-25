@@ -314,7 +314,19 @@ Agreed with the project owner on 2026-05-24.
 
 - **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `django-allauth` covers self-registration and passkey-only authentication (see *Architecture decisions (authentication)*); `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
 - **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
-- **Server-rendered UI with HTMX**, no SPA. The admin and member-facing surfaces are forms-heavy with little interactivity; HTMX covers the "feels live" parts (approval queue, list-record edit) without a separate frontend toolchain.
+- **Server-rendered UI** — see *Frontend* below.
+
+### Frontend
+
+**HTMX + Django templates** as the primary rendering and interactivity layer. The server returns HTML (full pages or fragments), HTMX swaps fragments into the DOM based on `hx-*` attributes. No SPA, no virtual DOM, no JSON API layer for the UI. The admin and member-facing surfaces are forms-heavy and request/response-shaped — HTMX covers the "feels live" parts (approval queue, list-record edit, onboarding wizard) without a separate frontend toolchain.
+
+**Alpine.js** as the standard partner to HTMX for client-side state sprinkles — toggles, dropdowns, the per-field visibility matrix, conditional form sections. ~10 KB, no build step, attribute-driven (`x-data`, `x-show`, `x-on`).
+
+**Hand-written JavaScript** is kept minimal — WebAuthn ceremonies (via `@github/webauthn-json` as an IIFE include), QR-code generation for invitation links (`qrcode.js`), small Alpine helpers. Expected total volume well below the threshold where a build pipeline would pay back.
+
+**TypeScript is deferred, not adopted.** Trigger to revisit: hand-written client JS exceeding ~500 lines, or emerging as a cohesive library worth typing (e.g. a typed WebAuthn wrapper plus reusable components). Migration would be a single-binary `esbuild` step in a Docker multi-stage build — non-breaking for everything else.
+
+**Vue (and any other SPA framework) is explicitly out of scope** — it would require a JSON API layer (DRF or django-ninja), a Node build pipeline, and a parallel rendering tree, contradicting the "server-rendered, no SPA" decision. Reconsider only if a specific future surface emerges that genuinely needs reactive component-tree thinking (none does today).
 
 ### Task queue / scheduler
 
