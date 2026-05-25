@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-The repository is initialized on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). It currently contains the specification (`filink.md`, in German), the architecture decisions captured in this file, and a `.gitignore` for the planned Python/Django stack. There is no application code, build system, dependency manifest, or test suite yet — but the architecture is decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer, domain model, authentication) and implementation is the next concrete step.
+The repository is initialized on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). It currently contains the specification (`filink.md`, in German), the architecture decisions captured in this file, the deployment-procedure documentation in `README.md`, and a `.gitignore` for the planned Python/Django stack. There is no application code, build system, dependency manifest, or test suite yet — but the architecture is decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer, domain model, authentication, deployment) and implementation is the next concrete step.
 
 ## What "Fichtelink" is
 
@@ -343,6 +343,45 @@ Periodic tasks use `procrastinate`'s built-in periodic-task decorator — no sep
 Django does not ship with a long-lived connection model, and `procrastinate`'s worker is designed for discrete tasks, not streaming. The IMAP IDLE consumer therefore runs as its **own dedicated process**: an **asyncio daemon** using `aioimaplib`, supervised by systemd. Its only job is to persist the Inbound row and enqueue downstream work to `procrastinate`; it performs no business logic itself, which keeps the streaming-IO process boring and pushes all retryable / correctness-critical work into the queue worker where retries are designed for it.
 
 The daemon must implement: explicit reconnect-with-backoff on connection drop, a fallback periodic `SEARCH`/`NOOP` poll every few minutes for missed IDLE notifications, and idempotency keyed on IMAP UID so a reconnect cannot create duplicate Inbound rows.
+
+## Architecture decisions (deployment)
+
+Agreed 2026-05-25. Operational procedure (commands, env vars, day-2 ops) lives in `README.md`; this section captures the *decisions* behind that procedure.
+
+### Container topology
+
+Four services in one `docker-compose.yml`, **all built from a single shared image** (same Python dependencies, differing only in `command:`):
+
+- `db` — PostgreSQL 16, persistent named volume.
+- `web` — Django + gunicorn.
+- `worker` — `procrastinate` worker; also handles periodic tasks via the built-in decorator (no separate scheduler service).
+- `imap_idle` — long-lived asyncio `aioimaplib` daemon.
+
+One shared image rather than per-service Dockerfiles: the IMAP daemon's footprint (Python interpreter + Django settings + DB driver) is identical to the web container, and a single build is simpler to reason about than four.
+
+### Reverse-proxy boundary
+
+TLS is terminated by an **Apache reverse-proxy on a separate host in the same private network** as the VM (existing infrastructure on the target deployment — `fichtelink.caos.cloud`, Let's Encrypt cert managed there). The `web` container binds plain HTTP on a port reachable **only from the reverse-proxy host** (VM firewall enforces). Rationale: TLS, cert renewal, and SNI/multi-vhost concerns are already a solved problem on the proxy box; duplicating them inside the Docker stack would add complexity for no gain on this deployment scale.
+
+Django configuration honours `X-Forwarded-Proto` (`SECURE_PROXY_SSL_HEADER`, `USE_X_FORWARDED_HOST`) so it generates `https://` URLs for activation/release links and the WebAuthn challenge. **WebAuthn RP-ID and origin are the browser-visible name** (`fichtelink.caos.cloud` / `https://fichtelink.caos.cloud`) — the proxy is transparent to the browser, no special WebAuthn config needed for the proxy.
+
+### Static and media files
+
+**Static files served by WhiteNoise** inside the `web` container, not by the reverse-proxy. The asset volume is small enough that serving from the Python process has no measurable overhead, and it removes one cross-container coupling. FORM_PART_ASSET uploads land on a host-mounted `media` volume.
+
+### Secrets
+
+A single `.env` file on the VM, **never in git**. The repository ships `.env.example` with placeholders. Keys are documented both there and in README.md. The `FERNET_KEY` is particularly critical — losing it makes all encrypted `LIST_RECORD_VALUE` rows unrecoverable; operator must back it up off-host.
+
+### Deploy flow
+
+Manual `git pull` + `docker compose` on the VM, **no CI/CD in v1**. Rationale: the target is a single VM operated by one person; GitHub Actions + a container registry adds infrastructure complexity (image-tag management, pull-credentials, registry auth) without solving a problem at this scale. Migration to pre-built images via GHA is a non-breaking change later — only the `build:` / `image:` directive in the compose file changes.
+
+Migrations and `collectstatic` are explicit `docker compose run --rm` steps in the deploy procedure, **not auto-on-start**. Auto-migrate on startup risks restart loops if a migration is broken and obscures the failure; explicit steps make the deploy procedure inspectable and recoverable.
+
+### Super-admin bootstrap
+
+Management command `manage.py bootstrap_super_admin`, invoked once at install time. It prompts for an email, creates a USER + PERSON marked as super-admin, and sends a passkey-enrollment link. There is no password — activation is by link only, identical to the regular invitation flow. Same pattern is used for `manage.py reset_passkeys --email <…>` in the manual-recovery path.
 
 ## Notes for future work
 
