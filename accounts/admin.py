@@ -19,5 +19,5 @@ class UserAdmin(admin.ModelAdmin):
     list_display = ("username", "person", "is_active", "is_staff", "is_superuser")
     search_fields = ("username", "person__family_name", "person__given_name", "person__email")
     list_filter = ("is_active", "is_staff", "is_superuser")
-    raw_id_fields = ("person",)
+    autocomplete_fields = ("person",)
     readonly_fields = ("last_login", "date_joined")

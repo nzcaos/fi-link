@@ -38,7 +38,7 @@ class ListAttributeAdmin(admin.ModelAdmin):
 class ListAdminInline(admin.TabularInline):
     model = ListAdmin
     extra = 0
-    raw_id_fields = ("user",)
+    autocomplete_fields = ("user",)
 
 
 @admin.register(List)
@@ -55,33 +55,33 @@ class ListListAdmin(admin.ModelAdmin):
     )
     list_filter = ("visibility", "template", "curriculum_track", "archived_at")
     search_fields = ("title", "email_alias")
-    raw_id_fields = ("parent",)
+    autocomplete_fields = ("parent",)
     inlines = [ListAdminInline]
 
 
 @admin.register(ListAdmin)
 class ListAdminAdmin(admin.ModelAdmin):
     list_display = ("list", "user", "granted_at")
-    raw_id_fields = ("list", "user")
+    autocomplete_fields = ("list", "user")
 
 
 @admin.register(ListAccess)
 class ListAccessAdmin(admin.ModelAdmin):
     list_display = ("list", "user", "joined_at")
-    raw_id_fields = ("list", "user")
+    autocomplete_fields = ("list", "user")
 
 
 class ListRecordValueInline(admin.TabularInline):
     model = ListRecordValue
     extra = 0
-    raw_id_fields = ("attribute",)
+    autocomplete_fields = ("attribute",)
     fields = ("attribute", "value")
 
 
 class ListRecordAccessInline(admin.TabularInline):
     model = ListRecordAccess
     extra = 0
-    raw_id_fields = ("attribute", "audience")
+    autocomplete_fields = ("attribute", "audience")
     fields = ("attribute", "audience")
 
 
@@ -94,14 +94,14 @@ class ListRecordAdmin(admin.ModelAdmin):
         "subject__given_name",
         "list__title",
     )
-    raw_id_fields = ("list", "subject")
+    autocomplete_fields = ("list", "subject")
     inlines = [ListRecordValueInline, ListRecordAccessInline]
 
 
 @admin.register(ListRecordValue)
 class ListRecordValueAdmin(admin.ModelAdmin):
     list_display = ("record", "attribute")
-    raw_id_fields = ("record", "attribute")
+    autocomplete_fields = ("record", "attribute")
     # Encrypted values aren't searchable in SQL by design.
     search_fields = ("record__subject__family_name",)
 
@@ -109,7 +109,7 @@ class ListRecordValueAdmin(admin.ModelAdmin):
 @admin.register(ListRecordAccess)
 class ListRecordAccessAdmin(admin.ModelAdmin):
     list_display = ("record", "attribute", "audience")
-    raw_id_fields = ("record", "attribute", "audience")
+    autocomplete_fields = ("record", "attribute", "audience")
 
 
 @admin.register(PersonRelationship)
@@ -122,14 +122,14 @@ class PersonRelationshipAdmin(admin.ModelAdmin):
         "related_person__given_name",
         "role",
     )
-    raw_id_fields = ("subject_person", "related_person")
+    autocomplete_fields = ("subject_person", "related_person")
 
 
 @admin.register(RecordManager)
 class RecordManagerAdmin(admin.ModelAdmin):
     list_display = ("record", "user", "basis", "since")
     list_filter = ("basis",)
-    raw_id_fields = ("record", "user")
+    autocomplete_fields = ("record", "user")
 
 
 @admin.register(ListSendPermission)
@@ -142,4 +142,4 @@ class ListSendPermissionAdmin(admin.ModelAdmin):
         "granted_at",
     )
     list_filter = ("requires_release_click", "transitive")
-    raw_id_fields = ("target_list", "granted_to_list", "granted_by")
+    autocomplete_fields = ("target_list", "granted_to_list", "granted_by")
