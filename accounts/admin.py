@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Person, User
+from .models import ActivationToken, Passkey, Person, User, WebAuthnChallenge
 
 
 @admin.register(Person)
@@ -21,3 +21,29 @@ class UserAdmin(admin.ModelAdmin):
     list_filter = ("is_active", "is_staff", "is_superuser")
     autocomplete_fields = ("person",)
     readonly_fields = ("last_login", "date_joined")
+
+
+@admin.register(Passkey)
+class PasskeyAdmin(admin.ModelAdmin):
+    list_display = ("user", "label", "created_at", "last_used_at")
+    search_fields = ("label", "user__username", "user__person__family_name")
+    list_filter = ("created_at", "last_used_at")
+    autocomplete_fields = ("user",)
+    readonly_fields = ("credential_id", "public_key", "sign_count", "created_at", "last_used_at")
+
+
+@admin.register(WebAuthnChallenge)
+class WebAuthnChallengeAdmin(admin.ModelAdmin):
+    list_display = ("purpose", "expected_user", "created_at", "expires_at")
+    list_filter = ("purpose",)
+    autocomplete_fields = ("expected_user",)
+    readonly_fields = ("challenge", "created_at")
+
+
+@admin.register(ActivationToken)
+class ActivationTokenAdmin(admin.ModelAdmin):
+    list_display = ("email", "person", "user", "purpose", "created_at", "expires_at", "consumed_at")
+    list_filter = ("purpose", "consumed_at")
+    search_fields = ("email", "person__family_name", "person__given_name", "token")
+    autocomplete_fields = ("person", "user")
+    readonly_fields = ("token", "created_at")

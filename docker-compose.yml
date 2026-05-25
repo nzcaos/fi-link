@@ -31,7 +31,7 @@ services:
 
   worker:
     build: .
-    command: ["sh", "-c", "echo 'procrastinate worker stub - Phase 0'; exec sleep infinity"]
+    command: ["python", "manage.py", "procrastinate", "worker"]
     env_file: .env
     environment:
       POSTGRES_HOST: db

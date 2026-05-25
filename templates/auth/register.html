@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Registrierung — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Konto anlegen</h1>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if info %}<div class="info">{{ info }}</div>{% endif %}
+
+  {% if allow_continue %}
+    <form method="post" action="{% url 'accounts:register_force' %}">
+      {% csrf_token %}
+      <input type="hidden" name="email" value="{{ email }}">
+      <input type="hidden" name="given_name" value="{{ given_name }}">
+      <input type="hidden" name="family_name" value="{{ family_name }}">
+      <p>Trotzdem ein weiteres Konto unter <strong>{{ email }}</strong> anlegen für <strong>{{ given_name }} {{ family_name }}</strong>?</p>
+      <button type="submit">Ja, weiteres Konto anlegen</button>
+      <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </form>
+  {% else %}
+    <form method="post" action="{% url 'accounts:register_start' %}">
+      {% csrf_token %}
+      <label for="given_name">Vorname</label>
+      <input type="text" id="given_name" name="given_name" value="{{ given_name|default_if_none:'' }}" required>
+      <label for="family_name">Nachname</label>
+      <input type="text" id="family_name" name="family_name" value="{{ family_name|default_if_none:'' }}" required>
+      <label for="email">E-Mail-Adresse</label>
+      <input type="email" id="email" name="email" value="{{ email|default_if_none:'' }}" autocomplete="email" required>
+      <p style="margin-top:1rem">
+        <button type="submit">Aktivierungs-Link anfordern</button>
+      </p>
+    </form>
+    <p style="margin-top:2rem;font-size:0.85rem;color:#555">
+      Fichtelink nutzt Passkeys statt Passwörter. Sie brauchen ein Gerät, das das unterstützt
+      (iPhone/iPad ab iOS 16, Android ab 9, aktuelles macOS/Windows/Linux mit modernem Browser).
+    </p>
+  {% endif %}
+{% endblock %}

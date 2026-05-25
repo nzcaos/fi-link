@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Passkeys — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Ihre Passkeys</h1>
+  <p>
+    Sie können mehrere Passkeys hinterlegen — z.B. einen für jedes Gerät, das
+    Sie regelmäßig nutzen. Das ist die wichtigste Absicherung gegen Geräteverlust.
+  </p>
+
+  <div id="passkey-list">
+    {% include "auth/_passkey_list.html" %}
+  </div>
+
+  <h2 style="margin-top:2rem;font-size:1.1rem">Weiteren Passkey anlegen</h2>
+  <label for="new-label">Bezeichnung (optional)</label>
+  <input type="text" id="new-label" placeholder="z.B. iPhone, Arbeit-Laptop">
+  <p style="margin-top:0.5rem">
+    <button type="button" id="add-passkey">Passkey hinzufügen</button>
+  </p>
+  <div id="status"></div>
+
+  <script>
+    (function () {
+      const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)[1];
+      const btn = document.getElementById('add-passkey');
+      const labelEl = document.getElementById('new-label');
+      const statusEl = document.getElementById('status');
+      const listEl = document.getElementById('passkey-list');
+
+      function setStatus(msg, cls) {
+        statusEl.innerHTML = '<div class="' + cls + '">' + msg + '</div>';
+      }
+
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        setStatus('Vorbereitung …', 'info');
+        try {
+          const beginResp = await fetch("{% url 'accounts:passkey_add_begin' %}", {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          });
+          if (!beginResp.ok) throw new Error('Server lehnt ab.');
+          const options = await beginResp.json();
+          setStatus('Bestätigen Sie auf Ihrem Gerät …', 'info');
+          const credential = await SimpleWebAuthnBrowser.startRegistration(options);
+          const finishResp = await fetch("{% url 'accounts:passkey_add_finish' %}", {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ credential: credential, label: labelEl.value }),
+          });
+          if (!finishResp.ok) {
+            const err = await finishResp.json().catch(() => ({}));
+            throw new Error(err.error || 'Server-Verifikation fehlgeschlagen.');
+          }
+          setStatus('Passkey hinzugefügt.', 'ok');
+          labelEl.value = '';
+          // Refresh the list fragment via HTMX-style GET.
+          const refresh = await fetch("{% url 'accounts:passkey_list_fragment' %}", {
+            credentials: 'same-origin',
+          });
+          if (refresh.ok) listEl.innerHTML = await refresh.text();
+        } catch (err) {
+          setStatus('Fehler: ' + err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+{% endblock %}

@@ -31,7 +31,7 @@ Outputs:
 
 ## Phase 2 — Authentifizierung (Passkeys)
 
-- [ ] **Ziel:** End-to-end Registrierung + Login + Recovery-CLI.
+- [x] **Ziel:** End-to-end Registrierung + Login + Recovery-CLI.
 
 Outputs:
 - `py_webauthn` (Server) + `@simplewebauthn/browser` v9 als vendored UMD-Bundle in `static/vendor/`; kein `django-allauth`, kein CDN (Begründung in CLAUDE.md)

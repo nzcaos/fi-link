@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Anmelden — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Anmelden</h1>
+  <p>
+    Klicken Sie auf „Mit Passkey anmelden". Ihr Browser zeigt die hinterlegten
+    Passkeys an — wählen Sie den passenden aus.
+  </p>
+
+  <label for="email">E-Mail (optional — nur wenn der Browser keine Passkey-Auswahl anbietet)</label>
+  <input type="email" id="email" name="email" autocomplete="email webauthn" placeholder="ihre@adresse.de">
+
+  <p style="margin-top:1rem">
+    <button type="button" id="signin">Mit Passkey anmelden</button>
+  </p>
+  <div id="status"></div>
+
+  <p style="margin-top:2rem">
+    Noch kein Konto? <a href="{% url 'accounts:register_start' %}">Hier registrieren</a>.
+  </p>
+
+  <script>
+    (function () {
+      const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)[1];
+      const btn = document.getElementById('signin');
+      const emailEl = document.getElementById('email');
+      const statusEl = document.getElementById('status');
+
+      function setStatus(msg, cls) {
+        statusEl.innerHTML = '<div class="' + cls + '">' + msg + '</div>';
+      }
+
+      async function signIn(useConditional) {
+        const beginResp = await fetch("{% url 'accounts:login_begin' %}", {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          body: JSON.stringify({ email: emailEl.value || null }),
+        });
+        if (!beginResp.ok) throw new Error('Anmeldung konnte nicht gestartet werden.');
+        const options = await beginResp.json();
+
+        const credential = await SimpleWebAuthnBrowser.startAuthentication(
+          options,
+          useConditional === true
+        );
+
+        const finishResp = await fetch("{% url 'accounts:login_finish' %}", {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          body: JSON.stringify({ credential: credential }),
+        });
+        if (!finishResp.ok) {
+          const err = await finishResp.json().catch(() => ({}));
+          throw new Error(err.error || 'Anmeldung fehlgeschlagen.');
+        }
+        const out = await finishResp.json();
+        window.location = out.redirect;
+      }
+
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        setStatus('Wähle Passkey …', 'info');
+        try {
+          await signIn(false);
+        } catch (err) {
+          setStatus('Fehler: ' + err.message, 'error');
+          btn.disabled = false;
+        }
+      });
+
+      // Conditional-UI: if the browser supports it, start a background
+      // ceremony so the autofill bubble offers the passkey.
+      if (SimpleWebAuthnBrowser.browserSupportsWebAuthnAutofill) {
+        SimpleWebAuthnBrowser.browserSupportsWebAuthnAutofill().then((yes) => {
+          if (yes) {
+            signIn(true).catch(() => { /* user dismissed or failed — silent */ });
+          }
+        });
+      }
+    })();
+  </script>
+{% endblock %}

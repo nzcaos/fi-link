@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import secrets
+from datetime import timedelta
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.utils import timezone
+
+
+def _gen_activation_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 class Person(models.Model):
@@ -116,3 +125,181 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def get_short_name(self) -> str:
         return self.person.given_name
+
+
+# ---------------------------------------------------------------------------
+# WebAuthn / Passkeys (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class Passkey(models.Model):
+    """A registered WebAuthn credential bound to a User.
+
+    Multiple Passkeys per User are encouraged — see CLAUDE.md /
+    "Registration and login flow". Stored fields are exactly what
+    `py_webauthn` needs for an authentication ceremony.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="passkeys",
+        verbose_name="Benutzer",
+    )
+    credential_id = models.BinaryField(
+        "Credential-ID",
+        unique=True,
+        help_text="Raw credential ID returned by the authenticator.",
+    )
+    public_key = models.BinaryField(
+        "Public Key",
+        help_text="COSE-encoded public key.",
+    )
+    sign_count = models.PositiveBigIntegerField("Sign Count", default=0)
+    transports = models.JSONField(
+        "Transports",
+        default=list,
+        blank=True,
+        help_text='Hints from the browser, e.g. ["internal", "hybrid"].',
+    )
+    label = models.CharField(
+        "Bezeichnung",
+        max_length=100,
+        default="",
+        blank=True,
+        help_text="Vom Benutzer vergebener Name, z.B. 'iPhone' oder 'Arbeit-Laptop'.",
+    )
+    created_at = models.DateTimeField("erstellt am", auto_now_add=True)
+    last_used_at = models.DateTimeField("zuletzt genutzt am", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Passkey"
+        verbose_name_plural = "Passkeys"
+        ordering = ["-last_used_at", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.label or 'Passkey'} ({self.user})"
+
+
+class WebAuthnChallenge(models.Model):
+    """A pending challenge issued by register-begin or login-begin, redeemed
+    at finish-time. Stored in Postgres rather than process memory so a worker
+    restart doesn't drop the in-flight ceremony — see CLAUDE.md /
+    "Challenge storage".
+    """
+
+    class Purpose(models.TextChoices):
+        REGISTER = "register", "Registrierung"
+        LOGIN = "login", "Anmeldung"
+
+    challenge = models.BinaryField(
+        "Challenge",
+        primary_key=True,
+        help_text="Raw random bytes returned to the client.",
+    )
+    purpose = models.CharField(
+        "Zweck",
+        max_length=20,
+        choices=Purpose.choices,
+    )
+    expected_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="+",
+        verbose_name="erwarteter Benutzer",
+        help_text="Bei discoverable-credential Login leer; bei add-passkey gesetzt.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        verbose_name = "WebAuthn-Challenge"
+        verbose_name_plural = "WebAuthn-Challenges"
+        indexes = [models.Index(fields=["expires_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.purpose} challenge expires {self.expires_at:%Y-%m-%d %H:%M:%S}"
+
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+
+class ActivationToken(models.Model):
+    """One-shot email-bound link that grants the right to enroll a passkey.
+
+    Used for:
+      - new-user registration (`person` set, `user` null until consumed)
+      - invitation activation (`person`/`user` pre-created by inviter)
+      - admin-triggered recovery (`reset_passkeys`)
+    A token alone never confers session access — clicking only opens the
+    enrollment page. See CLAUDE.md / "Account recovery" and "Admin handover".
+    """
+
+    class Purpose(models.TextChoices):
+        ACTIVATE = "activate", "Aktivierung"
+        RECOVER = "recover", "Passkey-Wiederherstellung"
+
+    token = models.CharField(
+        "Token",
+        max_length=64,
+        unique=True,
+        default=_gen_activation_token,
+    )
+    person = models.ForeignKey(
+        Person,
+        on_delete=models.CASCADE,
+        related_name="activation_tokens",
+        verbose_name="Person",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="activation_tokens",
+        verbose_name="Benutzer",
+    )
+    purpose = models.CharField(
+        "Zweck",
+        max_length=20,
+        choices=Purpose.choices,
+        default=Purpose.ACTIVATE,
+    )
+    email = models.EmailField(
+        "Versendet an",
+        help_text="Adresse, an die der Link verschickt wurde — kann vom Person.email abweichen.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField("eingelöst am", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Aktivierungs-Token"
+        verbose_name_plural = "Aktivierungs-Tokens"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.purpose} {self.email} ({'eingelöst' if self.consumed_at else 'offen'})"
+
+    def is_valid(self) -> bool:
+        return self.consumed_at is None and timezone.now() < self.expires_at
+
+    @classmethod
+    def issue(
+        cls,
+        *,
+        person: Person,
+        email: str,
+        purpose: str = Purpose.ACTIVATE,
+        ttl: timedelta = timedelta(days=7),
+        user: "User | None" = None,
+    ) -> "ActivationToken":
+        return cls.objects.create(
+            person=person,
+            user=user,
+            email=email,
+            purpose=purpose,
+            expires_at=timezone.now() + ttl,
+        )

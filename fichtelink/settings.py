@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Third-party
+    "procrastinate.contrib.django",
     # Fichtelink apps
     "accounts",
     "lists",
@@ -95,6 +97,7 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"]
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -115,3 +118,27 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 FERNET_KEY = os.environ["FERNET_KEY"]
 Fernet(FERNET_KEY.encode())
 CRYPTOGRAPHY_KEY = FERNET_KEY  # consumed by django-cryptography (wired in Phase 1)
+
+# WebAuthn relying-party identity (Phase 2). Must match the browser-visible host.
+RP_ID = os.environ.get("RP_ID", "localhost")
+RP_ORIGIN = os.environ.get("RP_ORIGIN", "http://localhost:8000")
+RP_NAME = os.environ.get("RP_NAME", "Fichtelink")
+
+# Mail backend for activation links. Console backend by default — production must
+# set DJANGO_EMAIL_BACKEND to django.core.mail.backends.smtp.EmailBackend and the
+# SMTP_* variables.
+EMAIL_BACKEND = os.environ.get(
+    "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DJANGO_DEFAULT_FROM_EMAIL", "Fichtelink <noreply@example.com>"
+)
+EMAIL_HOST = os.environ.get("SMTP_HOST", "")
+EMAIL_PORT = int(os.environ.get("SMTP_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("SMTP_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("SMTP_PASS", "")
+EMAIL_USE_TLS = os.environ.get("SMTP_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
+
+LOGIN_URL = "/auth/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"

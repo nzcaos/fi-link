@@ -1,0 +1,22 @@
+{% if passkeys %}
+  {% for pk in passkeys %}
+    <div class="passkey-row">
+      <div>
+        <strong>{{ pk.label|default:"Passkey" }}</strong><br>
+        <span style="font-size:0.85rem;color:#555">
+          erstellt {{ pk.created_at|date:"d.m.Y H:i" }}
+          {% if pk.last_used_at %} · zuletzt {{ pk.last_used_at|date:"d.m.Y H:i" }}{% endif %}
+        </span>
+      </div>
+      <form method="post" action="{% url 'accounts:passkey_delete' pk.pk %}"
+            onsubmit="return confirm('Diesen Passkey wirklich löschen?');">
+        {% csrf_token %}
+        <button type="submit" class="secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem">
+          Löschen
+        </button>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p style="color:#555">Noch keine Passkeys hinterlegt.</p>
+{% endif %}

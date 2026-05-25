@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Passkey einrichten — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Passkey einrichten</h1>
+  <p>
+    Konto: <strong>{{ display_name }}</strong> ({{ person.email }})
+  </p>
+  <p>
+    Klicken Sie unten, um auf diesem Gerät einen Passkey zu hinterlegen.
+    Ihr Browser/Gerät fragt Sie nach Face ID, Touch ID, Windows Hello oder
+    Ihrem Sicherheits-Schlüssel.
+  </p>
+  <label for="label">Bezeichnung dieses Passkeys (optional)</label>
+  <input type="text" id="label" placeholder="z.B. iPhone, Arbeit-Laptop" autocomplete="off">
+  <p style="margin-top:1rem">
+    <button type="button" id="enroll">Passkey einrichten</button>
+  </p>
+  <div id="status"></div>
+
+  {{ token|json_script:"token-data" }}
+  <script>
+    (function () {
+      const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)[1];
+      const tokenValue = JSON.parse(document.getElementById('token-data').textContent);
+      const btn = document.getElementById('enroll');
+      const statusEl = document.getElementById('status');
+      const labelEl = document.getElementById('label');
+
+      function setStatus(msg, cls) {
+        statusEl.innerHTML = '<div class="' + cls + '">' + msg + '</div>';
+      }
+
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        setStatus('Vorbereitung läuft …', 'info');
+        try {
+          const beginResp = await fetch("{% url 'accounts:register_passkey_begin' %}", {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ token: tokenValue }),
+          });
+          if (!beginResp.ok) throw new Error('Server lehnt die Vorbereitung ab.');
+          const options = await beginResp.json();
+          setStatus('Bitte bestätigen Sie auf Ihrem Gerät …', 'info');
+
+          const credential = await SimpleWebAuthnBrowser.startRegistration(options);
+
+          const finishResp = await fetch("{% url 'accounts:register_passkey_finish' %}", {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({
+              token: tokenValue,
+              credential: credential,
+              label: labelEl.value,
+            }),
+          });
+          if (!finishResp.ok) {
+            const err = await finishResp.json().catch(() => ({}));
+            throw new Error(err.error || 'Serverseitige Prüfung fehlgeschlagen.');
+          }
+          const out = await finishResp.json();
+          setStatus('Passkey gespeichert. Sie werden weitergeleitet …', 'ok');
+          window.location = out.redirect;
+        } catch (err) {
+          setStatus('Fehler: ' + err.message, 'error');
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+{% endblock %}

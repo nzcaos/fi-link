@@ -14,7 +14,7 @@ The commands below describe the intended deployment procedure once the code exis
 
 - **Django + PostgreSQL + HTMX** — server-rendered, no SPA
 - **`procrastinate`** — Postgres-native task queue (no Redis)
-- **Passkeys only** via `django-allauth` (no passwords, no email-magic-link recovery)
+- **Passkeys only**, hand-rolled on `py_webauthn` (server) + `@simplewebauthn/browser` v9 vendored as a UMD bundle in `static/vendor/` — no passwords, no email-magic-link recovery
 - **Provider-agnostic mail** — IMAP IDLE on a catch-all mailbox, SMTP submission for outbound
 
 ## Deployment
@@ -63,11 +63,12 @@ cp .env.example .env
 docker compose build
 docker compose run --rm web python manage.py migrate
 docker compose run --rm web python manage.py collectstatic --noinput
-docker compose run --rm web python manage.py bootstrap_super_admin
+docker compose run --rm web python manage.py bootstrap_super_admin \
+    --email you@example.org --given-name Anna --family-name Müller
 docker compose up -d
 ```
 
-`bootstrap_super_admin` prompts for the super-admin's email and sends them a passkey-enrollment link. The recipient enrols a passkey from any passkey-capable device (iOS 16+, Android 9+, modern macOS / Windows / Linux with a current browser) — there is no password.
+`bootstrap_super_admin` creates a Super-Admin Person+User and **prints a passkey-enrollment link to stdout**. Open that link in a browser on any passkey-capable device (iOS 16+, Android 9+, modern macOS / Windows / Linux with a current browser) and enrol a passkey — there is no password. The link is single-use and expires after 7 days.
 
 ### Required environment variables
 
@@ -107,7 +108,7 @@ If a user has lost all their passkeys and the list-admin recovery chain (see *Ac
 docker compose exec web python manage.py reset_passkeys --email <user-email>
 ```
 
-A fresh activation link is sent to the user's on-file address. The user enrols a new passkey — their data, list memberships, and family relationships are retained.
+The command deletes the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
 
 ## Development
 

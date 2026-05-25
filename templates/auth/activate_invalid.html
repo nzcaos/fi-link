@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Link abgelaufen — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Link ungültig oder abgelaufen</h1>
+  <div class="error">
+    Dieser Aktivierungs-Link ist nicht mehr gültig — entweder bereits eingelöst
+    oder seit über sieben Tagen unbenutzt.
+  </div>
+  <p>
+    Starten Sie die Registrierung neu, oder — falls Sie Ihr Konto wiederherstellen
+    wollen — wenden Sie sich an Ihren Listen-Admin.
+  </p>
+  <p><a href="{% url 'accounts:register_start' %}"><button type="button">Neu registrieren</button></a></p>
+{% endblock %}
