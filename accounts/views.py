@@ -23,6 +23,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
 from .models import ActivationToken, Passkey, Person, User
@@ -125,9 +126,14 @@ def _create_stub_and_send(
     return render(request, "auth/register_check_email.html", {"email": email})
 
 
+@ensure_csrf_cookie
 def activate(request: HttpRequest, token: str) -> HttpResponse:
     """Activation-link landing. Renders the passkey-enrollment page; the
     actual passkey ceremony goes through `register_passkey_begin/finish`.
+
+    `@ensure_csrf_cookie` forces a CSRF cookie on the GET response so the
+    embedded JS can read it on first visit (e.g. opening the activation
+    link in a browser that has never touched the site before — iOS Safari).
     """
     activation = get_object_or_404(ActivationToken, token=token)
     if not activation.is_valid():
@@ -213,6 +219,7 @@ def register_passkey_finish(request: HttpRequest) -> JsonResponse:
 # ---------------------------------------------------------------------------
 
 
+@ensure_csrf_cookie
 def login_start(request: HttpRequest) -> HttpResponse:
     if request.user.is_authenticated:
         return redirect(settings.LOGIN_REDIRECT_URL)

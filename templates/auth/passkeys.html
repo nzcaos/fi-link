@@ -21,7 +21,11 @@
 
   <script>
     (function () {
-      const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)[1];
+      function readCsrf() {
+        const m = document.cookie.match(/csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+      }
+      const csrftoken = readCsrf();
       const btn = document.getElementById('add-passkey');
       const labelEl = document.getElementById('new-label');
       const statusEl = document.getElementById('status');

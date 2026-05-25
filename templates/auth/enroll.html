@@ -20,7 +20,11 @@
   {{ token|json_script:"token-data" }}
   <script>
     (function () {
-      const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)[1];
+      function readCsrf() {
+        const m = document.cookie.match(/csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+      }
+      const csrftoken = readCsrf();
       const tokenValue = JSON.parse(document.getElementById('token-data').textContent);
       const btn = document.getElementById('enroll');
       const statusEl = document.getElementById('status');
