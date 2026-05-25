@@ -130,6 +130,91 @@ Which fields are shown when a list is opened, and how they're grouped per row, i
 
 Beyond the spec's "Super-Admin manages LISTTEMPLATEs", the Super-Admin also manages **top-level lists** — those without a `parent_list_id`, e.g. `Elternbeirat`, `Lehrerkollegium`. Regular USERs cannot create top-level lists themselves: setting up the structural top of an installation is an installation-administrative act, not a self-service action.
 
+### School-class lifecycle
+
+Agreed 2026-05-25. School class lists need lifecycle support that other list templates don't: classes advance one grade each year, students switch classes, and admins (Elternvertreter) rotate annually. These are first-class operations, not workarounds.
+
+#### Cohort metadata
+
+Class lists carry cohort metadata used by the rollover function:
+
+- **`cohort_grade`** (5..12) — current grade level
+- **`cohort_track`** (`a|b|c|d|…|null`) — the parallel-class letter; null for Kursstufe (K1/K2) where the class unit dissolves
+- **`curriculum_track`** (`G8` | `G9`) — determines the rollover path
+
+These fields belong to the school-class LISTTEMPLATE specialisation, not to every LIST. Other templates (Förderverein, VHS-Kurs) leave them null and don't participate in rollover.
+
+#### Rollover function
+
+A super-admin-triggered batch operation, typically run in the last week of the summer holidays. The UI lists all class lists with the proposed action; the super-admin reviews and adjusts, then executes. No automatic cron — the school decides when.
+
+Standard rules:
+
+- `Na → (N+1)a` for `N ∈ {5, …, 9}` (both tracks)
+- **G8:** `10a..10d → K1` (N:1 merge), `K1 → K2`, `K2 → archived`
+- **G9:** `10a → 11a`, …, `11a..11d → K1`, `K1 → K2`, `K2 → archived`
+
+Implementation notes:
+
+- LISTs are not deleted: rolled-up lists keep their identity, only title and cohort fields update. USERs and their LIST_RECORDs stay linked across the rollover.
+- N:1 merges create a new K1 LIST and re-parent all member/associate LIST_RECORDs from the source lists onto it. Source lists become archived (read-only, `archived_at` set).
+- The email alias rolls with the list (`5a@…` → `6a@…`) atomically at the moment of rollover. **No grace period:** from day 1 of the new school year only the new alias works; mail to the old alias bounces with a standard NDR. The summer holidays are the recipients' adjustment window.
+
+**G8/G9 default for new lists:**
+
+- A newly created grade-5 list defaults to `G9` (current school-system state in the target region).
+- At initial system setup, the school's pre-existing classes (grades 6–12 at install time) default to `G8` and must be reviewed by the super-admin. The G8 pool drains naturally over time as those cohorts archive after K2.
+
+#### Class transfer (single PERSON)
+
+Distinct from cohort rollover: a single student moves between classes (repeats a grade, switches track for Bilingual / Naturwissenschaften, etc.). **Two-step flow with destination-admin consent:**
+
+- Initiated by the source-list admin, by a `RECORD_MANAGER` of the moving PERSON, or by the PERSON themselves if they are a USER → creates a **`PENDING_TRANSFER`** row: `from_list_id`, `to_list_id`, `person_id`, `requested_by_user_id`, `requested_at`.
+- The destination-list admin sees it in their approval UI and accepts or rejects.
+- On acceptance: the LIST_RECORD is re-parented to the destination list; all associate LIST_RECORDs (parents/guardians via PERSON_RELATIONSHIP) are migrated alongside; an audit row is written. Field values carry over 1:1 (same LISTTEMPLATE assumed — cross-template moves are not supported in v1).
+- Old LIST_RECORDs are archived (`archived_at` set), not deleted — keeps a trail for correction and recovery.
+
+**Self-removal** (USER opts out of a list) is **not** transfer-gated: a USER can remove themselves — or, via `RECORD_MANAGER`, PERSONs they manage — from a list without anyone's consent. The record is archived. Exception: if the removal would leave the list with zero admins, it is blocked with a "handover required first" message (see *Admin handover*).
+
+Super-admin can perform transfers and removals without consent.
+
+### Admin handover
+
+Agreed 2026-05-25. Elternvertreter are re-elected yearly; often the incumbent stays, sometimes not. The handover function:
+
+- Implemented as **`ADMIN_INVITE_TOKEN`**: `token`, `list_id`, `from_user_id` (nullable; null when initiated by super-admin), `to_email`, `mode ∈ {handover, add}`, `created_at`, `expires_at` (default +30 days), `consumed_at`.
+- The current admin (or super-admin) enters the successor's email and picks `handover` or `add`. System sends an invitation mail with the token link.
+- Click + successful login or passkey enrollment → token consumed, new LIST_ADMIN row inserted. In `handover` mode the initiating admin's LIST_ADMIN row is removed in the same transaction.
+- **Authentication is mandatory** — a click alone never confers admin rights. If the recipient is not yet a USER, the registration / passkey-enrollment flow is prepended (same activation flow as the family-triade invite). This prevents "compromised mailbox = instant admin takeover".
+- An admin cannot remove themselves (via self-removal or `handover`) if doing so would leave the list with zero admins — they must `add` a successor first, or use `handover` with a defined target.
+
+### Aggregate email aliases
+
+Agreed 2026-05-25. Beyond per-list addresses, the system supports addresses that fan out across multiple lists by relationship role — e.g. `eltern@<domain>` reaches every PERSON with role `Mutter`, `Vater`, `Erziehungsberechtigte` within a configured subtree. Modeled as **`AGGREGATE_ALIAS`** (not a LIST — it has no membership, only a query):
+
+| Column | Meaning |
+|---|---|
+| `email_alias` | e.g. `eltern@<domain>` |
+| `title` | display name |
+| `scope_list_id` | nullable; if set, restricts to PERSONs associated with members of this list or its sub-lists (entire subtree) |
+| `included_roles` | array of role strings from the PERSON_RELATIONSHIP taxonomy |
+| `created_by_user_id`, `created_at` | audit |
+
+Configuration is super-admin only.
+
+**Recipient resolution is at send time, not cached**: SQL over `PERSON_RELATIONSHIP` filtered by role, scoped via subtree traversal of `scope_list_id`, dedup'd per PERSON, restricted to `PERSON.email IS NOT NULL`.
+
+**Send permission is derived from the existing `LIST_SEND_PERMISSION` graph** — there is no separate permission table on `AGGREGATE_ALIAS`. Algorithm:
+
+1. Resolve the aggregate alias to its set of target LISTs (all lists in the `scope_list_id` subtree whose associates carry the filtered roles).
+2. Sender is permitted if and only if they hold send permission (direct or transitive via hierarchy) on **every** list in that set.
+3. If permitted: forward, with `requires_release_click` resolved as the **strictest** of the per-list values (any one list requiring a release click triggers it).
+4. Otherwise: route to **super-admin approval** (not list-admin approval — aggregate aliases have no list-admin; the super-admin owns them).
+
+Concrete example: the Vorsitz Elternbeirat is a member of the Elternbeirat list, which is `parent_list_id` of every class list, so they hold implicit send permission on every class → eligible to send to `eltern@…` directly. An ordinary class-level Elternvertreter has no permission on other classes → their attempt to send to `eltern@…` lands in super-admin approval.
+
+All other mail-pipeline behavior (anti-spoofing, anti-loop, bounce handling, anonymization, fan-out via procrastinate) is identical to regular lists.
+
 ### Encryption at rest
 
 `LIST_RECORD_VALUE.value` is encrypted at the application layer with Fernet (AES-128-CBC + HMAC), using a **single installation-wide key** from an environment variable. **All values are encrypted unconditionally** — no per-field opt-in/out, to eliminate the risk of forgetting. Library: `django-cryptography` or equivalent.
