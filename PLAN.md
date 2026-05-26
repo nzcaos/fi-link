@@ -47,6 +47,8 @@ Outputs:
 
 **Verify:** Echte Registrierung + Login in zwei verschiedenen Browsern über die Live-Domain. Test auf Mobile (iOS Safari + Android Chrome), weil das die Geräte sind, die bei Fi-Planer die CDN-Probleme zeigten — der vendored Bundle muss dort sauber laden.
 
+**Restpunkt (Nachtrag 2026-05-26, in Phase 3b mitgenommen):** Im Registrierungs-Template (`templates/auth/register.html`) ist die E-Mail bereits `required`, aber der Inline-Privacy-Hinweis fehlt noch. Gem. *Architecture decisions (authentication) / Registration and login flow* in CLAUDE.md: kurzer Satz direkt unter dem E-Mail-Feld — *"Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar, wenn Sie sie pro Liste explizit freigeben."*
+
 ## Phase 3a — Listen-Modelle & Admin-Views
 
 - [ ] **Ziel:** LISTTEMPLATE-Pflege (Super-Admin), Listen-CRUD, Sichtbarkeits-Service als zentrale Funktion.
@@ -68,10 +70,14 @@ Outputs:
 - Record-Edit als HTMX-Inline-Swap
 - Sichtbarkeits-Matrix (Alpine: Audience × Field-Toggle)
 - Onboarding-Wizard `self` und `via_associate`
-- Invitation-Token + QR-Code-Generierung (`qrcode.js` IIFE)
-- RECORD_MANAGER-Population je nach `basis`
+- `LIST_INVITE_TOKEN`-Modell + zwei Klick-Pfade (Architektur: CLAUDE.md *Member invitation and LIST_INVITE_TOKEN*):
+  - `target_person_id IS NULL`: Passkey-Enrollment + Onboarding-Wizard (E-Mail aus `target_email` vorausgefüllt, aber editierbar; Pflichtfeld; Privacy-Hinweis inline — siehe Phase-2-Restpunkt)
+  - `target_person_id IS NOT NULL`: Passkey-Login-only-Pfad (kein Enrollment, kein PERSON-Datendialog) → direkt ins Record-Edit-Formular, prefilled aus PERSON + bestehenden Records des USERs in anderen Listen → Save finalisiert Beitritt
+- QR-Code-Generierung (`qrcode.js` IIFE) für QR-driven Self-Onboarding
+- RECORD_MANAGER-Population je nach `basis` (`creator`, `invited`, `guardian`, `self_registered`)
+- Inline-Privacy-Hinweis am E-Mail-Feld im Registrierungs-Template nachziehen (Restpunkt Phase 2)
 
-**Verify:** Eltern-Flow von Hand durchspielen (QR scannen → Kind + sich selbst anlegen → in Liste sichtbar mit erwarteten Sichtbarkeiten).
+**Verify:** Eltern-Flow von Hand durchspielen (QR scannen → Kind + sich selbst anlegen → in Liste sichtbar mit erwarteten Sichtbarkeiten). Zusätzlich: bestehender USER aus Klasse 5a wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, sieht das Record-Edit-Formular mit Namen prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage.
 
 ## Phase 4 — Outbound Mail
 

@@ -77,7 +77,32 @@ The LISTTEMPLATE has a field **`member_subject_mode`** with two values, which th
 QR-code and invitation flows are otherwise identical — only the entry point differs:
 
 - **QR-code**: no prefilled data, the wizard starts blank.
-- **Invitation**: name and email prefilled from the inviter's input; on registration the stub USER (created earlier by the inviter) is activated and `RECORD_MANAGER` is updated with `basis=invited`.
+- **Invitation**: name and email prefilled from the inviter's input; on registration the stub USER (created earlier by the inviter) is activated and `RECORD_MANAGER` is updated with `basis=invited`. The invitation runs as a `LIST_INVITE_TOKEN` — see *Member invitation and LIST_INVITE_TOKEN* below for the full model that also covers existing-USER invitations.
+
+### Member invitation and LIST_INVITE_TOKEN
+
+Agreed 2026-05-26. Joining a list always runs through a single token type, **`LIST_INVITE_TOKEN`**, which subsumes both the not-yet-USER case (passkey enrollment) and the existing-USER case (one-click join with no passkey ceremony and no re-capture of personal data).
+
+| Column | Meaning |
+|---|---|
+| `token` | random URL-safe string |
+| `list_id` | the list to join |
+| `invited_by_user_id` | LIST_ADMIN or super-admin who created the invitation |
+| `target_email` | the address the invitation is sent to; also the prefill for the email field in the not-yet-USER branch |
+| `target_person_id` | nullable; set when the invitation targets a specific existing PERSON (picked via USER-autocomplete in the admin UI) |
+| `mode` | `self` or `via_associate` — wizard branch; defaults to the LISTTEMPLATE default but may be overridden per invitation |
+| `created_at`, `expires_at` (default +30 days), `consumed_at` | lifecycle |
+
+**Click-time branching by `target_person_id`:**
+
+- `target_person_id IS NULL` — the today-already-documented flow: the recipient runs through passkey enrollment, the stub USER is activated (PERSON + USER created if not already), and the onboarding wizard for the list runs (`self` or `via_associate` per `mode`). Used for inviting people who are not yet on the system. `RECORD_MANAGER` is written with `basis=invited`.
+- `target_person_id IS NOT NULL` — the recipient is already a USER. Click resolves to: ensure the visitor is authenticated as a USER linked to this PERSON. If not logged in, the standard passkey-login flow runs first (discoverable credentials, no enrollment); a wrong-USER session is rejected with "this invitation is for X, please sign in as them". After auth, a `LIST_RECORD` (role per `mode`/LISTTEMPLATE, subject = the target PERSON) is created with values prefilled from the PERSON (name) and from the USER's existing records in other lists where the same `LIST_ATTRIBUT` keys exist. The visitor lands **directly in the record-edit form** and the join is finalised by saving the form — no empty phantom record is left behind if the user abandons. A `RECORD_MANAGER` row with `basis=invited` is written on save. **No new passkey, no re-capture of personal data.**
+
+Concrete example: at the start of a new school year the previous Elternvertreter (or the Vorsitz Elternbeirat, or the Elternvertreter-list admin) creates a `LIST_INVITE_TOKEN` for the newly elected Elternvertreter, picking them by name from a USER-autocomplete. The invitee gets a mail with one click-link → passkey login (single tap) → record-edit form pre-filled with their name → save → joined. No double-registration, no second passkey, no data re-entry.
+
+**Editability of `target_email`** in the not-yet-USER branch: the recipient may correct the email at click time (e.g. they want their own address rather than the shared family one the inviter typed) — same field, same form, the address they submit becomes `PERSON.email`. In the existing-USER branch the email field is not shown — PERSON-email changes belong to the regular account-edit surface.
+
+This token does **not** replace `ADMIN_INVITE_TOKEN` (see *Admin handover*). LIST_INVITE_TOKEN grants membership; ADMIN_INVITE_TOKEN grants admin rights with handover/add semantics. A USER may receive both at different times, or be promoted later via an ADMIN_INVITE_TOKEN after first joining as a member.
 
 ### List hierarchy
 
@@ -268,6 +293,14 @@ For the shared-family-mailbox case: `login-begin` resolves an email to a *set* o
 - **Invitation (family-triade activation):** the invitation link *is* the confirmation link — clicking it activates the stub USER previously created by the inviter and triggers passkey enrollment in a single step.
 - **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed. The login email-input field carries `autocomplete="email webauthn"` for the platform's conditional-UI / autofill path.
 - **Multiple passkeys per account** are encouraged: the UI lets users enroll passkeys on additional devices (e.g. "iPhone", "Arbeit-Laptop") and delete individual ones. Multi-device enrollment is the primary defense against device loss and reduces the recovery burden.
+
+**Email is mandatory at every entry point, not optional** (decided 2026-05-26). Fichtelink's core purpose is mail-mediated communication; without an address a USER cannot receive list mail, release-click confirmations, or activation links. Concretely:
+
+- **QR-driven self-onboarding**: the email field is required. The form cannot be submitted without an address.
+- **Invitation acceptance for a not-yet-USER** (`LIST_INVITE_TOKEN.target_person_id IS NULL`): the email is **prefilled** from `target_email` but **editable** — the recipient may correct it (e.g. swap the shared family address for their personal one) — and remains required.
+- **Invitation acceptance for an existing USER** (`target_person_id IS NOT NULL`): the email field is not shown at all; the existing `PERSON.email` is unchanged by the join.
+
+Wherever the email field is shown to a user during onboarding, a short inline privacy hint appears directly beneath it: *"Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar, wenn Sie sie pro Liste explizit freigeben."* This makes the trade-off explicit: providing the address is required for the system to function, but disclosure to other list members is opt-in per list via the standard per-field visibility matrix.
 
 The usernameless flow combined with `user.displayName` cleanly handles the shared-family-email case (see *PERSON vs. USER*): both parents register passkeys under the same `PERSON.email`, and the browser shows both passkeys labeled by name when either parent signs in — even on a shared device.
 
