@@ -314,7 +314,13 @@ class ListRecord(models.Model):
     class Meta:
         verbose_name = "Eintrag"
         verbose_name_plural = "Einträge"
-        unique_together = [("list", "subject")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["list", "subject"],
+                condition=models.Q(archived_at__isnull=True),
+                name="unique_active_record_per_list_subject",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.subject} in {self.list}"

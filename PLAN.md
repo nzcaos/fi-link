@@ -88,6 +88,31 @@ Restpunkte (Phase 3b-2):
 
 **Verify (Teil 1, durchgespielt):** bestehender USER wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, landet im Record-Edit-Formular mit Namen aus seiner PERSON prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage. Plus: Sichtbarkeits-Matrix einstellbar pro Feld auf {öffentlich, eigene Liste, Parent-Liste}.
 
+## Bekannte Findings (Stand 2026-05-26)
+
+Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefixt; die folgenden bleiben offen und werden in passender Phase oder als Restpunkt vor Live-Deployment angegangen.
+
+**Kritisch (Architektur-Diskussion offen):**
+
+- **B3 — Listen-Admin kann Sichtbarkeits-Matrix fremder Records umstellen.** `RecordEditForm.save()` schreibt `ListRecordAccess`-Reihen, sobald `can_user_edit_record` zustimmt. Spec: Sichtbarkeit gehört dem Owner. Vorschlag: Sichtbarkeits-Reihen nur schreiben, wenn speichernder USER `RecordManager` ODER Super-Admin (Listen-Admin darf weiterhin Werte korrigieren, aber nicht die Sichtbarkeit umstellen). Architektur-Klärung mit Projekt-Owner offen.
+
+**Mittel (Hardening, vor erstem Live-Deployment fixen):**
+
+- **M6 — `target_person`-Dropdown enumeriert alle USER-PERSONs system-weit.** Listen-Admin von Klasse 5a sieht Eltern aus Klasse 9c, Lehrer, Vorstand. Fix: queryset einschränken auf PERSONs, die in für den Admin sichtbaren Listen sind, oder auf Autocomplete mit Mindesteingabe umstellen.
+- **M7 — Email-Parameter ohne URL-Encoding in `invite_accept`-Redirect.** `f"...?email={target_email}"` — `+`-Suffixe und `%` werden falsch encoded. Fix: `urlencode({'email': ...})`. Aktuell kein Injection-Pfad sichtbar (EmailField validiert), aber Robustheits-Bug.
+- **M8 — `record.subject` (Person-Name) wird für jeden Listen-Sichter direkt aus Person-Modell gerendert, unabhängig von Sichtbarkeits-Matrix.** Im `via_associate`-Modus (Kind als Subject) potentiell sensitiv. Architektur-Klärung mit Projekt-Owner offen.
+- **M9 — `lst.title` in `send_mail`-Subject ohne Newline-Sanitization.** `EmailMessage` validiert auf CR/LF und wirft `BadHeaderError` → 500, falls Listen-Titel `\r\n` enthält. Fix: in `clean_title` Whitespace normalisieren oder Subject vor Versand mit `" ".join(lst.title.split())` säubern.
+- **M10 — `invite_accept` ist GET-Endpoint mit Side-Effects.** Auto-Preview-Fetcher (Outlook Safe Links, Slack-Unfurler etc.) konsumieren Tokens bei Mail-Preview. Fix: GET zeigt nur Bestätigungs-Seite, Konsum per POST.
+- **M11 — `record_create_self` ohne LISTTEMPLATE-Mode-Check.** Im `via_associate`-Modus legt der Endpoint blind `subject=user.person` an, obwohl die Liste Kinder als Subjects haben soll. Fix: bei `via_associate` auf den Wizard (Phase 3b-2) verweisen.
+
+**Niedrig (Performance + Edge-Cases, Phase 8):**
+
+- **N12 — `list_detail` ist N+1.** 30 Mitglieder × 8 Felder × ~5 Queries/Sicht-Check = ~1000 Queries pro Page-Load. Optimierung mit prefetch + In-Memory-Audience-Resolution.
+- **N13 — Sichtbarkeits-Matrix-Race bei parallelen POSTs.** Zwei Tabs auf dem gleichen Record können sich gegenseitig die Reihen löschen. Fix: `select_for_update()` auf den Record in `RecordEditForm.save()`.
+- **N14 — `send_mail` ohne Error-Handling.** SMTPException → 500, Token in DB, Admin weiß nichts. Fix: try/except + Status-Message + ggf. Resend-Knopf.
+- **N15 — `register_force` ohne Rate-Limit.** Family-Shared-Mailbox-Fall ist legitim, aber unbegrenzte Konto-Anlage öffnet Abuse-Potenzial. Pragmatisch: per-IP-Throttle.
+- **N16 — Default-Sichtbarkeit „leer" bei neuen Records.** Non-public Felder sind ohne explizite Audience-Wahl für niemanden außer Owner/Admin/Super sichtbar. UX-Frage: sollte „eigene Liste" Default sein? Architektur-Klärung offen.
+
 ## Phase 4 — Outbound Mail
 
 - [ ] **Ziel:** Mail wird an Listenmitglieder zugestellt, mit korrekten Headers und Bounce-Aliasen.

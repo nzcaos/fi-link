@@ -155,17 +155,25 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
         if invite.is_consumed or invite.is_expired:
             return redirect("lists:detail", pk=invite.list_id)
 
-        record, _ = ListRecord.objects.get_or_create(
-            list=invite.list,
-            subject=invite.target_person,
-            defaults={
-                "role": (
-                    ListRecord.Role.MEMBER
-                    if invite.mode == ListInviteToken.Mode.SELF
-                    else ListRecord.Role.ASSOCIATE
-                ),
-            },
+        role = (
+            ListRecord.Role.MEMBER
+            if invite.mode == ListInviteToken.Mode.SELF
+            else ListRecord.Role.ASSOCIATE
         )
+        record = (
+            ListRecord.objects.filter(
+                list=invite.list,
+                subject=invite.target_person,
+                archived_at__isnull=True,
+            )
+            .first()
+        )
+        if record is None:
+            record = ListRecord.objects.create(
+                list=invite.list,
+                subject=invite.target_person,
+                role=role,
+            )
         if not RecordManager.objects.filter(record=record, user=request.user).exists():
             RecordManager.objects.create(
                 record=record,
@@ -221,13 +229,16 @@ def invite_accept(request, token: str):
         request.session["pending_invite_token"] = invite.token
         return redirect(f"{reverse('accounts:login')}?next={request.path}")
     if request.user.person_id != invite.target_person_id:
+        # Generic message — do not leak the target person's name to a holder
+        # of the token who turned out to be the wrong user. See review B4.
         return render(
             request,
             "lists/invite_problem.html",
             {
                 "reason": (
-                    f"Diese Einladung ist für {invite.target_person} bestimmt. "
-                    "Bitte melden Sie sich als diese Person an."
+                    "Diese Einladung gehört nicht zu Ihrem Konto. "
+                    "Bitte melden Sie sich mit dem richtigen Konto an "
+                    "und öffnen Sie den Einladungs-Link erneut."
                 )
             },
             status=403,

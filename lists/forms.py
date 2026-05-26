@@ -95,12 +95,21 @@ class ListCreateForm(forms.ModelForm):
 class ListInviteForm(forms.Form):
     """Admin-side form to create a ListInviteToken.
 
-    target_email is always required. target_person is optional; if set, the
-    invitation runs the existing-USER one-click path on click. Otherwise the
-    recipient runs through passkey enrollment.
+    target_person is optional; if set, the invitation runs the existing-USER
+    one-click path on click and `target_email` is forced to that Person's own
+    email (preventing the admin from sending the invitation to a third-party
+    address, see review B5). If no Person is picked, `target_email` is taken
+    from the form and the recipient runs through passkey enrollment.
     """
 
-    target_email = forms.EmailField(label="E-Mail-Adresse des Empfängers")
+    target_email = forms.EmailField(
+        label="E-Mail-Adresse des Empfängers",
+        required=False,
+        help_text=(
+            "Bei Auswahl einer bestehenden Person wird automatisch deren "
+            "hinterlegte E-Mail-Adresse verwendet."
+        ),
+    )
     target_person = forms.ModelChoiceField(
         label="Bestehende Person (optional)",
         queryset=None,  # filled in __init__
@@ -121,16 +130,38 @@ class ListInviteForm(forms.Form):
 
         super().__init__(*args, **kwargs)
         self.list_obj = list_obj
+        # Only persons that are Users AND have a stored email can receive an
+        # existing-USER invitation (the email is the addressing primitive).
         self.fields["target_person"].queryset = (
-            Person.objects.filter(user__isnull=False).order_by("family_name", "given_name")
+            Person.objects.filter(user__isnull=False)
+            .exclude(email__isnull=True)
+            .exclude(email__exact="")
+            .order_by("family_name", "given_name")
         )
 
     def clean(self):
         cleaned = super().clean()
         target_person = cleaned.get("target_person")
-        if target_person and target_person.email and cleaned.get("target_email"):
-            # Default the email to the person's email when picked; allow override.
-            pass
+        target_email = (cleaned.get("target_email") or "").strip().lower()
+
+        if target_person is not None:
+            person_email = (target_person.email or "").strip().lower()
+            if not person_email:
+                # Queryset above excludes empty emails, but defensive.
+                raise ValidationError(
+                    "Die gewählte Person hat keine E-Mail-Adresse hinterlegt — "
+                    "Einladung nicht möglich."
+                )
+            # Force target_email to match the picked Person's stored email.
+            # Any value the admin typed is discarded to prevent sending a
+            # name-bearing invitation to a third-party address.
+            cleaned["target_email"] = person_email
+        else:
+            if not target_email:
+                raise ValidationError(
+                    "Bitte eine E-Mail-Adresse angeben oder eine bestehende Person wählen."
+                )
+            cleaned["target_email"] = target_email
         return cleaned
 
 

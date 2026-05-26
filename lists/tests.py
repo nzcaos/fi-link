@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import Person, User
-from .forms import RecordEditForm
+from .forms import ListInviteForm, RecordEditForm
 from .models import (
     List,
     ListAccess,
@@ -452,3 +452,95 @@ class InviteFlowTests(TestCase):
         self.assertTrue(
             ListRecord.objects.filter(list=self.lst, subject=self.existing.person).exists()
         )
+
+    def test_wrong_user_reason_text_does_not_leak_target_person_name(self):
+        """B4: the 403 page must not mention the target person's name."""
+        token = self._make_invite(target_person=self.existing.person)
+        self.client.force_login(self.other)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 403)
+        body = resp.content.decode("utf-8")
+        self.assertNotIn(self.existing.person.given_name, body)
+        self.assertNotIn(self.existing.person.family_name, body)
+
+
+class CriticalFindingFixesTests(TestCase):
+    """Regression tests for the review findings B1, B2, B5."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_public = ListAttribute.objects.create(
+            template=self.template, name="Name", type=ListAttribute.Type.TEXT, must_be_public=True
+        )
+        self.attr_private = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=1
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.user = _make_user(
+            username="subject_user", given="Anna", family="Müller", email="anna@example.test"
+        )
+        self.other = _make_user(username="other", given="Berta", family="X", email="berta@example.test")
+
+    # --- B1 -----------------------------------------------------------------
+
+    def test_b1_archived_record_does_not_block_new_active_record(self):
+        archived = ListRecord.objects.create(list=self.lst, subject=self.user.person)
+        archived.archived_at = timezone.now()
+        archived.save(update_fields=["archived_at"])
+
+        # Must not raise IntegrityError.
+        new_record = ListRecord.objects.create(list=self.lst, subject=self.user.person)
+        self.assertIsNotNone(new_record.pk)
+        self.assertNotEqual(new_record.pk, archived.pk)
+
+    # --- B2 -----------------------------------------------------------------
+
+    def test_b2_subject_user_can_edit_without_record_manager_row(self):
+        record = ListRecord.objects.create(list=self.lst, subject=self.user.person)
+        # NO RecordManager row.
+        from .permissions import can_user_edit_record
+
+        self.assertTrue(can_user_edit_record(self.user, record))
+        self.assertFalse(can_user_edit_record(self.other, record))
+
+    def test_b2_subject_user_can_see_private_field_without_record_manager_row(self):
+        record = ListRecord.objects.create(list=self.lst, subject=self.user.person)
+        # NO RecordManager row, NO ListRecordAccess rows for the private attr.
+        from .visibility import can_user_see_field
+
+        self.assertTrue(can_user_see_field(self.user, record, self.attr_private))
+        self.assertFalse(can_user_see_field(self.other, record, self.attr_private))
+
+    def test_b2_archived_own_record_still_blocked_for_edit(self):
+        record = ListRecord.objects.create(list=self.lst, subject=self.user.person)
+        record.archived_at = timezone.now()
+        record.save(update_fields=["archived_at"])
+        from .permissions import can_user_edit_record
+
+        self.assertFalse(can_user_edit_record(self.user, record))
+
+    # --- B5 -----------------------------------------------------------------
+
+    def test_b5_target_email_forced_to_person_email_when_person_picked(self):
+        form = ListInviteForm(
+            data={"target_email": "spoofed@evil.test", "target_person": self.other.person.pk},
+            list_obj=self.lst,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["target_email"], self.other.person.email)
+
+    def test_b5_target_email_required_when_no_person_picked(self):
+        form = ListInviteForm(data={"target_email": ""}, list_obj=self.lst)
+        self.assertFalse(form.is_valid())
+
+    def test_b5_person_without_email_excluded_from_queryset(self):
+        no_email_person = Person.objects.create(given_name="No", family_name="Email")
+        User.objects.create_user(person=no_email_person, username="no_email_user")
+        form = ListInviteForm(list_obj=self.lst)
+        self.assertNotIn(no_email_person, form.fields["target_person"].queryset)
+        self.assertIn(self.user.person, form.fields["target_person"].queryset)

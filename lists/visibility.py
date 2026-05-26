@@ -54,6 +54,12 @@ def can_user_see_field(user, record: ListRecord, attribute: ListAttribute) -> bo
     if user.is_superuser:
         return True
 
+    # Subject's own User sees everything on their own record (CLAUDE.md /
+    # *Family-association model*: "a parent's record is editable by themselves
+    # once they self-register"). Implies visibility too.
+    if record.subject_id == getattr(user, "person_id", None):
+        return True
+
     if RecordManager.objects.filter(record=record, user=user).exists():
         return True
 

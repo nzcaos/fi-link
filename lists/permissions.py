@@ -97,13 +97,18 @@ def eligible_parents_for(user) -> QuerySet[List]:
 
 def can_user_edit_record(user, record: ListRecord) -> bool:
     """A record is editable by its RecordManagers, by list admins of the
-    containing list, and by super-admin. Archived records are read-only.
+    containing list, by the subject's own User (even without an explicit
+    RecordManager row — see CLAUDE.md / *Family-association model*: "a
+    parent's record is editable by themselves once they self-register"),
+    and by super-admin. Archived records are read-only.
     """
     if not getattr(user, "is_authenticated", False):
         return False
     if record.archived_at is not None:
         return False
     if user.is_superuser:
+        return True
+    if record.subject_id == getattr(user, "person_id", None):
         return True
     if RecordManager.objects.filter(record=record, user=user).exists():
         return True
