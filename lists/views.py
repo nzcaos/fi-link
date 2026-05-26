@@ -20,6 +20,15 @@ from django.utils import timezone
 
 from .forms import ListCreateForm, ListInviteForm, RecordEditForm
 from .models import List, ListAdmin, ListInviteToken, ListRecord, RecordManager
+
+
+def _sanitize_header_value(value: str, max_length: int = 200) -> str:
+    """Collapse whitespace (incl. embedded CR/LF) and cap length, so values
+    bound for email headers cannot cause BadHeaderError / 500 — see M9.
+    Defense-in-depth: list titles are also cleaned in ListCreateForm, but the
+    admin UI and direct DB writes bypass that.
+    """
+    return " ".join((value or "").split())[:max_length]
 from .permissions import (
     can_user_admin_list,
     can_user_edit_record,
@@ -276,11 +285,12 @@ def list_invite(request, pk: int):
             link = request.build_absolute_uri(
                 reverse("lists:invite_accept", kwargs={"token": token.token})
             )
+            safe_title = _sanitize_header_value(lst.title)
             send_mail(
-                subject=f'Einladung zur Liste „{lst.title}"',
+                subject=f'Einladung zur Liste „{safe_title}"',
                 message=(
                     f"Hallo,\n\n"
-                    f'{request.user.person} hat Sie zur Liste „{lst.title}" eingeladen.\n\n'
+                    f'{request.user.person} hat Sie zur Liste „{safe_title}" eingeladen.\n\n'
                     f"Klicken Sie hier, um beizutreten:\n{link}\n\n"
                     f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
                 ),

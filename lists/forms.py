@@ -66,6 +66,16 @@ class ListCreateForm(forms.ModelForm):
             "'5a' ergibt 5a@<MAIL_DOMAIN>."
         )
 
+    def clean_title(self):
+        # Collapse whitespace (including embedded CR/LF) so the title cannot
+        # smuggle line breaks into mail-Subject headers — see review M9.
+        # Caps at the model's max_length (200) to be safe.
+        raw = self.cleaned_data.get("title") or ""
+        cleaned = " ".join(raw.split())
+        if not cleaned:
+            raise ValidationError("Pflichtfeld.")
+        return cleaned[:200]
+
     def clean_email_alias(self):
         alias = (self.cleaned_data.get("email_alias") or "").strip().lower()
         if not alias:

@@ -12,8 +12,10 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from django.core import mail
+
 from accounts.models import Person, User
-from .forms import ListInviteForm, RecordEditForm
+from .forms import ListCreateForm, ListInviteForm, RecordEditForm
 from .models import (
     List,
     ListAccess,
@@ -559,6 +561,61 @@ class CriticalFindingFixesTests(TestCase):
         form = ListInviteForm(list_obj=self.lst, inviting_user=self.super_)
         self.assertNotIn(no_email_person, form.fields["target_person"].queryset)
         self.assertIn(self.user.person, form.fields["target_person"].queryset)
+
+
+class HeaderSanitizationTests(TestCase):
+    """M9: list titles with embedded newlines must not produce
+    BadHeaderError when used in mail Subject headers.
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.admin_user = _make_user(username="adminuser", email="admin@example.test")
+
+    def test_clean_title_collapses_newlines_and_whitespace(self):
+        form = ListCreateForm(
+            data={
+                "title": "Klasse 5a\r\nBcc: attacker@evil.test",
+                "email_alias": "5a",
+                "template": self.template.pk,
+                "visibility": "private",
+                "parent": "",
+            },
+            user=_make_super(username="m9_super"),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["title"], "Klasse 5a Bcc: attacker@evil.test")
+        self.assertNotIn("\n", form.cleaned_data["title"])
+        self.assertNotIn("\r", form.cleaned_data["title"])
+
+    def test_invite_email_with_newline_in_title_does_not_crash(self):
+        """List with newline-bearing title (e.g. saved via Django admin bypassing
+        the form-level clean) — the send_mail path must sanitize before
+        handing off to the EmailMessage layer.
+        """
+        # Directly construct a List with a tainted title to simulate a
+        # title that bypassed ListCreateForm.clean_title (e.g. via admin).
+        lst = List.objects.create(
+            title="Klasse 5a\r\nBcc: attacker@evil.test",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        ListAdmin.objects.create(list=lst, user=self.admin_user)
+
+        client = Client()
+        client.force_login(self.admin_user)
+        resp = client.post(
+            reverse("lists:invite", kwargs={"pk": lst.pk}),
+            data={"target_email": "newbie@example.test", "target_person": "", "mode": ""},
+        )
+        self.assertEqual(resp.status_code, 302, resp.content[:200])
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertNotIn("\n", sent.subject)
+        self.assertNotIn("\r", sent.subject)
+        # Newline-bearing content collapses to a single line but stays in subject.
+        self.assertIn("Bcc: attacker@evil.test", sent.subject)
 
 
 class InvitePersonScopingTests(TestCase):
