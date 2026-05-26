@@ -5,6 +5,8 @@ Phase 3b: list-detail with record rows, record-add/edit with visibility matrix.
 """
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -222,12 +224,16 @@ def invite_accept(request, token: str):
             return _consume_invite_and_redirect(request, invite)
         request.session["pending_invite_token"] = invite.token
         return redirect(
-            f"{reverse('accounts:register_start')}?email={invite.target_email}"
+            reverse("accounts:register_start")
+            + "?"
+            + urlencode({"email": invite.target_email})
         )
 
     if not request.user.is_authenticated:
         request.session["pending_invite_token"] = invite.token
-        return redirect(f"{reverse('accounts:login')}?next={request.path}")
+        return redirect(
+            reverse("accounts:login") + "?" + urlencode({"next": request.path})
+        )
     if request.user.person_id != invite.target_person_id:
         # Generic message — do not leak the target person's name to a holder
         # of the token who turned out to be the wrong user. See review B4.

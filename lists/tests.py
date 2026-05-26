@@ -405,6 +405,17 @@ class InviteFlowTests(TestCase):
         self.assertIn("email=newbie%40example.test", resp.url)
         self.assertEqual(self.client.session.get("pending_invite_token"), token.token)
 
+    def test_m7_email_with_plus_suffix_url_encoded_correctly(self):
+        """M7: target_email may contain '+' (tag-suffix). Must end up as
+        %2B in the query string, not as a literal '+' (which the receiving
+        view would interpret as a space).
+        """
+        token = self._make_invite(target_email="user+tag@example.test")
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("email=user%2Btag%40example.test", resp.url)
+        self.assertNotIn("user+tag", resp.url)
+
     def test_existing_user_branch_one_click_join(self):
         token = self._make_invite(
             target_person=self.existing.person, target_email=self.existing.person.email or "x@x"
