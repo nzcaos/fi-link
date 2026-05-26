@@ -65,21 +65,28 @@ Outputs:
 
 ## Phase 3b — Member-UI & Onboarding
 
-- [ ] **Ziel:** Eltern können sich via QR oder Einladung anmelden, eigenen Eintrag pflegen, Sichtbarkeit pro Feld setzen.
+- [x] **Ziel (Teil 1):** Eintrags-Anzeige, Record-Edit + Sichtbarkeits-Matrix, Einladungs-Flow (beide Branches), `self`-Onboarding.
+- [ ] **Ziel (Teil 2 / Restpunkte):** QR-Code-Onboarding + `via_associate`-Wizard.
 
-Outputs:
-- Listen-Anzeige mit LISTTEMPLATE-Default-Layout
-- Record-Edit als HTMX-Inline-Swap
-- Sichtbarkeits-Matrix (Alpine: Audience × Field-Toggle)
-- Onboarding-Wizard `self` und `via_associate`
-- `LIST_INVITE_TOKEN`-Modell + zwei Klick-Pfade (Architektur: CLAUDE.md *Member invitation and LIST_INVITE_TOKEN*):
-  - `target_person_id IS NULL`: Passkey-Enrollment + Onboarding-Wizard (E-Mail aus `target_email` vorausgefüllt, aber editierbar; Pflichtfeld; Privacy-Hinweis inline — siehe Phase-2-Restpunkt)
-  - `target_person_id IS NOT NULL`: Passkey-Login-only-Pfad (kein Enrollment, kein PERSON-Datendialog) → direkt ins Record-Edit-Formular, prefilled aus PERSON + bestehenden Records des USERs in anderen Listen → Save finalisiert Beitritt
-- QR-Code-Generierung (`qrcode.js` IIFE) für QR-driven Self-Onboarding
-- RECORD_MANAGER-Population je nach `basis` (`creator`, `invited`, `guardian`, `self_registered`)
-- Inline-Privacy-Hinweis am E-Mail-Feld im Registrierungs-Template nachziehen (Restpunkt Phase 2)
+Outputs (erledigt):
+- Listen-Detail listet Einträge gefiltert durch `visible_attributes_for`
+- `RecordEditForm` baut Felder dynamisch aus `ListAttribute`, schreibt verschlüsselte `ListRecordValue`-Reihen
+- Sichtbarkeits-Matrix als `MultipleChoiceField` pro Attribut (Audiences: öffentlich, eigene Liste, Parent-Liste, Sub-Listen) — synchronisiert `ListRecordAccess`-Reihen beim Save (replace-semantics)
+- `ListInviteToken`-Modell + Migration 0002; Klick-Handler `/invite/<token>/` mit beiden Branches:
+  - `target_person_id IS NULL`: nicht-eingeloggt → in den Register-Flow mit E-Mail-Prefill; eingeloggt (Round-Trip nach Passkey-Enrollment ODER bestehender USER mit Blank-Target-Einladung) → Token an aktuelle Person binden und konsumieren
+  - `target_person_id IS NOT NULL`: Auth-Check als gebundener USER; bei Falschanmeldung 403; sonst One-Click-Join
+- `accounts.views._next_url_after_auth`: nach `register_passkey_finish` und `login_finish` wird ein `pending_invite_token` aus der Session zurück an `lists:invite_accept` umgeleitet
+- Admin-Einladungs-View `/lists/<pk>/invite/` mit Form (E-Mail + optionale Person-Auswahl + Modus), Token-Erzeugung und Mail-Versand
+- Privacy-Hinweis am E-Mail-Feld in `templates/auth/register.html` (Phase-2-Restpunkt)
+- `RECORD_MANAGER`-Anlage je nach Pfad (`self_registered` für `record_create_self`, `invited` für Einladungs-Konsum)
+- Tests: `RecordEditFormTests` (Werte + Visibility-Replace) und `InviteFlowTests` (alle 6 Klick-Pfade: expired, consumed, unauth-A, existing-user-B, wrong-user-B, unauth-B, round-trip-A)
 
-**Verify:** Eltern-Flow von Hand durchspielen (QR scannen → Kind + sich selbst anlegen → in Liste sichtbar mit erwarteten Sichtbarkeiten). Zusätzlich: bestehender USER aus Klasse 5a wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, sieht das Record-Edit-Formular mit Namen prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage.
+Restpunkte (Phase 3b-2):
+- **QR-Code-Onboarding:** vendored `qrcode.js` IIFE in `static/vendor/`, Per-List-„Beitritts-Link"-Token (Multi-Use, kein `target_email`) + QR-Render-View. Anwendungsfall: Liste hängt einen QR-Code an die Pinwand, jeder Eltern-Teilnehmer scannt einmalig.
+- **`via_associate`-Wizard:** Mehrschritt-UI für Schul-Klassen-Onboarding — Eltern legen erst die Kind-PERSON an (ohne USER), wählen dann eine Rolle aus `LISTTEMPLATE.relationship_roles` und schreiben `PERSON_RELATIONSHIP`. Variante des bestehenden Record-Edit-Flows mit vorgeschaltetem PERSON-Form. Tests dazu.
+- **Onboarding-Wizard-Tests:** End-to-End-Smoke (Self + Via-Associate).
+
+**Verify (Teil 1, durchgespielt):** bestehender USER wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, landet im Record-Edit-Formular mit Namen aus seiner PERSON prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage. Plus: Sichtbarkeits-Matrix einstellbar pro Feld auf {öffentlich, eigene Liste, Parent-Liste}.
 
 ## Phase 4 — Outbound Mail
 

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Mitglied einladen — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Mitglied einladen</h1>
+  <p style="color:#666">Liste: <strong>{{ list_obj.title }}</strong></p>
+
+  {% if form.non_field_errors %}
+    <div class="error">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <label for="{{ form.target_email.id_for_label }}">{{ form.target_email.label }}</label>
+    {{ form.target_email }}
+    {% if form.target_email.errors %}<div class="error">{{ form.target_email.errors }}</div>{% endif %}
+
+    <label for="{{ form.target_person.id_for_label }}">{{ form.target_person.label }}</label>
+    {{ form.target_person }}
+    <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">{{ form.target_person.help_text }}</p>
+    {% if form.target_person.errors %}<div class="error">{{ form.target_person.errors }}</div>{% endif %}
+
+    <label for="{{ form.mode.id_for_label }}">{{ form.mode.label }}</label>
+    {{ form.mode }}
+    {% if form.mode.errors %}<div class="error">{{ form.mode.errors }}</div>{% endif %}
+
+    <p style="margin-top:1rem">
+      <button type="submit">Einladung versenden</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

@@ -52,7 +52,11 @@ def register_start(request: HttpRequest) -> HttpResponse:
     resistant (see CLAUDE.md / "Enumeration resistance").
     """
     if request.method == "GET":
-        return render(request, "auth/register.html")
+        return render(
+            request,
+            "auth/register.html",
+            {"email": (request.GET.get("email") or "").strip().lower() or None},
+        )
 
     email = (request.POST.get("email") or "").strip().lower()
     given_name = (request.POST.get("given_name") or "").strip()
@@ -211,7 +215,7 @@ def register_passkey_finish(request: HttpRequest) -> JsonResponse:
         activation.save(update_fields=["consumed_at"])
 
     auth_login(request, user, backend=DEFAULT_BACKEND)
-    return JsonResponse({"redirect": reverse("accounts:passkeys")})
+    return JsonResponse({"redirect": _next_url_after_auth(request, default=reverse("accounts:passkeys"))})
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +253,9 @@ def login_finish(request: HttpRequest) -> JsonResponse:
     if not result.user.is_active:
         return JsonResponse({"error": "Konto deaktiviert."}, status=403)
     auth_login(request, result.user, backend=DEFAULT_BACKEND)
-    return JsonResponse({"redirect": settings.LOGIN_REDIRECT_URL})
+    return JsonResponse(
+        {"redirect": _next_url_after_auth(request, default=settings.LOGIN_REDIRECT_URL)}
+    )
 
 
 @require_POST
@@ -360,6 +366,17 @@ def _json_options(options_json: str) -> JsonResponse:
     # py_webauthn already serializes to JSON-with-base64url; re-parse so
     # Django serializes once at the HTTP layer.
     return JsonResponse(json.loads(options_json))
+
+
+def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
+    """If the session carries a pending ListInviteToken (set by the lists
+    app when an invite click landed on register/login), continue to the
+    invite-accept handler so the join is finalised in one user-visible flow.
+    """
+    pending = request.session.pop("pending_invite_token", None)
+    if pending:
+        return reverse("lists:invite_accept", kwargs={"token": pending})
+    return default
 
 
 def _load_active_token(token_value: str) -> ActivationToken | None:

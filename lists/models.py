@@ -6,9 +6,21 @@ mail pipeline, lifecycle ops, etc.) lands in later phases.
 """
 from __future__ import annotations
 
+import secrets
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django_cryptography.fields import encrypt
+
+
+def _gen_invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _default_invite_expiry():
+    return timezone.now() + timedelta(days=30)
 
 
 # ---------------------------------------------------------------------------
@@ -505,3 +517,86 @@ class ListSendPermission(models.Model):
 
     def __str__(self) -> str:
         return f"{self.granted_to_list} → {self.target_list}"
+
+
+# ---------------------------------------------------------------------------
+# Invitations (CLAUDE.md / "Member invitation and LIST_INVITE_TOKEN")
+# ---------------------------------------------------------------------------
+
+
+class ListInviteToken(models.Model):
+    """A one-shot invitation to join a list.
+
+    Two click-time branches keyed by `target_person`:
+    - NULL: recipient is not yet a User. Click triggers passkey enrollment +
+      User/Person activation + onboarding wizard.
+    - set: recipient is an existing User. Click requires Passkey login as the
+      User linked to `target_person`, then drops them straight into the
+      record-edit form (no enrollment, no re-capture of personal data).
+    """
+
+    class Mode(models.TextChoices):
+        SELF = "self", "Eigene Person ist Mitglied"
+        VIA_ASSOCIATE = "via_associate", "Mitglied ist eine andere Person"
+
+    token = models.CharField(
+        "Token",
+        max_length=64,
+        unique=True,
+        default=_gen_invite_token,
+    )
+    list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="invitations",
+        verbose_name="Liste",
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="sent_list_invitations",
+        verbose_name="eingeladen von",
+    )
+    target_email = models.EmailField(
+        "Ziel-E-Mail",
+        help_text="Adresse, an die die Einladung versendet wird; im Neu-USER-Pfad als E-Mail-Prefill verwendet.",
+    )
+    target_person = models.ForeignKey(
+        "accounts.Person",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="incoming_invitations",
+        verbose_name="Ziel-Person",
+        help_text="Gesetzt: Einladung zielt auf bestehende Person (One-Click-Join). Leer: Neu-USER mit Passkey-Enrollment.",
+    )
+    mode = models.CharField(
+        "Modus",
+        max_length=20,
+        choices=Mode.choices,
+        default=Mode.SELF,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("läuft ab", default=_default_invite_expiry)
+    consumed_at = models.DateTimeField("eingelöst am", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Listen-Einladung"
+        verbose_name_plural = "Listen-Einladungen"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        target = self.target_person or self.target_email
+        return f"{target} → {self.list}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_consumed(self) -> bool:
+        return self.consumed_at is not None
+
+    @property
+    def is_usable(self) -> bool:
+        return not (self.is_consumed or self.is_expired)

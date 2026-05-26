@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Eintrag bearbeiten — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Eintrag bearbeiten</h1>
+  <p style="color:#666">
+    Liste: <strong>{{ list_obj.title }}</strong> · Person: <strong>{{ record.subject }}</strong>
+  </p>
+
+  {% if form.non_field_errors %}
+    <div class="error">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    {% for attribute, value_field, vis_field in form.iter_attribute_rows %}
+      <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px">
+        <legend style="font-weight:500">{{ attribute.name }}</legend>
+
+        {{ value_field.label_tag }}
+        {{ value_field }}
+        {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
+
+        {% if vis_field %}
+          <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
+          <div>{{ vis_field }}</div>
+        {% else %}
+          <p style="font-size:0.85rem;color:#555">Dieses Feld ist immer öffentlich (Vorlage erzwingt das).</p>
+        {% endif %}
+      </fieldset>
+    {% endfor %}
+
+    <p style="margin-top:1rem">
+      <button type="submit">Speichern</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

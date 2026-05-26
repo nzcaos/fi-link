@@ -5,6 +5,7 @@ from .models import (
     ListAccess,
     ListAdmin,
     ListAttribute,
+    ListInviteToken,
     ListRecord,
     ListRecordAccess,
     ListRecordValue,
@@ -130,6 +131,24 @@ class RecordManagerAdmin(admin.ModelAdmin):
     list_display = ("record", "user", "basis", "since")
     list_filter = ("basis",)
     autocomplete_fields = ("record", "user")
+
+
+@admin.register(ListInviteToken)
+class ListInviteTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        "list",
+        "target_email",
+        "target_person",
+        "mode",
+        "invited_by",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+    )
+    list_filter = ("mode", "consumed_at")
+    search_fields = ("token", "target_email", "list__title")
+    autocomplete_fields = ("list", "invited_by", "target_person")
+    readonly_fields = ("token", "created_at")
 
 
 @admin.register(ListSendPermission)

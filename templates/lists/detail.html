@@ -6,15 +6,72 @@
   <p style="color:#666">
     Vorlage: <strong>{{ list_obj.template.name }}</strong> ·
     Sichtbarkeit: {{ list_obj.get_visibility_display }}
-    {% if list_obj.parent %} · übergeordnet: <a href="{% url 'lists:detail' pk=list_obj.parent.pk %}">{{ list_obj.parent.title }}</a>{% endif %}
+    {% if list_obj.parent %} · übergeordnet:
+      <a href="{% url 'lists:detail' pk=list_obj.parent.pk %}">{{ list_obj.parent.title }}</a>
+    {% endif %}
     {% if list_obj.archived_at %} · <strong style="color:#b00020">archiviert</strong>{% endif %}
   </p>
+
+  <div style="margin:1rem 0">
+    {% if own_record %}
+      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">
+        <button type="button">Mein Eintrag bearbeiten</button>
+      </a>
+    {% else %}
+      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">
+        <button type="button">Mich eintragen</button>
+      </a>
+    {% endif %}
+    {% if is_admin %}
+      <a href="{% url 'lists:invite' pk=list_obj.pk %}" style="margin-left:0.5rem">
+        <button type="button" class="secondary">Mitglied einladen</button>
+      </a>
+    {% endif %}
+  </div>
 
   {% if is_admin %}
     <div class="info">Sie sind Admin dieser Liste.</div>
   {% endif %}
 
-  <p style="margin-top:1.5rem;color:#666">
-    Detail-UI (Einträge, Sichtbarkeits-Matrix, Onboarding-Wizard) folgt in Phase 3b.
-  </p>
+  <h2 style="font-size:1.1rem;margin-top:1.5rem">Einträge</h2>
+  {% if rows %}
+    <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+      <thead>
+        <tr style="background:#f4f4f4">
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Person</th>
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Felder</th>
+          <th style="border-bottom:1px solid #ddd"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+              {{ row.record.subject }}
+              {% if row.record.role == 'associate' %}
+                <span style="color:#888">(zugeordnet)</span>
+              {% endif %}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+              {% for attr, value in row.fields %}
+                <div>
+                  <span style="color:#666">{{ attr.name }}:</span>
+                  {{ value|default:"—" }}
+                </div>
+              {% empty %}
+                <span style="color:#888">keine sichtbaren Felder</span>
+              {% endfor %}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top;text-align:right">
+              {% if row.can_edit %}
+                <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666">Noch keine Einträge in dieser Liste.</p>
+  {% endif %}
 {% endblock %}

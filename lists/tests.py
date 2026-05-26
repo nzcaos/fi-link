@@ -1,20 +1,28 @@
-"""Phase-3a unit tests: visibility service + creation permissions.
+"""Phase-3a/3b unit tests: visibility service, creation/edit permissions,
+record-edit form, invite-token flow.
 
 Tests run on the deploy VM (`docker compose run --rm web python manage.py test
 lists`). Lokal kein Runtime-Stack vorhanden.
 """
 from __future__ import annotations
 
-from django.test import TestCase
+from datetime import timedelta
+
+from django.test import Client, TestCase
+from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import Person, User
+from .forms import RecordEditForm
 from .models import (
     List,
     ListAccess,
     ListAdmin,
     ListAttribute,
+    ListInviteToken,
     ListRecord,
     ListRecordAccess,
+    ListRecordValue,
     ListTemplate,
     RecordManager,
 )
@@ -268,3 +276,179 @@ class EditPermissionTests(TestCase):
         self.assertFalse(can_user_edit_record(self.owner, self.record))
         self.assertFalse(can_user_edit_record(self.admin, self.record))
         self.assertFalse(can_user_edit_record(self.super_, self.record))
+
+
+class RecordEditFormTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_name = ListAttribute.objects.create(
+            template=self.template, name="Name", type=ListAttribute.Type.TEXT, position=0,
+            must_be_public=True,
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=1
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent_lst = List.objects.create(
+            title="Elternbeirat",
+            email_alias="eb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.lst.parent = self.parent_lst
+        self.lst.save()
+
+        self.owner = _make_user(username="owner")
+        self.record = ListRecord.objects.create(list=self.lst, subject=self.owner.person)
+        RecordManager.objects.create(
+            record=self.record, user=self.owner, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+
+    def test_save_writes_values_and_access_rows(self):
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_name.pk}": "Anna Müller",
+                f"attr_{self.attr_phone.pk}": "0123 456789",
+                f"vis_{self.attr_phone.pk}": [f"list-{self.parent_lst.pk}"],
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        name_val = ListRecordValue.objects.get(record=self.record, attribute=self.attr_name).value
+        phone_val = ListRecordValue.objects.get(record=self.record, attribute=self.attr_phone).value
+        self.assertEqual(name_val, "Anna Müller")
+        self.assertEqual(phone_val, "0123 456789")
+
+        # must_be_public attribute should NOT get visibility rows.
+        self.assertFalse(
+            ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_name).exists()
+        )
+        # phone visibility row points at parent list.
+        rows = ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.first().audience_id, self.parent_lst.pk)
+
+    def test_save_replaces_existing_access_rows(self):
+        ListRecordAccess.objects.create(
+            record=self.record, attribute=self.attr_phone, audience=None
+        )
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_name.pk}": "Anna",
+                f"attr_{self.attr_phone.pk}": "111",
+                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        rows = ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.first().audience_id, self.lst.pk)
+
+
+class InviteFlowTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr = ListAttribute.objects.create(
+            template=self.template, name="Name", type=ListAttribute.Type.TEXT, must_be_public=True
+        )
+        self.lst = List.objects.create(
+            title="Elternvertreter",
+            email_alias="elternvertreter",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="adminuser")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+
+        self.existing = _make_user(username="existing", given="Berta", family="S")
+        self.other = _make_user(username="other", given="Carla", family="X")
+
+    def _make_invite(self, *, target_person=None, target_email="newbie@example.test"):
+        return ListInviteToken.objects.create(
+            list=self.lst,
+            invited_by=self.admin_user,
+            target_email=target_email,
+            target_person=target_person,
+        )
+
+    def test_expired_token_410(self):
+        token = self._make_invite()
+        token.expires_at = timezone.now() - timedelta(days=1)
+        token.save(update_fields=["expires_at"])
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 410)
+
+    def test_consumed_token_410(self):
+        token = self._make_invite()
+        token.consumed_at = timezone.now()
+        token.save(update_fields=["consumed_at"])
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 410)
+
+    def test_unauth_branch_a_redirects_to_register_with_email_prefill(self):
+        token = self._make_invite(target_email="newbie@example.test")
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/register/", resp.url)
+        self.assertIn("email=newbie%40example.test", resp.url)
+        self.assertEqual(self.client.session.get("pending_invite_token"), token.token)
+
+    def test_existing_user_branch_one_click_join(self):
+        token = self._make_invite(
+            target_person=self.existing.person, target_email=self.existing.person.email or "x@x"
+        )
+        self.client.force_login(self.existing)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 302)
+        # Lands in record-edit for the newly-created record.
+        record = ListRecord.objects.get(list=self.lst, subject=self.existing.person)
+        self.assertIn(f"/lists/{self.lst.pk}/records/{record.pk}/edit/", resp.url)
+        token.refresh_from_db()
+        self.assertIsNotNone(token.consumed_at)
+        # RecordManager with basis=invited is written.
+        rm = RecordManager.objects.get(record=record, user=self.existing)
+        self.assertEqual(rm.basis, RecordManager.Basis.INVITED)
+
+    def test_wrong_user_branch_b_refused(self):
+        token = self._make_invite(target_person=self.existing.person)
+        self.client.force_login(self.other)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 403)
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
+
+    def test_unauth_branch_b_redirects_to_login(self):
+        token = self._make_invite(target_person=self.existing.person)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/login/", resp.url)
+        self.assertEqual(self.client.session.get("pending_invite_token"), token.token)
+
+    def test_round_trip_for_branch_a_binds_target_person_after_login(self):
+        """Simulates the not-yet-USER path: invite is issued blank, recipient
+        registers (or in test: we just log in as someone), then re-hits
+        invite_accept which should bind target_person to the now-logged-in
+        user's Person and complete the join.
+        """
+        token = self._make_invite()  # target_person=NULL
+        self.client.force_login(self.existing)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 302)
+        token.refresh_from_db()
+        self.assertEqual(token.target_person_id, self.existing.person_id)
+        self.assertIsNotNone(token.consumed_at)
+        self.assertTrue(
+            ListRecord.objects.filter(list=self.lst, subject=self.existing.person).exists()
+        )
