@@ -95,6 +95,63 @@ def eligible_parents_for(user) -> QuerySet[List]:
     ).distinct()
 
 
+def candidate_invite_persons(inviting_user, target_list: List):
+    """Persons that may be picked as `target_person` in a `ListInviteToken`
+    created by `inviting_user` for `target_list`.
+
+    Privacy goal: the inviter must not see Persons they do not already know
+    of through their own list membership. Concretely, a Person `p` is offered
+    iff `p` is the Subject of at least one active LIST_RECORD in a list that
+    the inviter can see — which is:
+
+    - any list where the inviter is admin or member,
+    - any public list,
+    - the target list itself,
+    - the target list's parent (if any),
+    - the target list's direct children (non-archived).
+
+    Only persons that have a USER **and** a non-empty email are returned —
+    the existing-USER invitation path needs both. Super-admin sees every
+    USER-Person system-wide.
+
+    Returns a Person queryset (caller may apply further ordering / limits).
+    """
+    # Imported here to keep the lists app permission module independent of
+    # accounts at import time (avoids circular-import surprises in admin/
+    # migrations).
+    from accounts.models import Person
+
+    base = (
+        Person.objects.filter(user__isnull=False)
+        .exclude(email__isnull=True)
+        .exclude(email__exact="")
+    )
+    if not getattr(inviting_user, "is_authenticated", False):
+        return base.none()
+    if inviting_user.is_superuser:
+        return base.order_by("family_name", "given_name")
+
+    visible_list_ids = set(
+        eligible_parents_for(inviting_user).values_list("pk", flat=True)
+    )
+    visible_list_ids.add(target_list.pk)
+    if target_list.parent_id:
+        visible_list_ids.add(target_list.parent_id)
+    visible_list_ids.update(
+        target_list.children.filter(archived_at__isnull=True).values_list(
+            "pk", flat=True
+        )
+    )
+    return (
+        base.filter(
+            records__list_id__in=visible_list_ids,
+            records__archived_at__isnull=True,
+        )
+        .distinct()
+        .order_by("family_name", "given_name")
+    )
+
+
 def can_user_edit_record(user, record: ListRecord) -> bool:
     """A record is editable by its RecordManagers, by list admins of the
     containing list, by the subject's own User (even without an explicit

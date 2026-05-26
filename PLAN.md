@@ -98,7 +98,7 @@ Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefix
 
 **Mittel (Hardening, vor erstem Live-Deployment fixen):**
 
-- **M6 — `target_person`-Dropdown enumeriert alle USER-PERSONs system-weit.** Listen-Admin von Klasse 5a sieht Eltern aus Klasse 9c, Lehrer, Vorstand. Fix: queryset einschränken auf PERSONs, die in für den Admin sichtbaren Listen sind, oder auf Autocomplete mit Mindesteingabe umstellen.
+- ~~M6 — `target_person`-Dropdown enumeriert alle USER-PERSONs system-weit.~~ **Gefixt 2026-05-26 (commit folgt).** `candidate_invite_persons(inviting_user, target_list)` in `lists/permissions.py` schränkt die Auswahl ein auf Personen, die Subject eines aktiven Records in einer Liste sind, die der Inviter sehen kann (`eligible_parents_for` ∪ target_list selbst ∪ parent ∪ direkte children). Super-Admin sieht weiterhin alle.
 - **M7 — Email-Parameter ohne URL-Encoding in `invite_accept`-Redirect.** `f"...?email={target_email}"` — `+`-Suffixe und `%` werden falsch encoded. Fix: `urlencode({'email': ...})`. Aktuell kein Injection-Pfad sichtbar (EmailField validiert), aber Robustheits-Bug.
 - **M8 — `record.subject` (Person-Name) wird für jeden Listen-Sichter direkt aus Person-Modell gerendert, unabhängig von Sichtbarkeits-Matrix.** Im `via_associate`-Modus (Kind als Subject) potentiell sensitiv. Architektur-Klärung mit Projekt-Owner offen.
 - **M9 — `lst.title` in `send_mail`-Subject ohne Newline-Sanitization.** `EmailMessage` validiert auf CR/LF und wirft `BadHeaderError` → 500, falls Listen-Titel `\r\n` enthält. Fix: in `clean_title` Whitespace normalisieren oder Subject vor Versand mit `" ".join(lst.title.split())` säubern.

@@ -485,6 +485,7 @@ class CriticalFindingFixesTests(TestCase):
             username="subject_user", given="Anna", family="Müller", email="anna@example.test"
         )
         self.other = _make_user(username="other", given="Berta", family="X", email="berta@example.test")
+        self.super_ = _make_super(username="b5_super")
 
     # --- B1 -----------------------------------------------------------------
 
@@ -530,17 +531,178 @@ class CriticalFindingFixesTests(TestCase):
         form = ListInviteForm(
             data={"target_email": "spoofed@evil.test", "target_person": self.other.person.pk},
             list_obj=self.lst,
+            inviting_user=self.super_,
         )
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["target_email"], self.other.person.email)
 
     def test_b5_target_email_required_when_no_person_picked(self):
-        form = ListInviteForm(data={"target_email": ""}, list_obj=self.lst)
+        form = ListInviteForm(
+            data={"target_email": ""}, list_obj=self.lst, inviting_user=self.super_
+        )
         self.assertFalse(form.is_valid())
 
     def test_b5_person_without_email_excluded_from_queryset(self):
         no_email_person = Person.objects.create(given_name="No", family_name="Email")
         User.objects.create_user(person=no_email_person, username="no_email_user")
-        form = ListInviteForm(list_obj=self.lst)
+        form = ListInviteForm(list_obj=self.lst, inviting_user=self.super_)
         self.assertNotIn(no_email_person, form.fields["target_person"].queryset)
         self.assertIn(self.user.person, form.fields["target_person"].queryset)
+
+
+class InvitePersonScopingTests(TestCase):
+    """M6: candidate_invite_persons restricts the target_person dropdown
+    to Persons the inviter already has business with — no full-installation
+    enumeration.
+
+    Topology used:
+
+      Elternbeirat                           (top-level)
+        ├── Klasse 5a                        (sub-list)
+        │     └── Klassenfeier-Planung       (sub-sub-list)
+        └── Klasse 5b                        (sub-list, inviter not in)
+
+      Lehrerkollegium                        (separate top-level, inviter not in)
+
+      Elternvertreter                        (the target list)
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.eb = List.objects.create(
+            title="Elternbeirat",
+            email_alias="eb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.k5a = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            parent=self.eb,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.k5b = List.objects.create(
+            title="Klasse 5b",
+            email_alias="5b",
+            template=self.template,
+            parent=self.eb,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.feier = List.objects.create(
+            title="Klassenfeier-Planung",
+            email_alias="feier-5a",
+            template=self.template,
+            parent=self.k5a,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.lehrer = List.objects.create(
+            title="Lehrerkollegium",
+            email_alias="lehrer",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.elternvertreter = List.objects.create(
+            title="Elternvertreter",
+            email_alias="elternvertreter",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+        # Inviter is admin of "Klasse 5a" and member of "Elternbeirat".
+        # Plus admin of the target list (Elternvertreter).
+        self.inviter = _make_user(username="inviter", given="Inga", family="Vertreter", email="inga@x")
+        ListAdmin.objects.create(list=self.k5a, user=self.inviter)
+        ListAccess.objects.create(list=self.eb, user=self.inviter)
+        ListAdmin.objects.create(list=self.elternvertreter, user=self.inviter)
+
+        # Persons + records used as candidates.
+        self.p_in_k5a = _make_user(
+            username="parent_5a", given="Anna", family="K5a", email="anna@k5a.x"
+        ).person
+        self.p_in_k5b = _make_user(
+            username="parent_5b", given="Berta", family="K5b", email="berta@k5b.x"
+        ).person
+        self.p_in_feier = _make_user(
+            username="parent_feier", given="Carla", family="Feier", email="carla@feier.x"
+        ).person
+        self.p_in_eb = _make_user(
+            username="member_eb", given="Dora", family="Eb", email="dora@eb.x"
+        ).person
+        self.p_in_lehrer = _make_user(
+            username="lehrer", given="Erika", family="L", email="erika@lehrer.x"
+        ).person
+        self.p_unverbunden = _make_user(
+            username="alone", given="Frank", family="Alone", email="frank@alone.x"
+        ).person  # no Records anywhere
+
+        ListRecord.objects.create(list=self.k5a, subject=self.p_in_k5a)
+        ListRecord.objects.create(list=self.k5b, subject=self.p_in_k5b)
+        ListRecord.objects.create(list=self.feier, subject=self.p_in_feier)
+        ListRecord.objects.create(list=self.eb, subject=self.p_in_eb)
+        ListRecord.objects.create(list=self.lehrer, subject=self.p_in_lehrer)
+
+    def _candidate_pks(self, inviter, target):
+        from .permissions import candidate_invite_persons
+
+        return set(candidate_invite_persons(inviter, target).values_list("pk", flat=True))
+
+    def test_inviter_sees_persons_from_visible_lists(self):
+        # k5a: admin → visible. eb: member → visible. feier: child of k5a (but
+        # inviter is admin of k5a, so eligible_parents_for already has k5a
+        # via admin; feier is direct child of target? No, feier is child of
+        # k5a, not target. So feier inclusion depends on inviter actually
+        # being admin/member of feier — they're not — and feier is not parent
+        # nor child of target. So feier is NOT visible from this inviter.
+        pks = self._candidate_pks(self.inviter, self.elternvertreter)
+        self.assertIn(self.p_in_k5a.pk, pks)
+        self.assertIn(self.p_in_eb.pk, pks)
+
+    def test_inviter_does_not_see_unrelated_lists_persons(self):
+        pks = self._candidate_pks(self.inviter, self.elternvertreter)
+        self.assertNotIn(self.p_in_k5b.pk, pks)
+        self.assertNotIn(self.p_in_lehrer.pk, pks)
+        self.assertNotIn(self.p_in_feier.pk, pks)
+        self.assertNotIn(self.p_unverbunden.pk, pks)
+
+    def test_target_subtree_widens_visibility(self):
+        # If inviter is admin of Elternbeirat (target's *parent*-from-tree is
+        # not modelled here, but Elternbeirat is parent of k5a so let's pick
+        # Elternbeirat as the target instead). Then k5a + k5b (direct
+        # children of target) become reachable.
+        ListAdmin.objects.create(list=self.eb, user=self.inviter)
+        pks = self._candidate_pks(self.inviter, self.eb)
+        self.assertIn(self.p_in_k5a.pk, pks)
+        self.assertIn(self.p_in_k5b.pk, pks)  # via target.children
+
+    def test_super_admin_sees_all_user_persons_with_email(self):
+        super_ = _make_super(username="m6_super")
+        pks = self._candidate_pks(super_, self.elternvertreter)
+        self.assertIn(self.p_in_k5a.pk, pks)
+        self.assertIn(self.p_in_k5b.pk, pks)
+        self.assertIn(self.p_in_lehrer.pk, pks)
+        self.assertIn(self.p_unverbunden.pk, pks)  # super sees even unlinked
+
+    def test_archived_record_does_not_grant_visibility(self):
+        # If p_in_k5b's only record is archived, the inviter doesn't see them
+        # — even if the inviter would have visibility via target.children.
+        ListAdmin.objects.create(list=self.eb, user=self.inviter)
+        rec = ListRecord.objects.get(list=self.k5b, subject=self.p_in_k5b)
+        rec.archived_at = timezone.now()
+        rec.save(update_fields=["archived_at"])
+        pks = self._candidate_pks(self.inviter, self.eb)
+        self.assertNotIn(self.p_in_k5b.pk, pks)
+
+    def test_public_list_member_persons_are_visible_to_anyone(self):
+        pub = List.objects.create(
+            title="Förderverein",
+            email_alias="fv",
+            template=self.template,
+            visibility=List.Visibility.PUBLIC_VISIBLE,
+        )
+        pub_person = _make_user(
+            username="fv_member", given="Greta", family="FV", email="g@fv.x"
+        ).person
+        ListRecord.objects.create(list=pub, subject=pub_person)
+        pks = self._candidate_pks(self.inviter, self.elternvertreter)
+        self.assertIn(pub_person.pk, pks)

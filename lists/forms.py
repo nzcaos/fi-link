@@ -125,18 +125,17 @@ class ListInviteForm(forms.Form):
         required=False,
     )
 
-    def __init__(self, *args, list_obj, **kwargs):
-        from accounts.models import Person
-
+    def __init__(self, *args, list_obj, inviting_user, **kwargs):
         super().__init__(*args, **kwargs)
         self.list_obj = list_obj
-        # Only persons that are Users AND have a stored email can receive an
-        # existing-USER invitation (the email is the addressing primitive).
-        self.fields["target_person"].queryset = (
-            Person.objects.filter(user__isnull=False)
-            .exclude(email__isnull=True)
-            .exclude(email__exact="")
-            .order_by("family_name", "given_name")
+        self.inviting_user = inviting_user
+        # Restrict the dropdown to Persons the inviter actually has business
+        # with (see review M6 / candidate_invite_persons) — prevents the
+        # full-installation Person-enumeration leak via the dropdown.
+        from .permissions import candidate_invite_persons
+
+        self.fields["target_person"].queryset = candidate_invite_persons(
+            inviting_user, list_obj
         )
 
     def clean(self):

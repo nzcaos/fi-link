@@ -253,7 +253,7 @@ def list_invite(request, pk: int):
         return HttpResponseForbidden("Nur Listen-Admins dürfen einladen.")
 
     if request.method == "POST":
-        form = ListInviteForm(request.POST, list_obj=lst)
+        form = ListInviteForm(request.POST, list_obj=lst, inviting_user=request.user)
         if form.is_valid():
             target_person = form.cleaned_data.get("target_person")
             target_email = form.cleaned_data["target_email"]
@@ -284,7 +284,7 @@ def list_invite(request, pk: int):
             messages.success(request, f"Einladung an {target_email} versendet.")
             return redirect("lists:detail", pk=lst.pk)
     else:
-        form = ListInviteForm(list_obj=lst)
+        form = ListInviteForm(list_obj=lst, inviting_user=request.user)
     return render(request, "lists/invite_create.html", {"list_obj": lst, "form": form})
 
 
