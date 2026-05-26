@@ -257,6 +257,14 @@ Code surface: a single module **`lists/permissions.py`** with pure functions (`c
 
 Reason: with the audience-based visibility primitive, a Guardian-style "X has permission Y on object Z" would need an entry per (user × audience-list-membership × record × attribute), kept consistent on every `ListAccess` change. Evaluating it at read time from the three tables is cheaper, has no eventual-consistency window, and keeps the schema honest about who-can-see-what.
 
+### Who may edit the visibility matrix
+
+Agreed 2026-05-26. **`LIST_RECORD_ACCESS` rows are written only by `RECORD_MANAGER`s of the record or by the super-admin.** A `LIST_ADMIN` who is *not* also a `RECORD_MANAGER` may still edit field *values* on the record (moderation/correction), but the visibility-matrix UI is rendered read-only for them and the form's save path silently drops any matrix changes they would submit.
+
+Reason: visibility belongs to the data subject. The spec models a `LIST_RECORD` as owned by its subject (or, in `via_associate` mode, by the subject's guardians via `RECORD_MANAGER`). Letting any list-admin reach into another household's privacy choices would break that ownership model — even though admins legitimately need value-edit rights for moderation. Splitting the two rights along the `RECORD_MANAGER`/`LIST_ADMIN` axis enforces "admins moderate, owners disclose".
+
+Implementation lives in `RecordEditForm.save()` (server-side gate) and `record_edit.html` (UI hint + disabled checkboxes). The check is `record_manager OR super-admin`; subject's-own-USER implicitly qualifies (CLAUDE.md / *Family-association model*) without an explicit `RECORD_MANAGER` row.
+
 ### Encryption at rest
 
 `LIST_RECORD_VALUE.value` is encrypted at the application layer with Fernet (AES-128-CBC + HMAC), using a **single installation-wide key** from an environment variable. **All values are encrypted unconditionally** — no per-field opt-in/out, to eliminate the risk of forgetting. Library: `django-cryptography` or equivalent.

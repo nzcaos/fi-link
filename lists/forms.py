@@ -23,6 +23,7 @@ from .models import (
 )
 from .permissions import (
     can_user_create_top_level_list,
+    can_user_edit_record_visibility,
     eligible_parents_for,
 )
 
@@ -234,6 +235,11 @@ class RecordEditForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.record = record
         self.user = user
+        # B3: only RecordManagers / subject's-own-USER / super-admin may
+        # toggle the visibility matrix. List-admins-without-RecordManager-row
+        # see the checkboxes disabled and any submitted vis_* values are
+        # ignored in save().
+        self.user_can_edit_visibility = can_user_edit_record_visibility(user, record)
         self._attribute_fields: dict[int, ListAttribute] = {}
         self._visibility_fields: dict[int, ListAttribute] = {}
 
@@ -271,6 +277,7 @@ class RecordEditForm(forms.Form):
                 widget=forms.CheckboxSelectMultiple,
                 required=False,
                 initial=sorted(access_by_attr.get(attribute.pk, set())),
+                disabled=not self.user_can_edit_visibility,
             )
             self._visibility_fields[attribute.pk] = attribute
 
@@ -302,16 +309,21 @@ class RecordEditForm(forms.Form):
             )
 
         # 2) Visibility matrix: replace existing rows per attribute.
-        for pk, attribute in self._visibility_fields.items():
-            picked = self.cleaned_data.get(f"{_AUDIENCE_FIELD_PREFIX}{pk}") or []
-            ListRecordAccess.objects.filter(record=self.record, attribute=attribute).delete()
-            for key in picked:
-                audience_id = _audience_key_to_list_id(key)
-                ListRecordAccess.objects.create(
-                    record=self.record,
-                    attribute=attribute,
-                    audience_id=audience_id,
-                )
+        # B3: skip the entire matrix-write block when the saving user is not
+        # permitted to edit visibility (list-admin without RecordManager row).
+        # Defense-in-depth on top of the disabled-field gate in __init__: even
+        # a tampered POST cannot mutate the matrix.
+        if self.user_can_edit_visibility:
+            for pk, attribute in self._visibility_fields.items():
+                picked = self.cleaned_data.get(f"{_AUDIENCE_FIELD_PREFIX}{pk}") or []
+                ListRecordAccess.objects.filter(record=self.record, attribute=attribute).delete()
+                for key in picked:
+                    audience_id = _audience_key_to_list_id(key)
+                    ListRecordAccess.objects.create(
+                        record=self.record,
+                        attribute=attribute,
+                        audience_id=audience_id,
+                    )
 
         # 3) RecordManager: ensure the saving user is registered as a manager
         # (basis depends on context; default to SELF_REGISTERED if this is the

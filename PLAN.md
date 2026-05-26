@@ -92,9 +92,9 @@ Restpunkte (Phase 3b-2):
 
 Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefixt; die folgenden bleiben offen und werden in passender Phase oder als Restpunkt vor Live-Deployment angegangen.
 
-**Kritisch (Architektur-Diskussion offen):**
+**Kritisch (Entscheidung steht, Umsetzung folgt):**
 
-- **B3 — Listen-Admin kann Sichtbarkeits-Matrix fremder Records umstellen.** `RecordEditForm.save()` schreibt `ListRecordAccess`-Reihen, sobald `can_user_edit_record` zustimmt. Spec: Sichtbarkeit gehört dem Owner. Vorschlag: Sichtbarkeits-Reihen nur schreiben, wenn speichernder USER `RecordManager` ODER Super-Admin (Listen-Admin darf weiterhin Werte korrigieren, aber nicht die Sichtbarkeit umstellen). Architektur-Klärung mit Projekt-Owner offen.
+- **B3 — Listen-Admin kann Sichtbarkeits-Matrix fremder Records umstellen.** `RecordEditForm.save()` schreibt `ListRecordAccess`-Reihen, sobald `can_user_edit_record` zustimmt. **Entscheidung 2026-05-26:** Sichtbarkeits-Reihen nur schreiben, wenn speichernder USER `RecordManager` ODER Super-Admin. Listen-Admin darf weiterhin Werte korrigieren, aber Matrix-UI ist für ihn read-only. Architektur in CLAUDE.md / *Who may edit the visibility matrix*.
 
 **Mittel (Hardening, vor erstem Live-Deployment fixen):**
 

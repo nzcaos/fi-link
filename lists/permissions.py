@@ -172,3 +172,23 @@ def can_user_edit_record(user, record: ListRecord) -> bool:
     if ListAdmin.objects.filter(list=record.list, user=user).exists():
         return True
     return False
+
+
+def can_user_edit_record_visibility(user, record: ListRecord) -> bool:
+    """B3: who may write the per-(record, attribute, audience) visibility
+    matrix. Only the subject's own User, explicit RecordManagers, and the
+    super-admin. Pure ListAdmins do **not** qualify — they may edit values
+    via `can_user_edit_record` for moderation, but visibility belongs to
+    the data subject. See CLAUDE.md / *Who may edit the visibility matrix*.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if record.archived_at is not None:
+        return False
+    if user.is_superuser:
+        return True
+    if record.subject_id == getattr(user, "person_id", None):
+        return True
+    if RecordManager.objects.filter(record=record, user=user).exists():
+        return True
+    return False

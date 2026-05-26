@@ -358,6 +358,129 @@ class RecordEditFormTests(TestCase):
         self.assertEqual(rows.first().audience_id, self.lst.pk)
 
 
+class B3VisibilityWriteGateTests(TestCase):
+    """B3: only RecordManagers / subject's-own-USER / super-admin may toggle
+    the visibility matrix. A ListAdmin without a RecordManager row sees the
+    matrix disabled and submitted vis_* values are dropped on save."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent_lst = List.objects.create(
+            title="Elternbeirat",
+            email_alias="eb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.lst.parent = self.parent_lst
+        self.lst.save()
+
+        self.owner = _make_user(username="owner")
+        self.admin = _make_user(username="adminuser")
+        self.super_ = _make_super()
+        self.record = ListRecord.objects.create(list=self.lst, subject=self.owner.person)
+        RecordManager.objects.create(
+            record=self.record, user=self.owner, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        ListAdmin.objects.create(list=self.lst, user=self.admin)
+
+        # Pre-existing visibility row: phone visible to parent-list members.
+        self.preexisting_row = ListRecordAccess.objects.create(
+            record=self.record, attribute=self.attr_phone, audience=self.parent_lst
+        )
+        ListRecordValue.objects.create(
+            record=self.record, attribute=self.attr_phone, value="0123 original"
+        )
+
+    def test_admin_form_marks_vis_field_disabled(self):
+        form = RecordEditForm(record=self.record, user=self.admin)
+        self.assertFalse(form.user_can_edit_visibility)
+        self.assertTrue(form.fields[f"vis_{self.attr_phone.pk}"].disabled)
+
+    def test_owner_form_keeps_vis_field_editable(self):
+        form = RecordEditForm(record=self.record, user=self.owner)
+        self.assertTrue(form.user_can_edit_visibility)
+        self.assertFalse(form.fields[f"vis_{self.attr_phone.pk}"].disabled)
+
+    def test_super_admin_form_keeps_vis_field_editable(self):
+        form = RecordEditForm(record=self.record, user=self.super_)
+        self.assertTrue(form.user_can_edit_visibility)
+        self.assertFalse(form.fields[f"vis_{self.attr_phone.pk}"].disabled)
+
+    def test_admin_post_cannot_change_matrix_but_can_change_value(self):
+        # The list-admin posts a value change AND tries to wipe the
+        # phone-visibility (omits vis_phone from the payload).
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123 admin-edited",
+                # vis_phone deliberately omitted ⇒ would normally delete rows.
+            },
+            record=self.record,
+            user=self.admin,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        # Value: admin-edit went through.
+        self.assertEqual(
+            ListRecordValue.objects.get(
+                record=self.record, attribute=self.attr_phone
+            ).value,
+            "0123 admin-edited",
+        )
+        # Matrix: pre-existing row survived untouched.
+        rows = list(
+            ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].pk, self.preexisting_row.pk)
+        self.assertEqual(rows[0].audience_id, self.parent_lst.pk)
+
+    def test_admin_tampered_post_with_vis_payload_is_dropped(self):
+        # Defense-in-depth: even if the admin tampers with the POST body and
+        # submits vis_phone values, save() must not honour them.
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123 admin-edited",
+                f"vis_{self.attr_phone.pk}": ["public"],  # tampered.
+            },
+            record=self.record,
+            user=self.admin,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        rows = list(
+            ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].audience_id, self.parent_lst.pk)  # unchanged.
+
+    def test_owner_can_still_change_matrix(self):
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123 owner-edit",
+                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        rows = list(
+            ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].audience_id, self.lst.pk)
+
+
 class InviteFlowTests(TestCase):
     def setUp(self):
         self.client = Client()
