@@ -92,15 +92,15 @@ Restpunkte (Phase 3b-2):
 
 Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefixt; die folgenden bleiben offen und werden in passender Phase oder als Restpunkt vor Live-Deployment angegangen.
 
-**Kritisch (Entscheidung steht, Umsetzung folgt):**
+**Architektur-Entscheidungen umgesetzt:**
 
-- **B3 — Listen-Admin kann Sichtbarkeits-Matrix fremder Records umstellen.** `RecordEditForm.save()` schreibt `ListRecordAccess`-Reihen, sobald `can_user_edit_record` zustimmt. **Entscheidung 2026-05-26:** Sichtbarkeits-Reihen nur schreiben, wenn speichernder USER `RecordManager` ODER Super-Admin. Listen-Admin darf weiterhin Werte korrigieren, aber Matrix-UI ist für ihn read-only. Architektur in CLAUDE.md / *Who may edit the visibility matrix*.
+- ~~B3 — Listen-Admin kann Sichtbarkeits-Matrix fremder Records umstellen.~~ **Gefixt 2026-05-26.** Sichtbarkeits-Reihen werden nur geschrieben, wenn speichernder USER `RecordManager`, subject's-own-USER oder Super-Admin ist. Listen-Admin darf weiterhin Werte korrigieren, aber Matrix-UI ist für ihn read-only (Form-Felder `disabled=True` + Server-Gate in `RecordEditForm.save()`). Architektur in CLAUDE.md / *Who may edit the visibility matrix*.
 
 **Mittel (Hardening, vor erstem Live-Deployment fixen):**
 
 - ~~M6 — `target_person`-Dropdown enumeriert alle USER-PERSONs system-weit.~~ **Gefixt 2026-05-26 (commit folgt).** `candidate_invite_persons(inviting_user, target_list)` in `lists/permissions.py` schränkt die Auswahl ein auf Personen, die Subject eines aktiven Records in einer Liste sind, die der Inviter sehen kann (`eligible_parents_for` ∪ target_list selbst ∪ parent ∪ direkte children). Super-Admin sieht weiterhin alle.
 - ~~M7 — Email-Parameter ohne URL-Encoding in `invite_accept`-Redirect.~~ **Gefixt 2026-05-26 (commit folgt).** `urlencode()` für beide Redirects (Branch-A→register mit `email`, Branch-B→login mit `next`). Test deckt `+`-Suffix-Fall ab.
-- **M8 — `record.subject` (Person-Name) wird für jeden Listen-Sichter direkt aus Person-Modell gerendert, unabhängig von Sichtbarkeits-Matrix.** Im `via_associate`-Modus (Kind als Subject) potentiell sensitiv. Architektur-Klärung mit Projekt-Owner offen.
+- ~~M8 — `record.subject` (Person-Name) wird für jeden Listen-Sichter direkt aus Person-Modell gerendert, unabhängig von Sichtbarkeits-Matrix.~~ **Gefixt 2026-05-26.** Subject-Name kommt als zusätzliche Achse in `LIST_RECORD_ACCESS` (Sentinel `attribute_id=NULL`), Default sichtbar, Admin+Super sehen immer Klarname, Anonymisierung zu `?N` mit ad-hoc-Numerierung pro Render. Architektur in CLAUDE.md / *Subject-name visibility*.
 - ~~M9 — `lst.title` in `send_mail`-Subject ohne Newline-Sanitization.~~ **Gefixt 2026-05-26 (commit folgt).** Defense-in-depth: `ListCreateForm.clean_title` kollabiert Whitespace und cappt auf 200 Zeichen; `list_invite`-View ruft zusätzlich `_sanitize_header_value(lst.title)` vor `send_mail` auf, deckt den Fall ab dass ein Titel via Django-Admin/Direktem DB-Write am Form vorbeigeht.
 - **M10 — `invite_accept` ist GET-Endpoint mit Side-Effects.** Auto-Preview-Fetcher (Outlook Safe Links, Slack-Unfurler etc.) konsumieren Tokens bei Mail-Preview. Fix: GET zeigt nur Bestätigungs-Seite, Konsum per POST.
 - **M11 — `record_create_self` ohne LISTTEMPLATE-Mode-Check.** Im `via_associate`-Modus legt der Endpoint blind `subject=user.person` an, obwohl die Liste Kinder als Subjects haben soll. Fix: bei `via_associate` auf den Wizard (Phase 3b-2) verweisen.

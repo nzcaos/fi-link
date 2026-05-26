@@ -34,7 +34,7 @@ from .permissions import (
     can_user_edit_record,
     can_user_see_list,
 )
-from .visibility import visible_attributes_for
+from .visibility import can_user_see_subject_name, visible_attributes_for
 
 
 @login_required
@@ -90,13 +90,22 @@ def list_detail(request, pk: int):
 
     records_qs = lst.records.filter(archived_at__isnull=True).select_related("subject")
     rows = []
+    anon_counter = 0
     for record in records_qs:
         attrs = list(visible_attributes_for(request.user, record))
         values_map = {v.attribute_id: v.value for v in record.values.all()}
         fields = [(a, values_map.get(a.pk, "")) for a in attrs]
+        # M8: subject-name anonymisation. Counter is per-render — ?N is a
+        # display hack, not a stable identifier (see CLAUDE.md).
+        if can_user_see_subject_name(request.user, record):
+            subject_display = str(record.subject)
+        else:
+            anon_counter += 1
+            subject_display = f"?{anon_counter}"
         rows.append(
             {
                 "record": record,
+                "subject_display": subject_display,
                 "fields": fields,
                 "can_edit": can_user_edit_record(request.user, record),
             }

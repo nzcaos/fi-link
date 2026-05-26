@@ -358,6 +358,13 @@ class ListRecordAccess(models.Model):
 
     The audience is a List_ID — "show this field to members of list X". NULL
     audience maps the spec's '0' (= public).
+
+    `attribute` is `NULL` as a sentinel for "the subject's name" (M8). The
+    invariant "at most one row per (record, NULL, audience)" is enforced by
+    the single writer pattern in `RecordEditForm.save()` (delete-then-insert)
+    and the post_save signal on `ListRecord` (`get_or_create`). Postgres
+    treats NULL as distinct in unique constraints, so the unique_together
+    below does not block dup `(record, NULL, NULL)` rows at SQL level.
     """
 
     record = models.ForeignKey(
@@ -368,9 +375,12 @@ class ListRecordAccess(models.Model):
     )
     attribute = models.ForeignKey(
         ListAttribute,
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="+",
         verbose_name="Attribut",
+        help_text="Leer = Sichtbarkeit des Subject-Namens (M8).",
     )
     audience = models.ForeignKey(
         List,
@@ -389,7 +399,8 @@ class ListRecordAccess(models.Model):
 
     def __str__(self) -> str:
         audience = self.audience.title if self.audience_id else "öffentlich"
-        return f"{self.record} · {self.attribute.name} → {audience}"
+        attribute = self.attribute.name if self.attribute_id else "(Name)"
+        return f"{self.record} · {attribute} → {audience}"
 
 
 # ---------------------------------------------------------------------------
@@ -606,3 +617,27 @@ class ListInviteToken(models.Model):
     @property
     def is_usable(self) -> bool:
         return not (self.is_consumed or self.is_expired)
+
+
+# ---------------------------------------------------------------------------
+# Signals
+# ---------------------------------------------------------------------------
+
+
+from django.db.models.signals import post_save  # noqa: E402
+from django.dispatch import receiver  # noqa: E402
+
+
+@receiver(post_save, sender=ListRecord)
+def _ensure_default_name_visibility(sender, instance, created, **kwargs):
+    """M8: every new ListRecord gets a default (attribute=NULL, audience=NULL)
+    ListRecordAccess row — 'subject-name visible to public'. See CLAUDE.md /
+    *Subject-name visibility*. Uses get_or_create for idempotency.
+    """
+    if not created:
+        return
+    ListRecordAccess.objects.get_or_create(
+        record=instance,
+        attribute=None,
+        audience=None,
+    )

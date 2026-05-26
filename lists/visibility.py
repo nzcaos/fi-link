@@ -93,3 +93,64 @@ def visible_attributes_for(user, record: ListRecord) -> Iterable[ListAttribute]:
     for attribute in record.list.template.attributes.all():
         if can_user_see_field(user, record, attribute):
             yield attribute
+
+
+def can_user_see_subject_name(user, record: ListRecord) -> bool:
+    """M8: subject-name visibility — same audience semantics as
+    `can_user_see_field`, but the matching `LIST_RECORD_ACCESS` rows have
+    `attribute_id IS NULL`.
+
+    Admin override: super-admin and list-admin of the containing list always
+    see the real name (moderation needs it). The subject's own User and any
+    RecordManager also always see it (their own data). For everyone else, the
+    matrix is the source of truth. See CLAUDE.md / *Subject-name visibility*.
+    """
+    if not getattr(user, "is_authenticated", False):
+        # Anonymous viewers (public-visibility lists) fall through to the
+        # audience-row check below; only a (record, NULL, audience=NULL)
+        # row can grant them visibility.
+        return _public_subject_name_allowed(record)
+
+    if user.is_superuser:
+        return True
+
+    if record.subject_id == getattr(user, "person_id", None):
+        return True
+
+    if RecordManager.objects.filter(record=record, user=user).exists():
+        return True
+
+    if ListAdmin.objects.filter(list=record.list, user=user).exists():
+        return True
+
+    if record.archived_at is not None:
+        return False
+
+    access_rows = ListRecordAccess.objects.filter(record=record, attribute__isnull=True)
+
+    if access_rows.filter(audience__isnull=True).exists():
+        return True
+
+    audience_ids = list(
+        access_rows.filter(audience__isnull=False).values_list("audience_id", flat=True)
+    )
+    if not audience_ids:
+        return False
+
+    for audience in List.objects.filter(pk__in=audience_ids):
+        if _user_is_in_benutzergruppe(user, audience):
+            return True
+    return False
+
+
+def _public_subject_name_allowed(record: ListRecord) -> bool:
+    """Helper for anonymous viewers: only an explicit (record, NULL,
+    audience=NULL) row grants visibility — list-public visibility on
+    audience lists does not propagate to unauthenticated callers because
+    the per-list `can_user_see_list` check is the outer gate, and at the
+    point this helper is reached, the caller already passed that gate
+    against a publicly visible list. The name still requires its own opt-in.
+    """
+    return ListRecordAccess.objects.filter(
+        record=record, attribute__isnull=True, audience__isnull=True
+    ).exists()

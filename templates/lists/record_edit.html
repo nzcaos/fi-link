@@ -21,6 +21,18 @@
   <form method="post">
     {% csrf_token %}
 
+    <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
+      <legend style="font-weight:500">Name des Eintrags</legend>
+      <p style="margin:0.25rem 0 0.5rem"><strong>{{ record.subject }}</strong></p>
+      <p style="font-size:0.85rem;color:#555;margin:0 0 0.25rem">
+        Hier kannst du steuern, wer den Namen sieht. Wenn niemand ihn sehen darf, wird er als
+        <code>?N</code> angezeigt (durchnummeriert pro Listenansicht). Listen-Admins und
+        Super-Admins sehen den Namen weiterhin.
+      </p>
+      <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
+      <div>{{ form.vis_name }}</div>
+    </fieldset>
+
     {% for attribute, value_field, vis_field in form.iter_attribute_rows %}
       <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px">
         <legend style="font-weight:500">{{ attribute.name }}</legend>

@@ -177,6 +177,7 @@ class ListInviteForm(forms.Form):
 
 _ATTR_FIELD_PREFIX = "attr_"
 _AUDIENCE_FIELD_PREFIX = "vis_"
+_NAME_VIS_FIELD = "vis_name"
 
 
 def _build_field_for_attribute(attribute: ListAttribute) -> forms.Field:
@@ -248,12 +249,24 @@ class RecordEditForm(forms.Form):
             for v in ListRecordValue.objects.filter(record=record).select_related("attribute")
         }
         access_rows = ListRecordAccess.objects.filter(record=record)
-        access_by_attr: dict[int, set[str]] = {}
+        access_by_attr: dict[int | None, set[str]] = {}
         for row in access_rows:
             key = "public" if row.audience_id is None else f"list-{row.audience_id}"
+            # attribute_id is None for the M8 subject-name sentinel rows.
             access_by_attr.setdefault(row.attribute_id, set()).add(key)
 
         audience_choices = _audience_choices_for(record.list)
+
+        # M8: subject-name visibility row at the top of the matrix. Same
+        # audience-choices and same B3 gate as the attribute rows.
+        self.fields[_NAME_VIS_FIELD] = forms.MultipleChoiceField(
+            label="Sichtbar für (Name)",
+            choices=audience_choices,
+            widget=forms.CheckboxSelectMultiple,
+            required=False,
+            initial=sorted(access_by_attr.get(None, set())),
+            disabled=not self.user_can_edit_visibility,
+        )
 
         for attribute in record.list.template.attributes.all():
             value_key = f"{_ATTR_FIELD_PREFIX}{attribute.pk}"
@@ -324,6 +337,20 @@ class RecordEditForm(forms.Form):
                         attribute=attribute,
                         audience_id=audience_id,
                     )
+
+            # M8: subject-name visibility — same delete-then-insert pattern,
+            # but with attribute=None as the sentinel.
+            picked_name = self.cleaned_data.get(_NAME_VIS_FIELD) or []
+            ListRecordAccess.objects.filter(
+                record=self.record, attribute__isnull=True
+            ).delete()
+            for key in picked_name:
+                audience_id = _audience_key_to_list_id(key)
+                ListRecordAccess.objects.create(
+                    record=self.record,
+                    attribute=None,
+                    audience_id=audience_id,
+                )
 
         # 3) RecordManager: ensure the saving user is registered as a manager
         # (basis depends on context; default to SELF_REGISTERED if this is the

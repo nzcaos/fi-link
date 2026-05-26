@@ -36,7 +36,11 @@ from .permissions import (
     can_user_see_list,
     eligible_parents_for,
 )
-from .visibility import can_user_see_field, visible_attributes_for
+from .visibility import (
+    can_user_see_field,
+    can_user_see_subject_name,
+    visible_attributes_for,
+)
 
 
 def _make_user(*, username: str, given: str = "Test", family: str = "User", email: str | None = None, **extra) -> User:
@@ -479,6 +483,198 @@ class B3VisibilityWriteGateTests(TestCase):
         )
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].audience_id, self.lst.pk)
+
+
+class M8SubjectNameVisibilityTests(TestCase):
+    """M8: subject-name as a second axis of the visibility matrix
+    (`ListRecordAccess` rows with `attribute_id = NULL`). Default is public;
+    list-admin and super-admin always see the real name; non-managers see
+    `?N` when not in any granted audience."""
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent_lst = List.objects.create(
+            title="Elternbeirat",
+            email_alias="eb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.lst.parent = self.parent_lst
+        self.lst.save()
+
+        self.owner = _make_user(username="owner", given="Anna", family="Müller")
+        self.parent_member = _make_user(username="parentmember", given="Paul", family="Beirat")
+        self.class_member = _make_user(username="classmember", given="Berta", family="Schmid")
+        self.outsider = _make_user(username="outsider", given="Carla", family="X")
+        self.admin = _make_user(username="adminuser", given="Dora", family="Y")
+        self.super_ = _make_super()
+
+        ListAccess.objects.create(list=self.parent_lst, user=self.parent_member)
+        ListAccess.objects.create(list=self.lst, user=self.class_member)
+        ListAdmin.objects.create(list=self.lst, user=self.admin)
+
+        self.record = ListRecord.objects.create(list=self.lst, subject=self.owner.person)
+        RecordManager.objects.create(
+            record=self.record, user=self.owner, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+
+    def test_default_name_visibility_row_created_by_signal(self):
+        """Every newly created ListRecord should have one (NULL, NULL) access
+        row written by the post_save signal — default = public."""
+        rows = ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True, audience__isnull=True
+        )
+        self.assertEqual(rows.count(), 1)
+
+    def test_default_makes_name_visible_to_everyone(self):
+        for u in (self.class_member, self.parent_member, self.outsider, self.admin, self.super_):
+            self.assertTrue(
+                can_user_see_subject_name(u, self.record),
+                f"{u.username} should see the name by default",
+            )
+
+    def test_owner_always_sees_own_name(self):
+        # Wipe all visibility rows — owner still sees the name (subject-own).
+        ListRecordAccess.objects.filter(record=self.record).delete()
+        self.assertTrue(can_user_see_subject_name(self.owner, self.record))
+
+    def test_admin_and_super_override_matrix(self):
+        # Remove the public default — admin and super-admin still see the name.
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        self.assertTrue(can_user_see_subject_name(self.admin, self.record))
+        self.assertTrue(can_user_see_subject_name(self.super_, self.record))
+        # Class-member without any audience-row no longer sees it.
+        self.assertFalse(can_user_see_subject_name(self.class_member, self.record))
+
+    def test_audience_restricted_name_visibility(self):
+        # Owner sets name-visible to parent-list only.
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        ListRecordAccess.objects.create(
+            record=self.record, attribute=None, audience=self.parent_lst
+        )
+        # parent_member is in the Elternbeirat list → sees real name.
+        self.assertTrue(can_user_see_subject_name(self.parent_member, self.record))
+        # class_member is only in the class list, not Elternbeirat → no.
+        self.assertFalse(can_user_see_subject_name(self.class_member, self.record))
+
+    def test_archived_record_hides_name_from_non_admins(self):
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        self.record.archived_at = timezone.now()
+        self.record.save(update_fields=["archived_at"])
+        # Admin still sees (override before archive check).
+        self.assertTrue(can_user_see_subject_name(self.admin, self.record))
+        # Subject's own user still sees their own.
+        self.assertTrue(can_user_see_subject_name(self.owner, self.record))
+        # Non-manager class-member sees nothing.
+        self.assertFalse(can_user_see_subject_name(self.class_member, self.record))
+
+    def test_record_edit_form_includes_name_visibility_field(self):
+        form = RecordEditForm(record=self.record, user=self.owner)
+        self.assertIn("vis_name", form.fields)
+        # Default-public is reflected in initial = ["public"].
+        self.assertEqual(list(form.fields["vis_name"].initial), ["public"])
+        self.assertFalse(form.fields["vis_name"].disabled)
+
+    def test_record_edit_form_disables_name_visibility_for_pure_admin(self):
+        form = RecordEditForm(record=self.record, user=self.admin)
+        self.assertTrue(form.fields["vis_name"].disabled)
+
+    def test_form_save_writes_name_visibility_rows(self):
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123",
+                "vis_name": [f"list-{self.parent_lst.pk}"],
+                # vis_phone empty.
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        rows = list(
+            ListRecordAccess.objects.filter(record=self.record, attribute__isnull=True)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].audience_id, self.parent_lst.pk)
+
+    def test_form_save_drops_name_changes_for_pure_admin(self):
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123",
+                "vis_name": [f"list-{self.parent_lst.pk}"],  # tampered.
+            },
+            record=self.record,
+            user=self.admin,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        # The original (NULL, NULL) default-public row stays unchanged.
+        rows = list(
+            ListRecordAccess.objects.filter(record=self.record, attribute__isnull=True)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0].audience_id)
+
+    def test_list_detail_renders_real_name_when_visible(self):
+        # class_member sees the public-default name.
+        self.client.force_login(self.class_member)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Anna Müller")
+        self.assertNotContains(resp, "?1")
+
+    def test_list_detail_renders_anon_when_not_visible(self):
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        self.client.force_login(self.class_member)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "Anna Müller")
+        self.assertContains(resp, "?1")
+
+    def test_list_detail_admin_still_sees_real_name_after_anon(self):
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
+        self.assertContains(resp, "Anna Müller")
+        self.assertNotContains(resp, "?1")
+
+    def test_list_detail_numbers_multiple_anon_rows(self):
+        # Create a second record with another subject; anonymise both.
+        other = _make_user(username="other_subject", given="Bruno", family="Beispiel")
+        other_record = ListRecord.objects.create(list=self.lst, subject=other.person)
+        ListRecordAccess.objects.filter(attribute__isnull=True).delete()
+
+        self.client.force_login(self.class_member)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
+        self.assertEqual(resp.status_code, 200)
+        # Both names hidden.
+        self.assertNotContains(resp, "Anna Müller")
+        self.assertNotContains(resp, "Bruno Beispiel")
+        # Both ?-counters present.
+        self.assertContains(resp, "?1")
+        self.assertContains(resp, "?2")
+        # The pair survived the loop with distinct identifiers.
+        del other_record  # silence linter; the record's existence is enough.
 
 
 class InviteFlowTests(TestCase):

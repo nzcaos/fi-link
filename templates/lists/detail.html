@@ -47,7 +47,7 @@
         {% for row in rows %}
           <tr>
             <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
-              {{ row.record.subject }}
+              {{ row.subject_display }}
               {% if row.record.role == 'associate' %}
                 <span style="color:#888">(zugeordnet)</span>
               {% endif %}

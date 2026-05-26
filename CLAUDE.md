@@ -248,7 +248,7 @@ Authoritative tables:
 
 - **`LIST_ADMIN`** — admin rights on a list (CRUD on the list, approval queue, send-permissions, handover).
 - **`LIST_ACCESS`** — membership in a list's *Benutzergruppe* (sees the list, is an audience target).
-- **`LIST_RECORD_ACCESS`** — per-(record, attribute, audience) visibility, where audience is a `List_ID` or `NULL` (= public).
+- **`LIST_RECORD_ACCESS`** — per-(record, attribute, audience) visibility, where audience is a `List_ID` or `NULL` (= public). `attribute` is `NULL` as a sentinel for "the subject's name" — see *Subject-name visibility* below.
 - **`RECORD_MANAGER`** — edit rights on a single record (creator, invited, guardian, self-registered).
 - **`LIST_SEND_PERMISSION`** + implicit parent-list grants — mail-send rights.
 - **`USER.is_superuser`** — global override.
@@ -264,6 +264,19 @@ Agreed 2026-05-26. **`LIST_RECORD_ACCESS` rows are written only by `RECORD_MANAG
 Reason: visibility belongs to the data subject. The spec models a `LIST_RECORD` as owned by its subject (or, in `via_associate` mode, by the subject's guardians via `RECORD_MANAGER`). Letting any list-admin reach into another household's privacy choices would break that ownership model — even though admins legitimately need value-edit rights for moderation. Splitting the two rights along the `RECORD_MANAGER`/`LIST_ADMIN` axis enforces "admins moderate, owners disclose".
 
 Implementation lives in `RecordEditForm.save()` (server-side gate) and `record_edit.html` (UI hint + disabled checkboxes). The check is `record_manager OR super-admin`; subject's-own-USER implicitly qualifies (CLAUDE.md / *Family-association model*) without an explicit `RECORD_MANAGER` row.
+
+### Subject-name visibility
+
+Agreed 2026-05-26. The subject's name (the `PERSON.given_name` + `family_name` rendered next to every list row) is a **second sensitive surface** alongside the attributes, and goes through the **same** visibility matrix:
+
+- **Storage**: `LIST_RECORD_ACCESS` rows with `attribute_id = NULL` express "the subject's name is visible to this audience". This is a sentinel value, not a real attribute — same audience semantics as for attribute rows (a `List_ID`, or `NULL` for public).
+- **Default**: new records receive one `(record, attribute=NULL, audience=NULL)` row, i.e. name visible to the public. Written automatically on `ListRecord.save()` via a `post_save` signal; the migration that introduces the sentinel backfills the same default for every pre-existing record. Rationale: a paper class list has names on it; surprise-anonymising existing data on deploy would break that expectation. Owners who want anonymity opt in explicitly.
+- **Admin override**: `LIST_ADMIN` of the containing list and `SUPER_ADMIN` always see the real name regardless of matrix state. Without this, moderation (mail approval, transfer confirmation, handover) becomes operationally impossible.
+- **Render with anonymisation**: when a viewer is not permitted to see the real name, the list-row renders **`?N`** where `N` is an ad-hoc counter assigned in the order anonymous records appear in the current render. `N` is **not stable** across requests or sortings — it's a display hack, not an identifier. (If two users discuss "the second anonymous person", they may be discussing different people; this is accepted in v1 to avoid the migration + write-path cost of a stable `anon_index`.)
+- **Matrix UI**: the per-record edit form shows the "Name"-row at the top of the visibility matrix, with the same audience checkboxes as every attribute row. B3 applies: only `RECORD_MANAGER`/super-admin may toggle it.
+- **Uniqueness caveat**: Postgres treats `NULL` as distinct in unique constraints, so the existing `unique_together = (record, attribute, audience)` does not prevent two `(record, NULL, NULL)` rows at the SQL level. The invariant "at most one row per (record, NULL, audience)" is enforced by the **single writer** — `RecordEditForm.save()` does delete-then-insert, and the `post_save` signal uses `get_or_create`. Direct DB inserts that bypass these paths would need to maintain the invariant themselves.
+
+Code surface: `visibility.can_user_see_subject_name(user, record)` (returns bool), and the list-render in `views.list_detail` walks records and assigns `?1`, `?2`, ... to those where the helper returns `False`. The template renders `row.subject_display` rather than `row.record.subject`.
 
 ### Encryption at rest
 
