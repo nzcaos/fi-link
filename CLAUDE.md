@@ -240,6 +240,23 @@ Concrete example: the Vorsitz Elternbeirat is a member of the Elternbeirat list,
 
 All other mail-pipeline behavior (anti-spoofing, anti-loop, bounce handling, anonymization, fan-out via procrastinate) is identical to regular lists.
 
+### Permission and visibility layer
+
+Agreed 2026-05-26. The earlier plan named `django-guardian` for per-object permissions; this is dropped. The explicit relational model already expresses every permission and visibility rule the system uses, and adding Guardian on top would create a second source of truth that has to be kept in sync.
+
+Authoritative tables:
+
+- **`LIST_ADMIN`** — admin rights on a list (CRUD on the list, approval queue, send-permissions, handover).
+- **`LIST_ACCESS`** — membership in a list's *Benutzergruppe* (sees the list, is an audience target).
+- **`LIST_RECORD_ACCESS`** — per-(record, attribute, audience) visibility, where audience is a `List_ID` or `NULL` (= public).
+- **`RECORD_MANAGER`** — edit rights on a single record (creator, invited, guardian, self-registered).
+- **`LIST_SEND_PERMISSION`** + implicit parent-list grants — mail-send rights.
+- **`USER.is_superuser`** — global override.
+
+Code surface: a single module **`lists/permissions.py`** with pure functions (`can_user_admin_list`, `can_user_see_list`, `can_user_create_top_level_list`, `can_user_create_sublist_under(user, parent_list)`, `eligible_parents_for(user)`, `can_user_edit_record`, …) and a sibling **`lists/visibility.py`** with `can_user_see_field(user, record, attribute)` (returns bool) and `visible_attributes_for(user, record)` (returns the iterable used by the list-render). All other layers (views, templates, mail pipeline) call these helpers rather than re-deriving permission logic. There is no `User.has_perm("lists.view_record", obj=…)` flow.
+
+Reason: with the audience-based visibility primitive, a Guardian-style "X has permission Y on object Z" would need an entry per (user × audience-list-membership × record × attribute), kept consistent on every `ListAccess` change. Evaluating it at read time from the three tables is cheaper, has no eventual-consistency window, and keeps the schema honest about who-can-see-what.
+
 ### Encryption at rest
 
 `LIST_RECORD_VALUE.value` is encrypted at the application layer with Fernet (AES-128-CBC + HMAC), using a **single installation-wide key** from an environment variable. **All values are encrypted unconditionally** — no per-field opt-in/out, to eliminate the risk of forgetting. Library: `django-cryptography` or equivalent.
@@ -387,7 +404,7 @@ With this policy the smallest 5 GB provider tier holds long-term.
 
 Agreed with the project owner on 2026-05-24.
 
-- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `py_webauthn` covers passkey-only authentication in a hand-rolled flow (see *Architecture decisions (authentication)*); `django-guardian` maps onto the per-object visibility model in `LIST_RECORD_ACCESS`; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
+- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `py_webauthn` covers passkey-only authentication in a hand-rolled flow (see *Architecture decisions (authentication)*); the per-object visibility model is expressed natively by `LIST_ADMIN`, `LIST_ACCESS` and `LIST_RECORD_ACCESS` plus a thin permission/visibility service module (see *Permission and visibility layer* below) — no `django-guardian`, no shadow-permission tables; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
 - **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
 - **Server-rendered UI** — see *Frontend* below.
 

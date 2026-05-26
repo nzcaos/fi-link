@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ list_obj.title }} — Fichtelink{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:index' %}">← Zurück zur Übersicht</a></p>
+  <h1>{{ list_obj.title }}</h1>
+  <p style="color:#666">
+    Vorlage: <strong>{{ list_obj.template.name }}</strong> ·
+    Sichtbarkeit: {{ list_obj.get_visibility_display }}
+    {% if list_obj.parent %} · übergeordnet: <a href="{% url 'lists:detail' pk=list_obj.parent.pk %}">{{ list_obj.parent.title }}</a>{% endif %}
+    {% if list_obj.archived_at %} · <strong style="color:#b00020">archiviert</strong>{% endif %}
+  </p>
+
+  {% if is_admin %}
+    <div class="info">Sie sind Admin dieser Liste.</div>
+  {% endif %}
+
+  <p style="margin-top:1.5rem;color:#666">
+    Detail-UI (Einträge, Sichtbarkeits-Matrix, Onboarding-Wizard) folgt in Phase 3b.
+  </p>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Listen — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Listen</h1>
+  <p><a href="{% url 'lists:create' %}"><button type="button">Neue Liste anlegen</button></a></p>
+
+  <h2 style="font-size:1.1rem;margin-top:1.5rem">Eigene Listen</h2>
+  {% if own_lists %}
+    <ul>
+      {% for l in own_lists %}
+        <li><a href="{% url 'lists:detail' pk=l.pk %}">{{ l.title }}</a>
+          <span style="color:#888">· {{ l.template.name }}</span>
+          {% if l.archived_at %}<span style="color:#b00020"> · archiviert</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p style="color:#666">Sie sind in keiner Liste Admin oder Mitglied.</p>
+  {% endif %}
+
+  {% if public_lists %}
+    <h2 style="font-size:1.1rem;margin-top:1.5rem">Öffentliche Listen</h2>
+    <ul>
+      {% for l in public_lists %}
+        <li><a href="{% url 'lists:detail' pk=l.pk %}">{{ l.title }}</a>
+          <span style="color:#888">· {{ l.template.name }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock %}

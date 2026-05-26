@@ -54,10 +54,12 @@ Outputs:
 - [ ] **Ziel:** LISTTEMPLATE-Pflege (Super-Admin), Listen-CRUD, Sichtbarkeits-Service als zentrale Funktion.
 
 Outputs:
-- LISTTEMPLATE-CRUD im Django-Admin
-- Super-Admin legt Top-Level-Listen an; normale User legen Sub-Listen unter eigenen Parents an
-- Service `can_user_see_field(user, record, attribut)` mit Audience-Resolution
-- django-guardian-Wiring für Per-Object-Permissions
+- LISTTEMPLATE-CRUD im Django-Admin (bereits in Phase 1 vorbereitet)
+- Super-Admin legt Top-Level-Listen an; normale User legen Sub-Listen unter eigenen Parents an (HTMX-Form `/lists/new/`)
+- Listen-Index `/lists/` + Detail-Stub `/lists/<pk>/` als Landeplatz nach Anlage (Detail-UI in Phase 3b)
+- Modul `lists/permissions.py` mit reinen Helpern (`can_user_admin_list`, `can_user_create_top_level_list`, `can_user_create_sublist_under`, `eligible_parents_for`, `can_user_edit_record`, …) — siehe CLAUDE.md *Permission and visibility layer*
+- Modul `lists/visibility.py` mit `can_user_see_field(user, record, attribute)` und `visible_attributes_for(user, record)` (Audience-Resolution gegen `LIST_RECORD_ACCESS`)
+- Kein `django-guardian` (Begründung in CLAUDE.md / *Permission and visibility layer*)
 
 **Verify:** Unit-Tests decken die Audience-Kombinationen ab (öffentlich, Liste-X-Mitglieder, kein Audience).
 

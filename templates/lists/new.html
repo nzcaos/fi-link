@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Neue Liste — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Neue Liste anlegen</h1>
+
+  {% if form.non_field_errors %}
+    <div class="error">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <form method="post" action="{% url 'lists:create' %}">
+    {% csrf_token %}
+
+    <label for="{{ form.title.id_for_label }}">{{ form.title.label }}</label>
+    {{ form.title }}
+    {% if form.title.errors %}<div class="error">{{ form.title.errors }}</div>{% endif %}
+
+    <label for="{{ form.email_alias.id_for_label }}">{{ form.email_alias.label }}</label>
+    {{ form.email_alias }}
+    <p style="font-size:0.85rem;color:#555;margin-top:0.25rem">{{ form.email_alias.help_text }}</p>
+    {% if form.email_alias.errors %}<div class="error">{{ form.email_alias.errors }}</div>{% endif %}
+
+    <label for="{{ form.template.id_for_label }}">Vorlage</label>
+    {{ form.template }}
+    {% if form.template.errors %}<div class="error">{{ form.template.errors }}</div>{% endif %}
+
+    <label for="{{ form.parent.id_for_label }}">Übergeordnete Liste</label>
+    {{ form.parent }}
+    {% if form.parent.errors %}<div class="error">{{ form.parent.errors }}</div>{% endif %}
+
+    <label for="{{ form.visibility.id_for_label }}">Sichtbarkeit</label>
+    {{ form.visibility }}
+    {% if form.visibility.errors %}<div class="error">{{ form.visibility.errors }}</div>{% endif %}
+
+    <p style="margin-top:1rem">
+      <button type="submit">Liste anlegen</button>
+      <a href="{% url 'lists:index' %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}
