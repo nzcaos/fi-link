@@ -589,7 +589,7 @@ def record_create_associate(request, pk: int):
             request.session.pop("wizard_grant_list_id", None)
             messages.success(
                 request,
-                f"„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.",
+                f'„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.',
             )
             return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
     else:
