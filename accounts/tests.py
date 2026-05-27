@@ -161,3 +161,104 @@ class RegisterStartViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         # The form should offer to continue under the shared address (family-mailbox case).
         self.assertContains(resp, "weiteres Konto")
+
+
+class N15RegisterRateLimitTests(TestCase):
+    """N15: register_start and register_force must throttle per-IP so a
+    script cannot pump Person rows or mailings to arbitrary addresses.
+    """
+
+    def setUp(self):
+        # The throttle bucket lives in Django's default cache; clear it
+        # between tests so the per-IP counter starts fresh.
+        from django.core.cache import cache
+
+        cache.clear()
+
+    def _post_register(self, email: str, **kwargs):
+        return self.client.post(
+            "/auth/register/",
+            {
+                "email": email,
+                "given_name": "Anna",
+                "family_name": "Müller",
+            },
+            **kwargs,
+        )
+
+    def _post_force(self, email: str, **kwargs):
+        return self.client.post(
+            "/auth/register/force/",
+            {
+                "email": email,
+                "given_name": "Anna",
+                "family_name": "Müller",
+            },
+            **kwargs,
+        )
+
+    def test_register_start_blocks_after_limit(self):
+        """The 11th request from the same IP within the window is rejected.
+        The limit constant is 10; we don't pin the exact number here, just
+        the shape: many requests in a row eventually 429.
+        """
+        from accounts.views import _REG_RATE_LIMIT
+
+        # First _REG_RATE_LIMIT requests succeed.
+        for i in range(_REG_RATE_LIMIT):
+            resp = self._post_register(f"user{i}@example.org")
+            self.assertEqual(resp.status_code, 200, f"request {i+1} unexpectedly 429")
+            self.assertNotContains(resp, "Zu viele Registrierungsversuche")
+
+        # The next one gets throttled.
+        resp = self._post_register("over@example.org")
+        self.assertEqual(resp.status_code, 429)
+        self.assertContains(resp, "Zu viele Registrierungsversuche", status_code=429)
+        # And critically: no Person row from the rejected attempt.
+        self.assertFalse(Person.objects.filter(email="over@example.org").exists())
+
+    def test_register_force_also_throttled(self):
+        from accounts.views import _REG_RATE_LIMIT
+
+        for i in range(_REG_RATE_LIMIT):
+            resp = self._post_force(f"force{i}@example.org")
+            self.assertEqual(resp.status_code, 200)
+        resp = self._post_force("over@example.org")
+        self.assertEqual(resp.status_code, 429)
+        self.assertFalse(Person.objects.filter(email="over@example.org").exists())
+
+    def test_buckets_are_per_ip(self):
+        """Different REMOTE_ADDR values do not share the counter."""
+        from accounts.views import _REG_RATE_LIMIT
+
+        # Exhaust the budget from IP A.
+        for i in range(_REG_RATE_LIMIT):
+            resp = self._post_register(f"a{i}@example.org", REMOTE_ADDR="10.0.0.1")
+            self.assertEqual(resp.status_code, 200)
+        resp = self._post_register("a-blocked@example.org", REMOTE_ADDR="10.0.0.1")
+        self.assertEqual(resp.status_code, 429)
+
+        # IP B still has a fresh budget.
+        resp = self._post_register("b@example.org", REMOTE_ADDR="10.0.0.2")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_xff_header_respected_for_throttle_key(self):
+        """When XFF is present, the left-most hop is the throttle key."""
+        from accounts.views import _REG_RATE_LIMIT
+
+        # Exhaust budget for XFF client 203.0.113.5 through proxy 10.0.0.1.
+        for i in range(_REG_RATE_LIMIT):
+            resp = self._post_register(
+                f"xff{i}@example.org",
+                REMOTE_ADDR="10.0.0.1",
+                HTTP_X_FORWARDED_FOR="203.0.113.5",
+            )
+            self.assertEqual(resp.status_code, 200)
+        # A request from a different XFF client through the same proxy must
+        # still pass (key is the XFF client, not the proxy).
+        resp = self._post_register(
+            "different-client@example.org",
+            REMOTE_ADDR="10.0.0.1",
+            HTTP_X_FORWARDED_FOR="203.0.113.99",
+        )
+        self.assertEqual(resp.status_code, 200)

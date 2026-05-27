@@ -17,6 +17,7 @@ from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
+from django.core.cache import cache
 from django.core.mail import send_mail
 from django.db import transaction
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -38,6 +39,70 @@ from .webauthn_service import (
 log = logging.getLogger(__name__)
 
 DEFAULT_BACKEND = "django.contrib.auth.backends.ModelBackend"
+
+
+# ---------------------------------------------------------------------------
+# Registration rate-limit (N15)
+# ---------------------------------------------------------------------------
+
+# Per-IP throttle on the stub-account creation path. Both register_start
+# (POST) and register_force funnel into _create_stub_and_send, which writes
+# Person + User + ActivationToken and ships an email — i.e. one HTTP hit
+# produces one new account row plus one outbound mail. Without a throttle
+# a script can pump arbitrary Persons into the DB and mailings to arbitrary
+# addresses from our system. We don't need a perfect bucket; we need a
+# ceiling that stops trivial automation while not getting in the way of the
+# legitimate family-shared-mailbox case (≤ a handful of registrations from
+# the same household within an hour).
+#
+# Storage is Django's default cache (LocMemCache in dev / prod-without-Redis).
+# That makes the counter per-gunicorn-worker rather than global; with 3
+# workers the effective ceiling is 3× the configured limit. Acceptable for
+# this threat model — a serious attacker rotates IPs anyway, this defends
+# against accidents and casual abuse. Upgrade path: switch CACHES to a
+# shared backend when Redis lands (Phase 4 area).
+_REG_RATE_LIMIT = 10  # accounts created per IP per window
+_REG_RATE_WINDOW = 60 * 60  # one hour
+
+
+def _client_ip(request: HttpRequest) -> str:
+    """Best-effort client IP. Honours X-Forwarded-For (left-most hop) when
+    the Django setting permits, falls back to REMOTE_ADDR. We don't try to
+    be clever about IPv6 scoping — the value is only a throttle key.
+    """
+    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if xff:
+        return xff.split(",", 1)[0].strip()
+    return request.META.get("REMOTE_ADDR", "") or "unknown"
+
+
+def _check_registration_rate_limit(request: HttpRequest) -> bool:
+    """Returns True if the request is within budget. Increments the bucket
+    as a side-effect. Use BEFORE the expensive create-and-mail path so a
+    rejected request costs nothing.
+    """
+    key = f"reg_throttle:{_client_ip(request)}"
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        # First hit in this window: incr() raises on missing key, so seed it.
+        cache.set(key, 1, timeout=_REG_RATE_WINDOW)
+        count = 1
+    return count <= _REG_RATE_LIMIT
+
+
+def _rate_limited_response(request: HttpRequest) -> HttpResponse:
+    return render(
+        request,
+        "auth/register.html",
+        {
+            "error": (
+                "Zu viele Registrierungsversuche aus Ihrem Netzwerk. "
+                "Bitte versuchen Sie es in etwa einer Stunde erneut."
+            )
+        },
+        status=429,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +133,8 @@ def register_start(request: HttpRequest) -> HttpResponse:
             {"error": "Bitte Vor-/Nachname und E-Mail angeben."},
             status=400,
         )
+    if not _check_registration_rate_limit(request):
+        return _rate_limited_response(request)
 
     existing = Person.objects.filter(email__iexact=email, user__isnull=False).exists()
     if existing:
@@ -99,6 +166,8 @@ def register_force(request: HttpRequest) -> HttpResponse:
     family_name = (request.POST.get("family_name") or "").strip()
     if not (email and given_name and family_name):
         return redirect("accounts:register_start")
+    if not _check_registration_rate_limit(request):
+        return _rate_limited_response(request)
     return _create_stub_and_send(request, email=email, given_name=given_name, family_name=family_name)
 
 
