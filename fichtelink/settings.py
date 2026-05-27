@@ -7,6 +7,7 @@ the variables yourself or use a tool like direnv.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -110,6 +111,16 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+# When running `manage.py test`, fall back to the plain staticfiles storage.
+# The manifest-backed one demands a `collectstatic`-generated entry for every
+# {% static %} reference; without that, any view that renders a template using
+# a freshly-added asset crashes with "Missing staticfiles manifest entry".
+# Tests don't run collectstatic, so plain storage is the right choice there.
+if "test" in sys.argv:
+    STORAGES["staticfiles"]["BACKEND"] = (
+        "django.contrib.staticfiles.storage.StaticFilesStorage"
+    )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
