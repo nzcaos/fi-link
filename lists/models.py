@@ -23,6 +23,15 @@ def _default_invite_expiry():
     return timezone.now() + timedelta(days=30)
 
 
+def _default_join_expiry():
+    """48h default for QR-code join tokens.
+
+    Short enough to limit abuse of a lost/discarded printout, long enough to
+    cover a parents' evening plus next-day stragglers. See PLAN.md Phase 3b-2.
+    """
+    return timezone.now() + timedelta(hours=48)
+
+
 # ---------------------------------------------------------------------------
 # Templates and attributes
 # ---------------------------------------------------------------------------
@@ -617,6 +626,63 @@ class ListInviteToken(models.Model):
     @property
     def is_usable(self) -> bool:
         return not (self.is_consumed or self.is_expired)
+
+
+class ListJoinToken(models.Model):
+    """A multi-use QR-code join token for a list.
+
+    Differs from `ListInviteToken` (one-shot, personalised):
+    - Multi-use: many people can scan the same QR until expiry/revocation.
+    - No target_email / target_person: anybody who scans + auths can join.
+    - Short default lifetime (48h) — see CLAUDE.md / PLAN.md Phase 3b-2.
+      The QR is meant to live on a pinboard at a single event; long lifetimes
+      raise the cost of an accidentally-shared printout.
+
+    Click-time the mode (`self` vs. `via_associate`) is read from the LIST's
+    LISTTEMPLATE — there is no per-token override.
+    """
+
+    token = models.CharField(
+        "Token",
+        max_length=64,
+        unique=True,
+        default=_gen_invite_token,
+    )
+    list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="join_tokens",
+        verbose_name="Liste",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_join_tokens",
+        verbose_name="erstellt von",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("läuft ab", default=_default_join_expiry)
+    revoked_at = models.DateTimeField("widerrufen am", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Listen-Beitritts-Token (QR)"
+        verbose_name_plural = "Listen-Beitritts-Tokens (QR)"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"QR {self.token[:8]}… → {self.list}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    @property
+    def is_usable(self) -> bool:
+        return not (self.is_expired or self.is_revoked)
 
 
 # ---------------------------------------------------------------------------

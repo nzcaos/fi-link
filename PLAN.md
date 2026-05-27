@@ -82,9 +82,9 @@ Outputs (erledigt):
 - Tests: `RecordEditFormTests` (Werte + Visibility-Replace) und `InviteFlowTests` (alle 6 Klick-Pfade: expired, consumed, unauth-A, existing-user-B, wrong-user-B, unauth-B, round-trip-A)
 
 Restpunkte (Phase 3b-2):
-- **QR-Code-Onboarding:** vendored `qrcode.js` IIFE in `static/vendor/`, Per-List-„Beitritts-Link"-Token (Multi-Use, kein `target_email`) + QR-Render-View. Anwendungsfall: Liste hängt einen QR-Code an die Pinwand, jeder Eltern-Teilnehmer scannt einmalig.
-- **`via_associate`-Wizard:** Mehrschritt-UI für Schul-Klassen-Onboarding — Eltern legen erst die Kind-PERSON an (ohne USER), wählen dann eine Rolle aus `LISTTEMPLATE.relationship_roles` und schreiben `PERSON_RELATIONSHIP`. Variante des bestehenden Record-Edit-Flows mit vorgeschaltetem PERSON-Form. Tests dazu.
-- **Onboarding-Wizard-Tests:** End-to-End-Smoke (Self + Via-Associate).
+- ~~**QR-Code-Onboarding:**~~ **Erledigt 2026-05-27.** Eigenes Model `ListJoinToken` (Multi-Use, kein `target_email`/`target_person`, Default-Expiry 48 h, manuell widerrufbar). Admin-UI `/lists/<pk>/join-tokens/` mit Liste/Anlage/Revoke, QR-Render client-side via vendored `qrcodejs-1.0.0.umd.min.js` (~20 KB, IIFE, kein CDN). Klick-Handler `/join/<token>/` folgt dem M10-Pattern (GET = Bestätigungsseite, POST = consume). Self-Mode angeschlossen (idempotente Record-Anlage + `RecordManager(basis=self_registered)`); `via_associate`-Mode redirected auf `record_create_associate` (Stub bis zur Wizard-Sub-Phase). `pending_join_token` in `accounts._next_url_after_auth` für Register-Roundtrip. Tests `QRJoinTokenAdminTests` + `QRJoinClickFlowTests`.
+- **`via_associate`-Wizard:** Single-Page-Form für Schul-Klassen-Onboarding — Eltern legen Kind-PERSON + Rolle (aus `LISTTEMPLATE.relationship_roles`) + Record-Felder in einem POST an; persistiert Person, ListRecord (role=member), PersonRelationship (subject=Kind, related=Eltern-Person, role) und RecordManager (basis=guardian) atomar.
+- **Onboarding-Wizard-Tests:** End-to-End-Smoke (Self via QR + Via-Associate via QR + Via-Associate via Invite).
 
 **Verify (Teil 1, durchgespielt):** bestehender USER wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, landet im Record-Edit-Formular mit Namen aus seiner PERSON prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage. Plus: Sichtbarkeits-Matrix einstellbar pro Feld auf {öffentlich, eigene Liste, Parent-Liste}.
 

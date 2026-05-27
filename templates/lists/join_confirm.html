@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Beitritt zu „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Beitritt zur Liste „{{ list_obj.title }}"</h1>
+
+  {% if next_action == "register" %}
+    <p>
+      Um beizutreten, müssen Sie sich zuerst registrieren (E-Mail bestätigen
+      und Passkey anlegen). Danach werden Sie automatisch zur Liste hinzugefügt.
+    </p>
+    <form method="post" action="{% url 'lists:join_via_token' token=join_token.token %}">
+      {% csrf_token %}
+      <button type="submit">Jetzt registrieren und beitreten</button>
+    </form>
+
+  {% else %}
+    <p>
+      Sie sind eingeloggt und können der Liste „{{ list_obj.title }}" jetzt beitreten.
+    </p>
+    <form method="post" action="{% url 'lists:join_via_token' token=join_token.token %}">
+      {% csrf_token %}
+      <button type="submit">Beitreten</button>
+    </form>
+  {% endif %}
+
+  <p style="margin-top:1rem;color:#666;font-size:0.85rem">
+    Dieser QR-Code wurde von einem Listen-Admin erzeugt und läuft am
+    {{ join_token.expires_at|date:"d.m.Y H:i" }} ab. Solange Sie nicht oben
+    bestätigen, wird nichts gespeichert.
+  </p>
+{% endblock %}

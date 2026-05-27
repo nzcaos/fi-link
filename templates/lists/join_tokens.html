@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}QR-Codes für „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>QR-Codes für „{{ list_obj.title }}"</h1>
+  <p style="color:#666">
+    QR-Codes lassen Personen ohne persönliche Einladung beitreten — z. B. ausgedruckt
+    auf einer Pinnwand beim Elternabend. Jeder Code läuft nach 48 Stunden automatisch ab
+    und kann jederzeit widerrufen werden.
+  </p>
+
+  <form method="post" style="margin:1rem 0">
+    {% csrf_token %}
+    <button type="submit">Neuen QR-Code erstellen</button>
+  </form>
+
+  {% if tokens %}
+    <h2 style="font-size:1.1rem;margin-top:1.5rem">Bestehende QR-Codes</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+      <thead>
+        <tr style="background:#f4f4f4">
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">QR</th>
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Status</th>
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Erstellt / Läuft ab</th>
+          <th style="border-bottom:1px solid #ddd"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tok in tokens %}
+          <tr>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+              {% if tok.is_usable %}
+                <div class="qr-target" data-url="{{ tok.join_url }}" style="width:128px;height:128px"></div>
+                <div style="font-size:0.75rem;color:#666;word-break:break-all;margin-top:0.25rem">
+                  {{ tok.join_url }}
+                </div>
+              {% else %}
+                <span style="color:#999">(nicht mehr nutzbar)</span>
+              {% endif %}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+              {% if tok.is_revoked %}
+                <strong style="color:#b00020">widerrufen</strong>
+                <div style="font-size:0.8rem;color:#666">{{ tok.revoked_at|date:"d.m.Y H:i" }}</div>
+              {% elif tok.is_expired %}
+                <strong style="color:#888">abgelaufen</strong>
+              {% else %}
+                <strong style="color:#064">aktiv</strong>
+              {% endif %}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top;font-size:0.85rem;color:#444">
+              erstellt {{ tok.created_at|date:"d.m.Y H:i" }}<br>
+              {% if not tok.is_expired %}läuft ab{% else %}lief ab{% endif %} {{ tok.expires_at|date:"d.m.Y H:i" }}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top;text-align:right">
+              {% if not tok.is_revoked and not tok.is_expired %}
+                <form method="post"
+                      action="{% url 'lists:revoke_join_token' pk=list_obj.pk token=tok.token %}"
+                      style="display:inline"
+                      onsubmit="return confirm('Diesen QR-Code wirklich widerrufen?');">
+                  {% csrf_token %}
+                  <button type="submit" class="secondary">Widerrufen</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;margin-top:1rem">Noch keine QR-Codes für diese Liste.</p>
+  {% endif %}
+
+  <script src="{% static 'vendor/qrcodejs-1.0.0.umd.min.js' %}"></script>
+  <script>
+    (function () {
+      document.querySelectorAll(".qr-target").forEach(function (el) {
+        new QRCode(el, {
+          text: el.dataset.url,
+          width: 128,
+          height: 128,
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      });
+    })();
+  </script>
+{% endblock %}

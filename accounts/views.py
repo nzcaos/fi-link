@@ -369,13 +369,16 @@ def _json_options(options_json: str) -> JsonResponse:
 
 
 def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
-    """If the session carries a pending ListInviteToken (set by the lists
-    app when an invite click landed on register/login), continue to the
-    invite-accept handler so the join is finalised in one user-visible flow.
+    """If the session carries a pending list-join handoff (set by the lists
+    app when an invite or QR-join click landed on register/login), continue
+    to the matching handler so the join is finalised in one user-visible flow.
     """
-    pending = request.session.pop("pending_invite_token", None)
-    if pending:
-        return reverse("lists:invite_accept", kwargs={"token": pending})
+    pending_invite = request.session.pop("pending_invite_token", None)
+    if pending_invite:
+        return reverse("lists:invite_accept", kwargs={"token": pending_invite})
+    pending_join = request.session.pop("pending_join_token", None)
+    if pending_join:
+        return reverse("lists:join_via_token", kwargs={"token": pending_join})
     return default
 
 

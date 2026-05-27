@@ -19,7 +19,15 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import ListCreateForm, ListInviteForm, RecordEditForm
-from .models import List, ListAdmin, ListInviteToken, ListRecord, ListTemplate, RecordManager
+from .models import (
+    List,
+    ListAdmin,
+    ListInviteToken,
+    ListJoinToken,
+    ListRecord,
+    ListTemplate,
+    RecordManager,
+)
 
 
 def _sanitize_header_value(value: str, max_length: int = 200) -> str:
@@ -374,4 +382,146 @@ def record_edit(request, pk: int, record_pk: int):
         request,
         "lists/record_edit.html",
         {"list_obj": lst, "record": record, "form": form},
+    )
+
+
+# ---------------------------------------------------------------------------
+# QR-code join tokens (Phase 3b-2)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def list_join_tokens(request, pk: int):
+    """Admin-only page: list active QR join tokens for a list, create new ones."""
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins dürfen QR-Tokens verwalten.")
+
+    if request.method == "POST":
+        ListJoinToken.objects.create(list=lst, created_by=request.user)
+        messages.success(request, "Neuer QR-Code erstellt.")
+        return redirect("lists:join_tokens", pk=lst.pk)
+
+    tokens = list(lst.join_tokens.all())
+    # Annotate each token with its absolute URL so the template can render
+    # a QR for it without recomputing the full URL per row.
+    for tok in tokens:
+        tok.join_url = request.build_absolute_uri(
+            reverse("lists:join_via_token", kwargs={"token": tok.token})
+        )
+    return render(
+        request,
+        "lists/join_tokens.html",
+        {"list_obj": lst, "tokens": tokens},
+    )
+
+
+@login_required
+def revoke_join_token(request, pk: int, token: str):
+    """Admin-only: mark a QR join token as revoked. POST-only."""
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins dürfen QR-Tokens widerrufen.")
+    if request.method != "POST":
+        return HttpResponseForbidden("Nur per POST.")
+    join_token = get_object_or_404(ListJoinToken, token=token, list=lst)
+    if join_token.revoked_at is None:
+        join_token.revoked_at = timezone.now()
+        join_token.save(update_fields=["revoked_at"])
+        messages.success(request, "QR-Code widerrufen.")
+    return redirect("lists:join_tokens", pk=lst.pk)
+
+
+def _join_self_mode(request, lst: List):
+    """Finalize a self-mode QR join for the authenticated visitor: ensure a
+    LIST_RECORD with role=member, subject=user.person exists, then redirect to
+    the record-edit form. Idempotent — re-scanning yields the same record.
+    """
+    existing = ListRecord.objects.filter(
+        list=lst, subject_id=request.user.person_id, archived_at__isnull=True
+    ).first()
+    if existing is not None:
+        return redirect("lists:record_edit", pk=lst.pk, record_pk=existing.pk)
+    with transaction.atomic():
+        record = ListRecord.objects.create(
+            list=lst,
+            subject=request.user.person,
+            role=ListRecord.Role.MEMBER,
+        )
+        RecordManager.objects.create(
+            record=record,
+            user=request.user,
+            basis=RecordManager.Basis.SELF_REGISTERED,
+        )
+    return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
+
+
+def join_via_token(request, token: str):
+    """Click handler for a QR join token.
+
+    GET = confirmation page (no DB writes, no session writes — same M10
+    pattern as invite_accept). POST commits:
+
+    - unauthenticated → stash `pending_join_token` in session, redirect to
+      register-start (no email prefill — the token is anonymous).
+    - authenticated + `self`-mode → ensure-or-create LIST_RECORD, redirect to
+      record-edit.
+    - authenticated + `via_associate`-mode → land in the associate-wizard
+      (added in Phase 3b-2 / second sub-task; until then the wizard endpoint
+      itself owns the user-facing 'coming soon' message).
+    """
+    join_token = get_object_or_404(ListJoinToken, token=token)
+    if join_token.is_revoked:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Dieser QR-Code wurde widerrufen."},
+            status=410,
+        )
+    if join_token.is_expired:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Dieser QR-Code ist abgelaufen."},
+            status=410,
+        )
+    lst = join_token.list
+    if lst.archived_at is not None:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Diese Liste ist archiviert."},
+            status=410,
+        )
+
+    if request.method == "POST":
+        if not request.user.is_authenticated:
+            request.session["pending_join_token"] = join_token.token
+            return redirect(reverse("accounts:register_start"))
+        if (
+            lst.template.member_subject_mode
+            == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+        ):
+            return redirect("lists:record_create_associate", pk=lst.pk)
+        return _join_self_mode(request, lst)
+
+    # NOTE: `lists:record_create_associate` is wired in Phase 3b-2 / Wizard
+    # sub-task. Until that lands, scanning a QR for a via_associate-mode list
+    # while authenticated will hit a NoReverseMatch on POST. Tests in
+    # sub-phase A therefore only exercise the self-mode path; the associate
+    # path gets its own coverage in sub-phase B.
+
+    # GET: render confirmation page, no side effects.
+    if not request.user.is_authenticated:
+        next_action = "register"
+    else:
+        next_action = "join"
+    return render(
+        request,
+        "lists/join_confirm.html",
+        {
+            "list_obj": lst,
+            "join_token": join_token,
+            "next_action": next_action,
+        },
     )

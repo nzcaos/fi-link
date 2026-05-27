@@ -22,6 +22,7 @@ from .models import (
     ListAdmin,
     ListAttribute,
     ListInviteToken,
+    ListJoinToken,
     ListRecord,
     ListRecordAccess,
     ListRecordValue,
@@ -1240,3 +1241,222 @@ class InvitePersonScopingTests(TestCase):
         ListRecord.objects.create(list=pub, subject=pub_person)
         pks = self._candidate_pks(self.inviter, self.elternvertreter)
         self.assertIn(pub_person.pk, pks)
+
+
+class QRJoinTokenAdminTests(TestCase):
+    """Phase 3b-2 / QR-Code-Onboarding: admin-side token management."""
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="VHS-Kurs",
+            member_subject_mode=ListTemplate.MemberSubjectMode.SELF,
+        )
+        self.lst = List.objects.create(
+            title="Töpfern-Kurs",
+            email_alias="toepfern",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="admin")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+        self.member = _make_user(username="member")
+        ListAccess.objects.create(list=self.lst, user=self.member)
+        self.outsider = _make_user(username="outsider")
+
+    def test_admin_can_create_token(self):
+        self.client.force_login(self.admin_user)
+        resp = self.client.post(
+            reverse("lists:join_tokens", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(ListJoinToken.objects.filter(list=self.lst).count(), 1)
+
+    def test_non_admin_cannot_view_token_page(self):
+        self.client.force_login(self.member)
+        resp = self.client.get(
+            reverse("lists:join_tokens", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_non_admin_cannot_create_token(self):
+        self.client.force_login(self.outsider)
+        resp = self.client.post(
+            reverse("lists:join_tokens", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(ListJoinToken.objects.count(), 0)
+
+    def test_listing_shows_qr_url(self):
+        ListJoinToken.objects.create(list=self.lst, created_by=self.admin_user)
+        self.client.force_login(self.admin_user)
+        resp = self.client.get(
+            reverse("lists:join_tokens", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "/lists/join/")
+
+    def test_revoke_sets_revoked_at(self):
+        tok = ListJoinToken.objects.create(list=self.lst, created_by=self.admin_user)
+        self.client.force_login(self.admin_user)
+        resp = self.client.post(
+            reverse(
+                "lists:revoke_join_token",
+                kwargs={"pk": self.lst.pk, "token": tok.token},
+            )
+        )
+        self.assertEqual(resp.status_code, 302)
+        tok.refresh_from_db()
+        self.assertIsNotNone(tok.revoked_at)
+        self.assertTrue(tok.is_revoked)
+
+    def test_revoke_get_refused(self):
+        tok = ListJoinToken.objects.create(list=self.lst, created_by=self.admin_user)
+        self.client.force_login(self.admin_user)
+        resp = self.client.get(
+            reverse(
+                "lists:revoke_join_token",
+                kwargs={"pk": self.lst.pk, "token": tok.token},
+            )
+        )
+        self.assertEqual(resp.status_code, 403)
+        tok.refresh_from_db()
+        self.assertIsNone(tok.revoked_at)
+
+    def test_revoke_by_non_admin_refused(self):
+        tok = ListJoinToken.objects.create(list=self.lst, created_by=self.admin_user)
+        self.client.force_login(self.outsider)
+        resp = self.client.post(
+            reverse(
+                "lists:revoke_join_token",
+                kwargs={"pk": self.lst.pk, "token": tok.token},
+            )
+        )
+        self.assertEqual(resp.status_code, 403)
+        tok.refresh_from_db()
+        self.assertIsNone(tok.revoked_at)
+
+
+class QRJoinClickFlowTests(TestCase):
+    """Phase 3b-2 / QR-Code-Onboarding: click-handler side. Self-mode only —
+    via_associate path lands in sub-phase B once the wizard URL exists.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="VHS-Kurs",
+            member_subject_mode=ListTemplate.MemberSubjectMode.SELF,
+        )
+        self.lst = List.objects.create(
+            title="Töpfern-Kurs",
+            email_alias="toepfern",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="admin")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+        self.visitor = _make_user(username="visitor", given="Veit", family="V")
+        self.tok = ListJoinToken.objects.create(
+            list=self.lst, created_by=self.admin_user
+        )
+
+    # --- GET side-effect-freeness (same M10 pattern as invite_accept) -------
+
+    def test_get_unauth_shows_confirm_page_no_session_write(self):
+        resp = self.client.get(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "registrieren")
+        self.assertIsNone(self.client.session.get("pending_join_token"))
+
+    def test_get_auth_shows_confirm_page_no_record_yet(self):
+        self.client.force_login(self.visitor)
+        resp = self.client.get(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(
+            ListRecord.objects.filter(list=self.lst, subject=self.visitor.person).exists()
+        )
+
+    # --- 410 paths ----------------------------------------------------------
+
+    def test_revoked_token_410(self):
+        self.tok.revoked_at = timezone.now()
+        self.tok.save(update_fields=["revoked_at"])
+        resp = self.client.get(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 410)
+
+    def test_expired_token_410(self):
+        self.tok.expires_at = timezone.now() - timedelta(hours=1)
+        self.tok.save(update_fields=["expires_at"])
+        resp = self.client.get(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 410)
+
+    def test_archived_list_410(self):
+        self.lst.archived_at = timezone.now()
+        self.lst.save(update_fields=["archived_at"])
+        resp = self.client.get(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 410)
+
+    # --- POST commit paths --------------------------------------------------
+
+    def test_post_unauth_stashes_session_and_redirects_to_register(self):
+        resp = self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/register/", resp.url)
+        self.assertEqual(
+            self.client.session.get("pending_join_token"), self.tok.token
+        )
+
+    def test_post_auth_self_mode_creates_record_and_record_manager(self):
+        self.client.force_login(self.visitor)
+        resp = self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        record = ListRecord.objects.get(list=self.lst, subject=self.visitor.person)
+        self.assertEqual(record.role, ListRecord.Role.MEMBER)
+        self.assertIn(f"/records/{record.pk}/edit/", resp.url)
+        rm = RecordManager.objects.get(record=record, user=self.visitor)
+        self.assertEqual(rm.basis, RecordManager.Basis.SELF_REGISTERED)
+
+    def test_post_auth_self_mode_idempotent(self):
+        """Scanning the QR twice yields the same record, no duplicates."""
+        self.client.force_login(self.visitor)
+        first = self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        second = self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(
+            ListRecord.objects.filter(
+                list=self.lst, subject=self.visitor.person, archived_at__isnull=True
+            ).count(),
+            1,
+        )
+        # Same target record either way.
+        self.assertEqual(first.url, second.url)
+
+    def test_token_remains_usable_after_a_join(self):
+        """Multi-use semantics: one user joining must NOT consume the token."""
+        self.client.force_login(self.visitor)
+        self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": self.tok.token})
+        )
+        self.tok.refresh_from_db()
+        self.assertTrue(self.tok.is_usable)
+        self.assertIsNone(self.tok.revoked_at)

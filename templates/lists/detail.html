@@ -31,6 +31,9 @@
       <a href="{% url 'lists:invite' pk=list_obj.pk %}" style="margin-left:0.5rem">
         <button type="button" class="secondary">Mitglied einladen</button>
       </a>
+      <a href="{% url 'lists:join_tokens' pk=list_obj.pk %}" style="margin-left:0.5rem">
+        <button type="button" class="secondary">QR-Codes</button>
+      </a>
     {% endif %}
   </div>
 
