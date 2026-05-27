@@ -782,6 +782,132 @@ class OutboundMessage(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Inbound mail (Phase 5a — IMAP IDLE consumer persists; Phase 5b decides)
+# ---------------------------------------------------------------------------
+
+
+class InboundMessage(models.Model):
+    """One row per received mail on the catch-all mailbox.
+
+    Phase 5a only persists; the per-message decision (forward, suppress,
+    reject, admin-approval) is Phase 5b's job. Idempotency is keyed on the
+    composite (UIDVALIDITY, UID) per CLAUDE.md / "Long-lived IMAP IDLE
+    consumer": a reconnect that re-fetches an already-seen UID must NOT
+    create a duplicate row. UIDVALIDITY participates because IMAP resets
+    the UID range when the mailbox is rebuilt.
+
+    `raw_eml` holds the full MIME bytes so Phase 5b's anti-loop / Suppression
+    checks (Auto-Submitted, Return-Path, Precedence, In-Reply-To) and the
+    DSN parser can operate on the canonical wire form without re-fetching
+    from IMAP. Retention is 30–90 days (CLAUDE.md / "Retention") and the
+    procrastinate periodic-task in Phase 5b prunes old rows.
+    """
+
+    class Decision(models.TextChoices):
+        PENDING = "pending", "ausstehend"
+        FORWARDED = "forwarded", "weitergeleitet"
+        PENDING_APPROVAL = "pending_approval", "Freigabe ausstehend"
+        REJECTED = "rejected", "abgewiesen"
+        SUPPRESSED = "suppressed", "unterdrückt"
+        BOUNCE = "bounce", "Bounce"
+        UNKNOWN_ALIAS = "unknown_alias", "Alias unbekannt"
+
+    imap_uidvalidity = models.BigIntegerField(
+        "IMAP UIDVALIDITY",
+        help_text="UIDVALIDITY der Mailbox zum Zeitpunkt des FETCH.",
+    )
+    imap_uid = models.BigIntegerField(
+        "IMAP UID",
+        help_text="Server-vergebene UID der Nachricht — zusammen mit UIDVALIDITY eindeutig.",
+    )
+    message_id = models.CharField(
+        "Message-ID",
+        max_length=255,
+        blank=True,
+        help_text="RFC-2822-Wert ohne spitze Klammern; leer wenn Header fehlt.",
+    )
+    from_email = models.CharField(
+        "Absender",
+        max_length=320,
+        blank=True,
+        help_text="Adress-Teil aus From:; leer bei Parse-Fehler.",
+    )
+    to_alias = models.CharField(
+        "Empfänger-Alias (Local-Part)",
+        max_length=200,
+        blank=True,
+        help_text="Local-Part der ersten passenden Empfänger-Adresse, lowercase, ohne Plus-Tag.",
+    )
+    to_domain = models.CharField(
+        "Empfänger-Domain",
+        max_length=255,
+        blank=True,
+        help_text="Domain-Teil — Phase 5b nutzt das für Multi-Domain-Validation.",
+    )
+    subject = models.CharField("Betreff", max_length=998, blank=True)
+    raw_eml = models.BinaryField(
+        "RFC-822-Bytes",
+        help_text="Vollständige MIME-Bytes, wie vom IMAP-FETCH geliefert.",
+    )
+    received_at = models.DateTimeField(
+        "empfangen am",
+        help_text="IMAP INTERNALDATE wenn verfügbar, sonst Zeitpunkt der FETCH-Antwort.",
+    )
+    decision = models.CharField(
+        "Entscheidung",
+        max_length=30,
+        choices=Decision.choices,
+        default=Decision.PENDING,
+    )
+    reason = models.TextField(
+        "Begründung",
+        blank=True,
+        help_text="Phase 5b: Grund für SUPPRESSED/REJECTED/UNKNOWN_ALIAS.",
+    )
+    matched_list = models.ForeignKey(
+        List,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="inbound_messages",
+        verbose_name="Ziel-Liste",
+        help_text="Wenn to_alias auf eine Liste matched — vom Consumer gesetzt.",
+    )
+    matched_outbound = models.ForeignKey(
+        OutboundMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="inbound_correlations",
+        verbose_name="korrelierte ausgehende Nachricht",
+        help_text="Gesetzt bei Bounce-Match auf 'bounce-<token>@' (Phase 5b).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Eingegangene Nachricht"
+        verbose_name_plural = "Eingegangene Nachrichten"
+        ordering = ["-received_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["imap_uidvalidity", "imap_uid"],
+                name="lists_inbound_uid_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["message_id"], name="lists_inbound_msgid_idx"),
+            models.Index(fields=["to_alias"], name="lists_inbound_toalias_idx"),
+            models.Index(
+                fields=["decision", "-received_at"],
+                name="lists_inbound_decision_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.message_id or '(no Message-ID)'} → {self.to_alias}"
+
+
+# ---------------------------------------------------------------------------
 # Signals
 # ---------------------------------------------------------------------------
 

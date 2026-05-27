@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    InboundMessage,
     List,
     ListAccess,
     ListAdmin,
@@ -178,6 +179,39 @@ class OutboundMessageAdmin(admin.ModelAdmin):
         "alias_token",
         "created_at",
         "sent_at",
+    )
+
+
+@admin.register(InboundMessage)
+class InboundMessageAdmin(admin.ModelAdmin):
+    list_display = (
+        "received_at",
+        "from_email",
+        "to_alias",
+        "subject",
+        "decision",
+        "matched_list",
+        "imap_uid",
+    )
+    list_filter = ("decision", "to_alias")
+    search_fields = (
+        "message_id",
+        "from_email",
+        "to_alias",
+        "subject",
+    )
+    autocomplete_fields = ("matched_list", "matched_outbound")
+    readonly_fields = (
+        "imap_uidvalidity",
+        "imap_uid",
+        "message_id",
+        "from_email",
+        "to_alias",
+        "to_domain",
+        "subject",
+        "raw_eml",
+        "received_at",
+        "created_at",
     )
 
 

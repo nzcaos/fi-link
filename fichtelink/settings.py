@@ -154,6 +154,20 @@ EMAIL_USE_TLS = os.environ.get("SMTP_USE_TLS", "True").lower() in ("1", "true", 
 # the alias/bounce tokens used in Phase 4 outbound. Tests fall back to a literal.
 MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "example.invalid")
 
+# IMAP IDLE consumer (Phase 5a). Catch-all mailbox credentials and tunables.
+IMAP_HOST = os.environ.get("IMAP_HOST", "")
+IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
+IMAP_USER = os.environ.get("IMAP_USER", "")
+IMAP_PASS = os.environ.get("IMAP_PASS", "")
+IMAP_USE_SSL = os.environ.get("IMAP_USE_SSL", "True").lower() in ("1", "true", "yes", "on")
+# Re-IDLE before the server's 30-minute kick (RFC 2177 recommendation).
+IMAP_IDLE_TIMEOUT = int(os.environ.get("IMAP_IDLE_TIMEOUT", str(29 * 60)))
+# Fallback poll: while IDLE'ing, wake every N seconds to catch missed
+# notifications (network glitches, NAT timeouts, half-broken proxies).
+IMAP_FALLBACK_POLL_INTERVAL = int(
+    os.environ.get("IMAP_FALLBACK_POLL_INTERVAL", str(5 * 60))
+)
+
 LOGIN_URL = "/auth/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"

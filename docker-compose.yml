@@ -42,7 +42,7 @@ services:
 
   imap_idle:
     build: .
-    command: ["sh", "-c", "echo 'imap_idle daemon stub - Phase 0'; exec sleep infinity"]
+    command: ["python", "manage.py", "imap_idle_daemon"]
     env_file: .env
     environment:
       POSTGRES_HOST: db

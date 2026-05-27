@@ -2336,3 +2336,365 @@ class TestSendRouteTests(TestCase):
         form = TestSendForm(data={"subject": "s", "body": "   "})
         self.assertFalse(form.is_valid())
         self.assertIn("body", form.errors)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a — Inbound mail (IMAP IDLE consumer)
+# ---------------------------------------------------------------------------
+
+
+from datetime import datetime, timezone as dt_timezone
+
+from django.core.management import call_command
+from django.core.management.base import CommandError
+
+from .imap_consumer import (
+    _is_new_mail_signal,
+    _parse_fetch_response,
+    _parse_internaldate,
+)
+from .inbound import extract_recipient_alias, parse_and_persist, resolve_alias
+from .models import InboundMessage
+from .tasks import process_inbound
+
+
+def _eml(
+    *,
+    from_addr: str = "sender@example.org",
+    to_addr: str = "5a@caos.cloud",
+    subject: str = "Hallo",
+    message_id: str = "abc@example.org",
+    extra_headers: dict[str, str] | None = None,
+    body: str = "Hello world\r\n",
+) -> bytes:
+    """Build a minimal RFC-822 byte blob for inbound-pipeline tests."""
+    headers = [
+        f"From: {from_addr}",
+        f"To: {to_addr}",
+        f"Subject: {subject}",
+        f"Message-ID: <{message_id}>",
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=utf-8",
+    ]
+    for k, v in (extra_headers or {}).items():
+        headers.append(f"{k}: {v}")
+    return ("\r\n".join(headers) + "\r\n\r\n" + body).encode("utf-8")
+
+
+@override_settings(MAIL_DOMAIN="caos.cloud")
+class InboundHeaderParsingTests(TestCase):
+    def test_extract_recipient_alias_uses_first_match_on_our_domain(self):
+        import email
+        import email.policy
+
+        eml = _eml(
+            to_addr="someone-else@external.example, 5a@caos.cloud",
+        )
+        msg = email.message_from_bytes(eml, policy=email.policy.default)
+        local, domain = extract_recipient_alias(msg, "caos.cloud")
+        self.assertEqual(local, "5a")
+        self.assertEqual(domain, "caos.cloud")
+
+    def test_extract_recipient_alias_prefers_delivered_to(self):
+        import email
+        import email.policy
+
+        eml = _eml(
+            to_addr="distribution@other.example",
+            extra_headers={"Delivered-To": "5a@caos.cloud"},
+        )
+        msg = email.message_from_bytes(eml, policy=email.policy.default)
+        local, domain = extract_recipient_alias(msg, "caos.cloud")
+        self.assertEqual((local, domain), ("5a", "caos.cloud"))
+
+    def test_extract_recipient_alias_strips_plus_tag_and_lowercases(self):
+        import email
+        import email.policy
+
+        eml = _eml(to_addr="5A+Spam@CAOS.cloud")
+        msg = email.message_from_bytes(eml, policy=email.policy.default)
+        local, domain = extract_recipient_alias(msg, "caos.cloud")
+        self.assertEqual(local, "5a")
+        self.assertEqual(domain, "caos.cloud")
+
+    def test_extract_recipient_alias_falls_back_when_no_domain_match(self):
+        import email
+        import email.policy
+
+        eml = _eml(to_addr="elsewhere@third.example")
+        msg = email.message_from_bytes(eml, policy=email.policy.default)
+        local, domain = extract_recipient_alias(msg, "caos.cloud")
+        # Best-effort fallback: first address, lowercased.
+        self.assertEqual(local, "elsewhere")
+        self.assertEqual(domain, "third.example")
+
+
+class ResolveAliasTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+    def test_matches_list_email_alias_case_insensitive(self):
+        matched_list, matched_outbound = resolve_alias("5A")
+        self.assertEqual(matched_list, self.lst)
+        self.assertIsNone(matched_outbound)
+
+    def test_archived_list_does_not_match(self):
+        self.lst.archived_at = timezone.now()
+        self.lst.save(update_fields=["archived_at"])
+        matched_list, matched_outbound = resolve_alias("5a")
+        self.assertIsNone(matched_list)
+        self.assertIsNone(matched_outbound)
+
+    def test_matches_bounce_token_to_outbound(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="x@y",
+            alias_token="TOK123",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+        matched_list, matched_outbound = resolve_alias("bounce-TOK123")
+        self.assertIsNone(matched_list)
+        self.assertEqual(matched_outbound, om)
+
+    def test_matches_alias_token_to_outbound(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="x@y",
+            alias_token="REPLY1",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+        matched_list, matched_outbound = resolve_alias("alias-REPLY1")
+        self.assertIsNone(matched_list)
+        self.assertEqual(matched_outbound, om)
+
+    def test_unknown_local_returns_pair_of_nones(self):
+        matched_list, matched_outbound = resolve_alias("ghost")
+        self.assertIsNone(matched_list)
+        self.assertIsNone(matched_outbound)
+
+    def test_bounce_prefix_with_unknown_token_yields_none(self):
+        matched_list, matched_outbound = resolve_alias("bounce-doesnotexist")
+        self.assertIsNone(matched_list)
+        self.assertIsNone(matched_outbound)
+
+    def test_list_wins_over_token_collision(self):
+        # Pathological case: someone created a list with email_alias =
+        # "bounce-TOK456". The List match wins; the bounce-token branch is
+        # not consulted.
+        list_with_bounce_alias = List.objects.create(
+            title="X",
+            email_alias="bounce-tok456",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="x@y",
+            alias_token="TOK456",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+        matched_list, matched_outbound = resolve_alias("bounce-TOK456")
+        self.assertEqual(matched_list, list_with_bounce_alias)
+        self.assertIsNone(matched_outbound)
+
+
+@override_settings(MAIL_DOMAIN="caos.cloud")
+class ParseAndPersistTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+    def test_persists_basic_fields(self):
+        eml = _eml(
+            from_addr="parent@example.org",
+            to_addr="5a@caos.cloud",
+            subject="Klassenfest",
+            message_id="abc@example.org",
+        )
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(
+                    eml,
+                    uidvalidity=10,
+                    uid=42,
+                    internaldate=datetime(
+                        2026, 5, 27, 12, 0, 0, tzinfo=dt_timezone.utc
+                    ),
+                )
+        self.assertIsNotNone(row)
+        row.refresh_from_db()
+        self.assertEqual(row.imap_uidvalidity, 10)
+        self.assertEqual(row.imap_uid, 42)
+        self.assertEqual(row.message_id, "abc@example.org")
+        self.assertEqual(row.from_email, "parent@example.org")
+        self.assertEqual(row.to_alias, "5a")
+        self.assertEqual(row.to_domain, "caos.cloud")
+        self.assertEqual(row.subject, "Klassenfest")
+        self.assertEqual(row.decision, InboundMessage.Decision.PENDING)
+        self.assertEqual(row.matched_list, self.lst)
+        self.assertIsNone(row.matched_outbound)
+
+    def test_persists_raw_eml_bytes(self):
+        eml = _eml()
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=1)
+        row.refresh_from_db()
+        # raw_eml is a BinaryField; on read it returns bytes (or memoryview
+        # depending on driver). Normalise via bytes(...).
+        self.assertEqual(bytes(row.raw_eml), eml)
+
+    def test_uid_idempotency_returns_none_on_dedup(self):
+        eml = _eml(message_id="m1@x")
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                first = parse_and_persist(eml, uidvalidity=1, uid=99)
+        self.assertIsNotNone(first)
+        # Second call with same UID — even with different body — must dedup.
+        eml2 = _eml(message_id="m2@x", subject="different")
+        with patch.object(process_inbound, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                second = parse_and_persist(eml2, uidvalidity=1, uid=99)
+        self.assertIsNone(second)
+        # No re-enqueue on dedup either.
+        mocked.assert_not_called()
+        self.assertEqual(InboundMessage.objects.filter(imap_uid=99).count(), 1)
+
+    def test_uidvalidity_distinguishes_rows(self):
+        eml = _eml()
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                parse_and_persist(eml, uidvalidity=1, uid=1)
+                parse_and_persist(eml, uidvalidity=2, uid=1)
+        self.assertEqual(
+            InboundMessage.objects.filter(imap_uid=1).count(), 2
+        )
+
+    def test_defers_process_inbound_on_commit(self):
+        eml = _eml()
+        with patch.object(process_inbound, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=7)
+        self.assertIsNotNone(row)
+        mocked.assert_called_once_with(inbound_id=row.pk)
+
+    def test_unknown_alias_leaves_matched_list_none(self):
+        eml = _eml(to_addr="ghost@caos.cloud")
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=1)
+        row.refresh_from_db()
+        self.assertEqual(row.to_alias, "ghost")
+        self.assertIsNone(row.matched_list)
+        # Phase 5a: decision stays PENDING; Phase 5b reclassifies.
+        self.assertEqual(row.decision, InboundMessage.Decision.PENDING)
+
+    def test_bounce_alias_records_matched_outbound(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="x@y",
+            alias_token="BOUNCE7",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+        eml = _eml(to_addr="bounce-BOUNCE7@caos.cloud")
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=1)
+        row.refresh_from_db()
+        self.assertEqual(row.matched_outbound, om)
+        self.assertIsNone(row.matched_list)
+
+    def test_missing_message_id_stores_empty(self):
+        eml = (
+            b"From: x@example.org\r\n"
+            b"To: 5a@caos.cloud\r\n"
+            b"Subject: no msgid\r\n"
+            b"\r\n"
+            b"body\r\n"
+        )
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=1)
+        row.refresh_from_db()
+        self.assertEqual(row.message_id, "")
+
+    def test_internaldate_default_uses_now(self):
+        eml = _eml()
+        before = timezone.now()
+        with patch.object(process_inbound, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                row = parse_and_persist(eml, uidvalidity=1, uid=1)
+        after = timezone.now()
+        self.assertGreaterEqual(row.received_at, before)
+        self.assertLessEqual(row.received_at, after)
+
+
+class ImapFetchParsingTests(TestCase):
+    def test_parse_internaldate_two_digit_day(self):
+        out = _parse_internaldate("20-Jan-2026 12:34:56 +0000")
+        self.assertEqual(
+            out,
+            datetime(2026, 1, 20, 12, 34, 56, tzinfo=dt_timezone.utc),
+        )
+
+    def test_parse_internaldate_one_digit_day_normalised(self):
+        out = _parse_internaldate("1-Jan-2026 00:00:00 +0000")
+        self.assertEqual(
+            out, datetime(2026, 1, 1, 0, 0, 0, tzinfo=dt_timezone.utc)
+        )
+
+    def test_parse_internaldate_garbage_returns_none(self):
+        self.assertIsNone(_parse_internaldate("not a date"))
+
+    def test_parse_fetch_response_picks_body_after_literal_marker(self):
+        data = [
+            b'1 FETCH (UID 5 INTERNALDATE "20-Jan-2026 12:34:56 +0000" BODY[] {12}',
+            b"Hello world\r\n",
+            b")",
+        ]
+        raw_eml, internaldate = _parse_fetch_response(data)
+        self.assertEqual(raw_eml, b"Hello world\r\n")
+        self.assertEqual(
+            internaldate,
+            datetime(2026, 1, 20, 12, 34, 56, tzinfo=dt_timezone.utc),
+        )
+
+    def test_parse_fetch_response_no_body_returns_none(self):
+        data = [b"1 FETCH (UID 5)"]
+        raw_eml, internaldate = _parse_fetch_response(data)
+        self.assertIsNone(raw_eml)
+        self.assertIsNone(internaldate)
+
+    def test_is_new_mail_signal_recognises_exists_and_recent(self):
+        self.assertTrue(_is_new_mail_signal(b"1 EXISTS"))
+        self.assertTrue(_is_new_mail_signal(b"3 RECENT"))
+        self.assertTrue(_is_new_mail_signal(b"EXISTS"))
+        self.assertFalse(_is_new_mail_signal(b"FLAGS (\\Seen)"))
+        self.assertFalse(_is_new_mail_signal(None))
+
+
+class ImapIdleCommandTests(TestCase):
+    def test_command_refuses_without_imap_host(self):
+        with override_settings(IMAP_HOST="", IMAP_USER="u"):
+            with self.assertRaises(CommandError):
+                call_command("imap_idle_daemon")
+
+    def test_command_refuses_without_imap_user(self):
+        with override_settings(IMAP_HOST="imap.example.org", IMAP_USER=""):
+            with self.assertRaises(CommandError):
+                call_command("imap_idle_daemon")

@@ -21,7 +21,7 @@ from django.utils import timezone
 from procrastinate import RetryStrategy
 from procrastinate.contrib.django import app
 
-from .models import List, OutboundMessage
+from .models import InboundMessage, List, OutboundMessage
 
 log = logging.getLogger(__name__)
 
@@ -249,3 +249,34 @@ def enqueue_list_fanout(
 
         transaction.on_commit(_defer)
     return created
+
+
+# ---------------------------------------------------------------------------
+# Phase 5a: stub for the inbound pipeline (Phase 5b owns the real logic)
+# ---------------------------------------------------------------------------
+
+
+@app.task(
+    name="lists.process_inbound",
+    queue="mail",
+    pass_context=False,
+)
+def process_inbound(inbound_id: int) -> None:
+    """Phase 5a stub. The IMAP IDLE daemon enqueues this for every persisted
+    InboundMessage; Phase 5b will fill in the decision algorithm
+    (anti-loop checks, sender-is-member release flow, send-permission
+    resolution, admin-approval routing, DSN correlation). Until then we
+    log the receipt so the queue path is exercisable end-to-end.
+    """
+    try:
+        msg = InboundMessage.objects.get(pk=inbound_id)
+    except InboundMessage.DoesNotExist:
+        log.warning("process_inbound: InboundMessage %d gone", inbound_id)
+        return
+    log.info(
+        "process_inbound stub: pk=%d alias=%r from=%r decision=%s",
+        msg.pk,
+        msg.to_alias,
+        msg.from_email,
+        msg.decision,
+    )

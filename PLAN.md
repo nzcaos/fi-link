@@ -131,15 +131,24 @@ Outputs (erledigt 2026-05-27):
 
 ## Phase 5a — IMAP IDLE Daemon
 
-- [ ] **Ziel:** Daemon hört auf Catch-All, persistiert Inbound-Rows idempotent, enqueued Downstream-Tasks.
+- [x] **Ziel:** Daemon hört auf Catch-All, persistiert Inbound-Rows idempotent, enqueued Downstream-Tasks.
 
-Outputs:
-- `manage.py imap_idle_daemon` mit `aioimaplib`, Reconnect-Backoff, Fallback-SEARCH-Poll
-- UID-basierte Idempotenz
-- Inbound-Row mit `decision=pending`
-- Alias-Resolution (Liste, Aggregat-Alias, unbekannt) → Enqueue-Route
+Outputs (erledigt 2026-05-27):
+- `InboundMessage`-Model (Migration 0007) mit `(imap_uidvalidity, imap_uid)` als zusammengesetztem UNIQUE-Constraint (UID-Idempotenz nach Reconnect), `decision`-Enum (`pending|forwarded|pending_approval|rejected|suppressed|bounce|unknown_alias`), `raw_eml` als BinaryField, optionalen FKs `matched_list` (auf `List.email_alias`-Match) und `matched_outbound` (für Bounce-/Reply-Routing in Phase 5b).
+- `manage.py imap_idle_daemon` (in `lists/management/commands/`) als dünner Wrapper um `lists.imap_consumer.main()` — die eigentliche async-Logik (aioimaplib-Connection, SELECT INBOX, drain-UNSEEN, IDLE-Loop mit DONE-vor-Server-Timeout, Fallback-`UID SEARCH UNSEEN`-Poll bei `wait_server_push`-Timeout, exponentielles Reconnect-Backoff `1s→…→300s`, SIGTERM-/SIGINT-Handler) lebt im Consumer-Modul, das Command bricht ab mit `CommandError` wenn `IMAP_HOST`/`IMAP_USER` fehlt.
+- `lists/inbound.py` mit pure-sync Helfern: `extract_recipient_alias` scannt `Delivered-To`/`X-Original-To`/`Envelope-To`/`To`/`Cc` und pickt die erste Adresse auf `MAIL_DOMAIN`, Plus-Tag-Strip + lowercase. `resolve_alias` matched auf `List.email_alias` (case-insensitive, nur nicht-archivierte) ODER auf `bounce-<token>` / `alias-<token>` gegen `OutboundMessage.alias_token` (List gewinnt bei Token-Kollision). `parse_and_persist` schreibt die Row und deferred via `transaction.on_commit` den `lists.process_inbound`-Task; auf `IntegrityError` (UID-Dedup) gibt es `None` ohne erneutes Enqueue.
+- Stub-Task `lists.process_inbound` in `lists/tasks.py` — Phase 5b ersetzt den Body durch die Decision-Pipeline.
+- Settings: `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASS`, `IMAP_USE_SSL`, `IMAP_IDLE_TIMEOUT` (default 1740 s = 29 min, vor RFC-2177-Kick), `IMAP_FALLBACK_POLL_INTERVAL` (default 300 s). Alle in `.env.example` dokumentiert.
+- `docker-compose.yml`: `imap_idle`-Service ruft jetzt `python manage.py imap_idle_daemon` statt `sleep infinity`.
+- Admin-Registrierung für `InboundMessage` (readonly-Felder für raw_eml/Header/UID, Filter nach decision/to_alias).
+- Tests:
+  - `InboundHeaderParsingTests` (Delivered-To Vorrang, Plus-Tag-Strip, Case-Insensitivity, Fallback bei Domain-Miss),
+  - `ResolveAliasTests` (List-Match, archivierte Liste matched nicht, bounce-/alias-Token-Match, unknown, List gewinnt bei Token-Kollision),
+  - `ParseAndPersistTests` (alle Felder gesetzt, raw_eml-Round-Trip, UID-Idempotenz returns None ohne Dedup-Enqueue, UIDVALIDITY trennt Rows, on_commit deferred process_inbound, unknown alias bleibt PENDING, fehlende Message-ID, internaldate-Default = now),
+  - `ImapFetchParsingTests` (`_parse_internaldate` 2-stellig + 1-stellig + Garbage, `_parse_fetch_response` BODY nach `{N}`, `_is_new_mail_signal` erkennt EXISTS/RECENT),
+  - `ImapIdleCommandTests` (CommandError ohne IMAP_HOST/IMAP_USER).
 
-**Verify:** Mail an Catch-All → Row in DB → kein Doppel-Receive nach Reconnect.
+**Verify (manuell auf VM):** `docker compose run --rm web python manage.py migrate` → Tabelle `lists_inboundmessage` existiert. `docker compose up -d imap_idle && docker compose logs -f imap_idle` zeigt `IMAP connected: uidvalidity=…`. Eine Test-Mail an `5a@<MAIL_DOMAIN>` → Log-Zeile `inbound persisted: pk=… alias='5a'`, Row in `lists_inboundmessage`, korreliertes `matched_list_id`. `docker compose restart imap_idle` während die UID schon \Seen ist → kein Doppel-Insert (dedup-Pfad), Row-Count stabil.
 
 ## Phase 5b — Inbound Pipeline
 
