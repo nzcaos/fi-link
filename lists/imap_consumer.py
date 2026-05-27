@@ -136,17 +136,30 @@ _parse_and_persist_async = sync_to_async(parse_and_persist, thread_sensitive=Tru
 # ---------------------------------------------------------------------------
 
 
+def _decode_imap_reason(data) -> str:
+    """Join an aioimaplib response payload into a printable string. The server's
+    reason for a NO/BAD response usually lives here — losing it makes failures
+    much harder to diagnose than they need to be.
+    """
+    joined = b" ".join(b for b in data if isinstance(b, (bytes, bytearray)))
+    return joined.decode("ascii", "replace")
+
+
 async def _connect(host: str, port: int, use_ssl: bool, timeout: float):
     """Open and authenticate the IMAP connection."""
     cls = aioimaplib.IMAP4_SSL if use_ssl else aioimaplib.IMAP4
     client = cls(host=host, port=port, timeout=timeout)
     await client.wait_hello_from_server()
-    status, _ = await client.login(settings.IMAP_USER, settings.IMAP_PASS)
+    status, data = await client.login(settings.IMAP_USER, settings.IMAP_PASS)
     if status != "OK":
-        raise RuntimeError(f"IMAP LOGIN refused: {status}")
-    status, _ = await client.select("INBOX")
+        raise RuntimeError(
+            f"IMAP LOGIN refused: {status} {_decode_imap_reason(data)!r}"
+        )
+    status, data = await client.select("INBOX")
     if status != "OK":
-        raise RuntimeError(f"IMAP SELECT INBOX refused: {status}")
+        raise RuntimeError(
+            f"IMAP SELECT INBOX refused: {status} {_decode_imap_reason(data)!r}"
+        )
     return client
 
 

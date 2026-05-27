@@ -171,3 +171,42 @@ IMAP_FALLBACK_POLL_INTERVAL = int(
 LOGIN_URL = "/auth/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
+
+# Logging: Django's default root logger is WARNING, which silently drops
+# every log.info() from our own modules — including the IMAP daemon's
+# `IMAP connected: ...` and `inbound persisted: ...` lines, which is how
+# the operator confirms the daemon is alive. Bring our apps and the root
+# logger to INFO on a StreamHandler so `docker compose logs` shows
+# what's happening. Framework chatter that's noisy at INFO stays at
+# WARNING (django.db.backends echoes every query, etc.). Phase 8 may
+# tighten this further (file logging, structured JSON, etc.); for now
+# console-INFO is the right floor.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "simple": {
+            "format": "[{asctime}] {levelname} {name}: {message}",
+            "style": "{",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django.db.backends": {"level": "WARNING", "propagate": True},
+        "django.utils.autoreload": {"level": "WARNING", "propagate": True},
+        "asyncio": {"level": "WARNING", "propagate": True},
+        # aioimaplib is chatty at DEBUG; leave it at WARNING so only
+        # surprising server responses surface.
+        "aioimaplib": {"level": "WARNING", "propagate": True},
+    },
+}
