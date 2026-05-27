@@ -80,24 +80,23 @@ def _strip_plus_tag(local: str) -> str:
     return local.split("+", 1)[0]
 
 
-def _normalise_local(local: str) -> str:
-    return _strip_plus_tag(local).strip().lower()
-
-
 def extract_recipient_alias(
     msg: email.message.Message, our_domain: str
 ) -> tuple[str, str]:
     """Pick the first recipient address whose domain matches ours. Returns
-    `(local_part, domain)`, both lower-cased and stripped of plus-tags.
+    `(local_part, domain)` with plus-tags stripped but **case preserved** —
+    `alias_token`s are case-significant base64url, so we must not collapse
+    them. Lowercasing for storage / list-alias comparison is the caller's
+    concern.
 
-    Scans `To`, `Cc`, `Delivered-To`, `X-Original-To`, `Envelope-To` headers
+    Scans `Delivered-To`, `X-Original-To`, `Envelope-To`, `To`, `Cc` headers
     in that order. The catch-all mailbox can receive mail addressed to many
     aliases on our domain via BCC or forwarding, so the most reliable signal
     is whichever header records the envelope recipient — provider-specific:
     most expose `Delivered-To`, some `X-Original-To`.
 
     If no recipient on our domain is found, returns the first parseable
-    address (lowercased) as a best-effort fallback.
+    address as a best-effort fallback.
     """
     our_domain_lc = our_domain.lower()
     headers = (
@@ -114,10 +113,10 @@ def extract_recipient_alias(
                 if not addr or "@" not in addr:
                     continue
                 local, _, domain = addr.partition("@")
-                candidates.append((_normalise_local(local), domain.strip().lower()))
+                candidates.append((_strip_plus_tag(local).strip(), domain.strip()))
 
     for local, domain in candidates:
-        if domain == our_domain_lc:
+        if domain.lower() == our_domain_lc:
             return local, domain
 
     if candidates:
@@ -142,6 +141,14 @@ def resolve_alias(
       matched_outbound set, matched_list None.
     * No match → both None. Phase 5b interprets this as 'unknown alias'.
 
+    Case handling: list aliases are user-picked and matched case-
+    insensitively (`__iexact`). Tokens are 22-char url-safe base64 — case
+    significant — so the part after the prefix is compared verbatim against
+    `OutboundMessage.alias_token`. The prefix itself (`bounce-` / `alias-`)
+    is recognised case-insensitively so a forwarder that lowercases the
+    whole local-part doesn't break list routing while still preserving
+    token case downstream.
+
     A local-part can in principle clash (e.g. somebody creates a List with
     `email_alias = "bounce-XYZ"`). Lists win — our own bounce/alias tokens
     are 22 url-safe characters, collisions with a user-picked alias are
@@ -150,18 +157,20 @@ def resolve_alias(
     """
     if not local_part:
         return None, None
-    local = _normalise_local(local_part)
+    bare = _strip_plus_tag(local_part).strip()
 
     matched_list = (
-        List.objects.filter(email_alias__iexact=local, archived_at__isnull=True)
+        List.objects.filter(email_alias__iexact=bare, archived_at__isnull=True)
         .first()
     )
     if matched_list is not None:
         return matched_list, None
 
+    bare_lower = bare.lower()
     for prefix in (_BOUNCE_PREFIX, _ALIAS_PREFIX):
-        if local.startswith(prefix):
-            token = local[len(prefix) :]
+        if bare_lower.startswith(prefix):
+            # Token portion preserves case from the original local-part.
+            token = bare[len(prefix) :]
             outbound = OutboundMessage.objects.filter(alias_token=token).first()
             if outbound is not None:
                 return None, outbound
@@ -222,6 +231,8 @@ def parse_and_persist(
     from_email = _parse_first_address(msg.get("From"))
     subject = _decode_header(msg.get("Subject"))
     to_local, to_domain = extract_recipient_alias(msg, settings.MAIL_DOMAIN)
+    # resolve_alias sees the case-preserved local-part (tokens are case-
+    # significant). Storage lowercases for index-friendly queries.
     matched_list, matched_outbound = resolve_alias(to_local)
     received_at = internaldate or timezone.now()
 
@@ -232,8 +243,8 @@ def parse_and_persist(
                 imap_uid=uid,
                 message_id=message_id[:255],
                 from_email=from_email[:320],
-                to_alias=to_local[:200],
-                to_domain=to_domain[:255],
+                to_alias=to_local.lower()[:200],
+                to_domain=to_domain.lower()[:255],
                 subject=subject[:998],
                 raw_eml=raw_eml,
                 received_at=received_at,

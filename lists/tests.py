@@ -2407,15 +2407,17 @@ class InboundHeaderParsingTests(TestCase):
         local, domain = extract_recipient_alias(msg, "caos.cloud")
         self.assertEqual((local, domain), ("5a", "caos.cloud"))
 
-    def test_extract_recipient_alias_strips_plus_tag_and_lowercases(self):
+    def test_extract_recipient_alias_strips_plus_tag_case_preserved(self):
+        """Extract preserves case (tokens are case-significant base64url);
+        only plus-tag is stripped. Lowercasing happens at storage time."""
         import email
         import email.policy
 
         eml = _eml(to_addr="5A+Spam@CAOS.cloud")
         msg = email.message_from_bytes(eml, policy=email.policy.default)
         local, domain = extract_recipient_alias(msg, "caos.cloud")
-        self.assertEqual(local, "5a")
-        self.assertEqual(domain, "caos.cloud")
+        self.assertEqual(local, "5A")
+        self.assertEqual(domain, "CAOS.cloud")
 
     def test_extract_recipient_alias_falls_back_when_no_domain_match(self):
         import email
