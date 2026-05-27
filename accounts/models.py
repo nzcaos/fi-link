@@ -217,7 +217,7 @@ class WebAuthnChallenge(models.Model):
     class Meta:
         verbose_name = "WebAuthn-Challenge"
         verbose_name_plural = "WebAuthn-Challenges"
-        indexes = [models.Index(fields=["expires_at"])]
+        indexes = [models.Index(fields=["expires_at"], name="accounts_we_expires_idx")]
 
     def __str__(self) -> str:
         return f"{self.purpose} challenge expires {self.expires_at:%Y-%m-%d %H:%M:%S}"
