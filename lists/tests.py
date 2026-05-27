@@ -693,8 +693,11 @@ class InviteFlowTests(TestCase):
         self.admin_user = _make_user(username="adminuser")
         ListAdmin.objects.create(list=self.lst, user=self.admin_user)
 
-        self.existing = _make_user(username="existing", given="Berta", family="S")
-        self.other = _make_user(username="other", given="Carla", family="X")
+        # Family names must be distinctive enough that assertNotIn against
+        # rendered HTML is meaningful — single letters like "S" appear in
+        # base.html stylesheet/nav text and produce false-positive leaks.
+        self.existing = _make_user(username="existing", given="Berta", family="Schneeberger")
+        self.other = _make_user(username="other", given="Carla", family="Xanderlein")
 
     def _make_invite(self, *, target_person=None, target_email="newbie@example.test"):
         return ListInviteToken.objects.create(
