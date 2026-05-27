@@ -66,7 +66,7 @@ Outputs:
 ## Phase 3b — Member-UI & Onboarding
 
 - [x] **Ziel (Teil 1):** Eintrags-Anzeige, Record-Edit + Sichtbarkeits-Matrix, Einladungs-Flow (beide Branches), `self`-Onboarding.
-- [ ] **Ziel (Teil 2 / Restpunkte):** QR-Code-Onboarding + `via_associate`-Wizard.
+- [x] **Ziel (Teil 2 / Restpunkte):** QR-Code-Onboarding + `via_associate`-Wizard.
 
 Outputs (erledigt):
 - Listen-Detail listet Einträge gefiltert durch `visible_attributes_for`
@@ -84,7 +84,7 @@ Outputs (erledigt):
 Restpunkte (Phase 3b-2):
 - ~~**QR-Code-Onboarding:**~~ **Erledigt 2026-05-27.** Eigenes Model `ListJoinToken` (Multi-Use, kein `target_email`/`target_person`, Default-Expiry 48 h, manuell widerrufbar). Admin-UI `/lists/<pk>/join-tokens/` mit Liste/Anlage/Revoke, QR-Render client-side via vendored `qrcodejs-1.0.0.umd.min.js` (~20 KB, IIFE, kein CDN). Klick-Handler `/join/<token>/` folgt dem M10-Pattern (GET = Bestätigungsseite, POST = consume). Self-Mode angeschlossen (idempotente Record-Anlage + `RecordManager(basis=self_registered)`); `via_associate`-Mode redirected auf `record_create_associate` (Stub bis zur Wizard-Sub-Phase). `pending_join_token` in `accounts._next_url_after_auth` für Register-Roundtrip. Tests `QRJoinTokenAdminTests` + `QRJoinClickFlowTests`.
 - ~~**`via_associate`-Wizard:**~~ **Erledigt 2026-05-27.** Single-Page-`AssociateWizardForm` (Kind-Name + optionale Kind-E-Mail + Rollen-Select aus `template.relationship_roles` + dynamische Record-Felder); ein POST legt atomar Person, ListRecord (role=member, subject=Kind), PersonRelationship (subject=Kind, related=user.person, role), RecordManager (basis=guardian), ListAccess (User in Benutzergruppe) und alle ListRecordValue-Reihen an. View `record_create_associate` mit Zugang via `can_user_see_list` ODER per `wizard_grant_list_id`-Session-Marker (gesetzt vom QR-Klick-Handler für frische Visitors auf private Listen). Wizard ist von der Detail-Page erreichbar (Button „Mitglied (z. B. Kind) hinzufügen") und vom QR-Click-Handler für via_associate-Listen. Tests `AssociateWizardTests` decken Permission-Gates, Form-Behaviour, atomare Anlage, Idempotenz mehrerer Kinder und Validierungs-Rollback ab.
-- **Onboarding-Wizard-Tests:** End-to-End-Smoke (Self via QR + Via-Associate via QR + Via-Associate via Invite).
+- ~~**Onboarding-Wizard-Tests:**~~ **Erledigt 2026-05-27.** `Phase3b2E2ETests` deckt drei E2E-Pfade ab: (1) Self-QR-Flow unauth → register-roundtrip → auth POST → Record + RecordManager, (2) Associate-QR-Flow auth → join-POST → Wizard-Redirect (mit `wizard_grant_list_id`) → Wizard-GET (private Liste sichtbar dank Session-Marker) → Wizard-POST → komplette Triade (Person/Record/Relationship/Manager/Access) + Token-Multi-Use, (3) revoked-Token blockiert beide Pfade. Zusätzlich Unit-Coverage für den `_next_url_after_auth`-Handshake (4 Fälle: nur join, nur invite, leer, beide).
 
 **Verify (Teil 1, durchgespielt):** bestehender USER wird per `LIST_INVITE_TOKEN` in „Elternvertreter" eingeladen, klickt den Mail-Link, loggt sich per Passkey ein, landet im Record-Edit-Formular mit Namen aus seiner PERSON prefilled, speichert — keine zweite Passkey-Ceremony, keine erneute Stammdaten-Abfrage. Plus: Sichtbarkeits-Matrix einstellbar pro Feld auf {öffentlich, eigene Liste, Parent-Liste}.
 

@@ -1653,3 +1653,208 @@ class AssociateWizardTests(TestCase):
         self.assertEqual(Person.objects.filter(family_name="Mueller").count(), 1)  # only the parent
         self.assertFalse(ListRecord.objects.filter(list=self.lst).exists())
         self.assertFalse(PersonRelationship.objects.exists())
+
+
+class Phase3b2E2ETests(TestCase):
+    """Phase 3b-2 / End-to-end Smoke: drive a visitor through more than one
+    endpoint to validate that the wiring between QR-click, the wizard
+    redirect, and the eventual record-edit landing actually fits together.
+
+    These overlap intentionally with QRJoinClickFlowTests and
+    AssociateWizardTests — those validate the units in isolation, this
+    validates that the units compose.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.self_tmpl = ListTemplate.objects.create(
+            name="VHS-Kurs",
+            member_subject_mode=ListTemplate.MemberSubjectMode.SELF,
+        )
+        self.assoc_tmpl = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von"],
+        )
+        ListAttribute.objects.create(
+            template=self.assoc_tmpl,
+            name="Klassen-Name",
+            type=ListAttribute.Type.TEXT,
+            must_be_public=True,
+        )
+        self.self_list = List.objects.create(
+            title="Töpfern-Kurs",
+            email_alias="toepfern",
+            template=self.self_tmpl,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.assoc_list = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.assoc_tmpl,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="admin")
+        ListAdmin.objects.create(list=self.self_list, user=self.admin_user)
+        ListAdmin.objects.create(list=self.assoc_list, user=self.admin_user)
+        self.visitor = _make_user(
+            username="visitor", given="Veit", family="Vogel", email="v@example.test"
+        )
+
+    # --- Self-mode QR end-to-end --------------------------------------------
+
+    def test_self_qr_full_flow_unauth_to_record(self):
+        """Unauth visitor scans → register-roundtrip → auth POST → record."""
+        tok = ListJoinToken.objects.create(
+            list=self.self_list, created_by=self.admin_user
+        )
+        join_url = reverse("lists:join_via_token", kwargs={"token": tok.token})
+
+        # 1) Unauth POST stashes pending and bounces to register.
+        resp = self.client.post(join_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/register/", resp.url)
+        self.assertEqual(self.client.session.get("pending_join_token"), tok.token)
+
+        # 2) After successful auth, accounts._next_url_after_auth would route
+        # back to join_url and pop the session marker. The accounts-layer
+        # plumbing is exercised by the Phase 2 / accounts test suite — here
+        # we simulate the outcome (user is now logged in, on the join URL)
+        # without driving the full WebAuthn ceremony.
+        self.client.force_login(self.visitor)
+
+        # 3) Authenticated POST commits the join.
+        resp = self.client.post(join_url)
+        self.assertEqual(resp.status_code, 302)
+        record = ListRecord.objects.get(
+            list=self.self_list, subject=self.visitor.person
+        )
+        self.assertIn(f"/records/{record.pk}/edit/", resp.url)
+        self.assertEqual(record.role, ListRecord.Role.MEMBER)
+        self.assertTrue(
+            RecordManager.objects.filter(record=record, user=self.visitor).exists()
+        )
+
+    # --- via_associate QR end-to-end ----------------------------------------
+
+    def test_associate_qr_full_flow_lands_in_wizard(self):
+        """Auth visitor scans QR on via_associate list → POST → redirect to
+        wizard with session marker set → wizard renders → wizard POST writes
+        full triade (Person + Record + Relationship + Manager + Access).
+        """
+        tok = ListJoinToken.objects.create(
+            list=self.assoc_list, created_by=self.admin_user
+        )
+        join_url = reverse("lists:join_via_token", kwargs={"token": tok.token})
+        wizard_url = reverse(
+            "lists:record_create_associate", kwargs={"pk": self.assoc_list.pk}
+        )
+
+        self.client.force_login(self.visitor)
+        # 1) Auth POST on the join handler → redirect to the wizard.
+        resp = self.client.post(join_url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, wizard_url)
+        self.assertEqual(
+            self.client.session.get("wizard_grant_list_id"), self.assoc_list.pk
+        )
+
+        # 2) Wizard GET renders for the visitor even though they have no
+        # ListAccess yet (the session marker grants access).
+        resp = self.client.get(wizard_url)
+        self.assertEqual(resp.status_code, 200)
+
+        # 3) Wizard POST writes the full triade.
+        attr_pk = ListAttribute.objects.get(template=self.assoc_tmpl).pk
+        resp = self.client.post(
+            wizard_url,
+            data={
+                "given_name": "Kim",
+                "family_name": "Vogel",
+                "member_email": "",
+                "role": "Mutter von",
+                f"attr_{attr_pk}": "5a",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        child = Person.objects.get(given_name="Kim", family_name="Vogel")
+        record = ListRecord.objects.get(list=self.assoc_list, subject=child)
+        self.assertEqual(record.role, ListRecord.Role.MEMBER)
+        self.assertTrue(
+            PersonRelationship.objects.filter(
+                subject_person=child,
+                related_person=self.visitor.person,
+                role="Mutter von",
+            ).exists()
+        )
+        rm = RecordManager.objects.get(record=record, user=self.visitor)
+        self.assertEqual(rm.basis, RecordManager.Basis.GUARDIAN)
+        self.assertTrue(
+            ListAccess.objects.filter(list=self.assoc_list, user=self.visitor).exists()
+        )
+        # Session marker consumed.
+        self.assertNotIn("wizard_grant_list_id", self.client.session)
+        # And the QR remains usable for the next visitor.
+        tok.refresh_from_db()
+        self.assertTrue(tok.is_usable)
+
+    def test_associate_qr_revoked_token_blocks_full_flow(self):
+        tok = ListJoinToken.objects.create(
+            list=self.assoc_list, created_by=self.admin_user
+        )
+        tok.revoked_at = timezone.now()
+        tok.save(update_fields=["revoked_at"])
+        self.client.force_login(self.visitor)
+        resp = self.client.post(
+            reverse("lists:join_via_token", kwargs={"token": tok.token})
+        )
+        self.assertEqual(resp.status_code, 410)
+        self.assertNotIn("wizard_grant_list_id", self.client.session)
+        self.assertFalse(PersonRelationship.objects.exists())
+
+    # --- accounts._next_url_after_auth handoff ------------------------------
+
+    def test_next_url_after_auth_routes_pending_join_token(self):
+        """Verifies the accounts-side handoff added in this sub-phase:
+        a pending_join_token in the session routes back to join_via_token
+        after a successful register/login, and is popped in the process.
+        Pending_invite_token takes precedence when both are present.
+        """
+        from types import SimpleNamespace
+
+        from accounts.views import _next_url_after_auth
+
+        # `_next_url_after_auth` only calls `request.session.pop(...)` so a
+        # plain dict is a sufficient mock; this avoids the (fragile) dance
+        # of grafting a real Django SessionStore onto a RequestFactory req.
+        def _req(**session):
+            return SimpleNamespace(session=dict(session))
+
+        # Case 1: only pending_join_token → routes to join_via_token.
+        req = _req(pending_join_token="jointoken123")
+        url = _next_url_after_auth(req, default="/lists/")
+        self.assertEqual(
+            url, reverse("lists:join_via_token", kwargs={"token": "jointoken123"})
+        )
+        self.assertNotIn("pending_join_token", req.session)
+
+        # Case 2: only pending_invite_token → routes to invite_accept.
+        req = _req(pending_invite_token="invitetoken456")
+        url = _next_url_after_auth(req, default="/lists/")
+        self.assertEqual(
+            url, reverse("lists:invite_accept", kwargs={"token": "invitetoken456"})
+        )
+        self.assertNotIn("pending_invite_token", req.session)
+
+        # Case 3: nothing → default.
+        req = _req()
+        url = _next_url_after_auth(req, default="/lists/")
+        self.assertEqual(url, "/lists/")
+
+        # Case 4: both present → invite wins, join is left behind for the
+        # next ceremony (invite owns this round).
+        req = _req(pending_invite_token="I", pending_join_token="J")
+        url = _next_url_after_auth(req, default="/lists/")
+        self.assertIn("invite/I", url)
+        self.assertNotIn("pending_invite_token", req.session)
+        self.assertEqual(req.session.get("pending_join_token"), "J")
