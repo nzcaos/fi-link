@@ -23,6 +23,7 @@ from .forms import (
     ListCreateForm,
     ListInviteForm,
     RecordEditForm,
+    TestSendForm,
 )
 from .models import (
     List,
@@ -46,7 +47,9 @@ from .permissions import (
     can_user_admin_list,
     can_user_edit_record,
     can_user_see_list,
+    is_super_admin,
 )
+from .tasks import enqueue_list_fanout, list_recipient_emails
 from .visibility import can_user_see_subject_name, visible_attributes_for
 
 
@@ -599,4 +602,63 @@ def record_create_associate(request, pk: int):
         request,
         "lists/record_create_associate.html",
         {"list_obj": lst, "form": form},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Super-Admin test-send
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def list_send_test(request, pk: int):
+    """Super-admin-only entry point to trigger a real SMTP fan-out across the
+    list's Benutzergruppe. Used during deployment to verify provider config,
+    headers, alias generation, and bounce routing end-to-end.
+
+    Restricted to super-admin: regular list-admins shouldn't be able to mass-
+    mail their list from the UI without going through the inbound pipeline
+    (Phase 5b) — that path has the anti-spoof release-link gate which this
+    test-send deliberately bypasses.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    if not is_super_admin(request.user):
+        return HttpResponseForbidden("Nur Super-Admins dürfen Test-Mails versenden.")
+    if lst.archived_at is not None:
+        return HttpResponseForbidden("Diese Liste ist archiviert.")
+
+    recipients = list_recipient_emails(lst)
+
+    if request.method == "POST":
+        form = TestSendForm(request.POST)
+        if form.is_valid():
+            sender_email = (
+                request.user.person.email
+                or settings.DEFAULT_FROM_EMAIL
+            )
+            with transaction.atomic():
+                created = enqueue_list_fanout(
+                    list_obj=lst,
+                    from_email=sender_email,
+                    subject=form.cleaned_data["subject"],
+                    body=form.cleaned_data["body"],
+                )
+            if created:
+                messages.success(
+                    request,
+                    f"Test-Mail an {len(created)} Empfänger eingereiht.",
+                )
+            else:
+                messages.info(
+                    request,
+                    "Liste hat keine Empfänger mit E-Mail-Adresse — nichts versendet.",
+                )
+            return redirect("lists:detail", pk=lst.pk)
+    else:
+        form = TestSendForm()
+
+    return render(
+        request,
+        "lists/send_test.html",
+        {"list_obj": lst, "form": form, "recipients": recipients},
     )

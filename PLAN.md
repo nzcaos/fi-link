@@ -115,17 +115,19 @@ Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefix
 
 ## Phase 4 — Outbound Mail
 
-- [ ] **Ziel:** Mail wird an Listenmitglieder zugestellt, mit korrekten Headers und Bounce-Aliasen.
+- [x] **Ziel:** Mail wird an Listenmitglieder zugestellt, mit korrekten Headers und Bounce-Aliasen.
 
-Outputs:
-- Model `OutboundMessage` (Message-ID, From, Recipient, alias-token, sent-at, list_id)
-- procrastinate-Tasks: SMTP-Submission mit Retry
-- Header-Generation: `List-Id`, `List-Post`, `List-Unsubscribe`
-- Alias-Generierung (`alias-<token>@<domain>`, `bounce-<token>@<domain>`)
-- Fan-Out (ein Task pro Empfänger)
-- Super-Admin-Test-Route `/lists/<id>/send-test/`
+Outputs (erledigt 2026-05-27):
+- Model `OutboundMessage` (Message-ID, From, Recipient, alias-token, anonymized_from, status, attempts, last_error, sent_at, list_id) — Migration 0006.
+- procrastinate-Task `lists.send_outbound_message` mit `RetryStrategy(max_attempts=5, exponential_wait=60, retry_exceptions={SMTPException, ConnectionError, OSError})`. Idempotent auf bereits-SENT-Rows, terminal-fail flippt Status auf FAILED.
+- Header-Generation: `Message-ID`, `From` (Original oder Alias), `List-Id` (`<email_alias.MAIL_DOMAIN>`), `List-Post`, `List-Unsubscribe` (URL auf Detail-Page, Platzhalter bis Phase 6), `Auto-Submitted: auto-generated`, `Precedence: list` — gebaut über Djangos `EmailMessage(from_email=envelope, headers={'From': visible, ...})` damit Envelope-From und sichtbares From: getrennt sind.
+- Alias-Generierung via `alias_address(kind, token)` mit `kind ∈ {bounce, alias}` (`bounce-<token>@<MAIL_DOMAIN>` für Envelope-From / DSN-Routing in Phase 5b, `alias-<token>@<MAIL_DOMAIN>` für anonymisiertes From:). Token pro Row aus `secrets.token_urlsafe(16)`.
+- Fan-Out `enqueue_list_fanout(list, from, subject, body, anonymize=False)` schreibt eine OutboundMessage-Row pro Empfänger (ListAccess-User mit nicht-leerer PERSON.email, dedupliziert über `distinct()` für Shared-Family-Mailbox-Fall) und deferred die SMTP-Tasks auf `transaction.on_commit` — gerollback'te Caller können keine Orphan-Tasks erzeugen.
+- Super-Admin-Test-Route `/lists/<pk>/send-test/` mit `TestSendForm` (Subject + Body, M9-Sanitization). Nur `is_superuser`, archiverte Listen 403, leere Empfängerliste rendert Info statt 500. Button auf `lists/detail.html` für Super-Admins sichtbar.
+- `MAIL_DOMAIN` in `settings.py` aus Env (Fallback `example.invalid` für Tests).
+- Tests: `OutboundHelpersTests` (Alias-Shape, Header-Builder, Round-Trip via `EmailMessage.message()`), `OutboundFanoutTests` (Empfänger-Resolution, Dedup, on_commit-Rollback-Garantie, leere Liste, M9-Sanitization), `SendOutboundMessageTests` (Success → SENT, Idempotenz, SMTPException → PENDING + last_error, MAX_SEND_ATTEMPTS → FAILED, Retry-Then-Success), `TestSendRouteTests` (Anon → Login-Redirect, Member → 403, ListAdmin-ohne-Super → 403, Super-Admin GET + POST, archiverte Liste, leere Form-Felder).
 
-**Verify:** Test-Mail über echten SMTP-Server, Header-Inspektion, Outbound-Row in DB.
+**Verify (manuell auf VM):** `docker compose run --rm web python manage.py migrate` → Tabelle `lists_outboundmessage` existiert; Super-Admin loggt sich auf der Live-Domain ein, öffnet `/lists/<pk>/send-test/`, sendet Test-Mail; `docker compose exec db psql -U fichtelink fichtelink -c "SELECT message_id, status, sent_at FROM lists_outboundmessage ORDER BY id DESC LIMIT 5;"` zeigt SENT-Row, Mail-Empfänger inspiziert Header (Message-ID, List-Id, List-Post, List-Unsubscribe, Return-Path = `bounce-<token>@…`).
 
 ## Phase 5a — IMAP IDLE Daemon
 

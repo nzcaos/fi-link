@@ -150,6 +150,10 @@ EMAIL_HOST_USER = os.environ.get("SMTP_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("SMTP_PASS", "")
 EMAIL_USE_TLS = os.environ.get("SMTP_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
 
+# Mail domain used to construct list aliases (`<email_alias>@<MAIL_DOMAIN>`) and
+# the alias/bounce tokens used in Phase 4 outbound. Tests fall back to a literal.
+MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "example.invalid")
+
 LOGIN_URL = "/auth/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"

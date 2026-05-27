@@ -1890,3 +1890,449 @@ class Phase3b2E2ETests(TestCase):
         self.assertIn("invite/I", url)
         self.assertNotIn("pending_invite_token", req.session)
         self.assertEqual(req.session.get("pending_join_token"), "J")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Outbound mail
+# ---------------------------------------------------------------------------
+
+
+from smtplib import SMTPException
+from unittest.mock import patch
+
+from django.test import override_settings
+
+from .forms import TestSendForm
+from .models import OutboundMessage
+from .tasks import (
+    MAX_SEND_ATTEMPTS,
+    alias_address,
+    build_outbound_email,
+    enqueue_list_fanout,
+    list_address,
+    list_recipient_emails,
+    send_outbound_message,
+)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class OutboundHelpersTests(TestCase):
+    """Pure-helper tests: alias address shape, list address, header builder."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+    def test_alias_address_shape(self):
+        self.assertEqual(
+            alias_address("bounce", "TOK"), "bounce-TOK@caos.cloud"
+        )
+        self.assertEqual(alias_address("alias", "TOK"), "alias-TOK@caos.cloud")
+
+    def test_alias_address_rejects_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            alias_address("evil", "T")
+
+    def test_list_address_uses_email_alias_and_domain(self):
+        self.assertEqual(list_address(self.lst), "5a@caos.cloud")
+
+    def test_build_outbound_email_sets_envelope_and_headers(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="abc@caos.cloud",
+            alias_token="TOK",
+            from_email="sender@example.org",
+            recipient_email="member@example.org",
+            subject="Hallo Liste",
+            anonymized_from=False,
+        )
+        msg = build_outbound_email(om, body="Inhalt")
+        # Envelope-from goes to the bounce alias so DSNs route back to a token.
+        self.assertEqual(msg.from_email, "bounce-TOK@caos.cloud")
+        # Visible From: header is the original sender for non-anonymised mail.
+        self.assertEqual(msg.extra_headers["From"], "sender@example.org")
+        self.assertEqual(msg.to, ["member@example.org"])
+        self.assertEqual(msg.extra_headers["Message-ID"], "<abc@caos.cloud>")
+        self.assertEqual(msg.extra_headers["List-Id"], "<5a.caos.cloud>")
+        self.assertEqual(msg.extra_headers["List-Post"], "<mailto:5a@caos.cloud>")
+        self.assertEqual(
+            msg.extra_headers["List-Unsubscribe"],
+            f"<https://fichtelink.caos.cloud/lists/{self.lst.pk}/>",
+        )
+        self.assertEqual(msg.extra_headers["Auto-Submitted"], "auto-generated")
+        self.assertEqual(msg.extra_headers["Precedence"], "list")
+        self.assertEqual(msg.body, "Inhalt")
+        self.assertEqual(msg.subject, "Hallo Liste")
+
+    def test_build_outbound_email_anonymised_swaps_visible_from(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="abc@caos.cloud",
+            alias_token="TOK2",
+            from_email="sender@example.org",
+            recipient_email="r@example.org",
+            subject="Anon",
+            anonymized_from=True,
+        )
+        msg = build_outbound_email(om, body="")
+        # Envelope still goes to the bounce alias…
+        self.assertEqual(msg.from_email, "bounce-TOK2@caos.cloud")
+        # …but the visible From: is the alias too — original sender hidden.
+        self.assertEqual(msg.extra_headers["From"], "alias-TOK2@caos.cloud")
+
+    def test_message_message_id_header_round_trips_via_django(self):
+        """Django's EmailMessage.message() must not strip our Message-ID."""
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="m1@caos.cloud",
+            alias_token="MID",
+            from_email="x@y.z",
+            recipient_email="r@y.z",
+            subject="s",
+        )
+        msg = build_outbound_email(om, body="b")
+        rendered = msg.message()
+        self.assertEqual(rendered["From"], "x@y.z")
+        self.assertEqual(rendered["Message-ID"], "<m1@caos.cloud>")
+        self.assertEqual(rendered["List-Id"], "<5a.caos.cloud>")
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class OutboundFanoutTests(TestCase):
+    """Recipient resolution + transactional defer behaviour."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        # Two members with email, one without, one admin-only (no ListAccess).
+        self.m1 = _make_user(username="m1", email="m1@example.org")
+        self.m2 = _make_user(username="m2", email="m2@example.org")
+        self.m_no_email = _make_user(username="m3", email=None)
+        self.admin_only = _make_user(username="adm", email="adm@example.org")
+        ListAccess.objects.create(list=self.lst, user=self.m1)
+        ListAccess.objects.create(list=self.lst, user=self.m2)
+        ListAccess.objects.create(list=self.lst, user=self.m_no_email)
+        ListAdmin.objects.create(list=self.lst, user=self.admin_only)
+
+    def test_recipients_excludes_persons_without_email(self):
+        emails = set(list_recipient_emails(self.lst))
+        self.assertEqual(emails, {"m1@example.org", "m2@example.org"})
+
+    def test_recipients_does_not_include_admin_only_users(self):
+        # admin_only is a ListAdmin but NOT in ListAccess — must not receive.
+        emails = list_recipient_emails(self.lst)
+        self.assertNotIn("adm@example.org", emails)
+
+    def test_recipients_dedup_on_shared_family_email(self):
+        # Two Users sharing a PERSON.email (the family-mailbox case).
+        shared = "family@example.org"
+        u_father = _make_user(username="father", email=shared)
+        u_mother = _make_user(username="mother", email=shared)
+        ListAccess.objects.create(list=self.lst, user=u_father)
+        ListAccess.objects.create(list=self.lst, user=u_mother)
+        emails = list_recipient_emails(self.lst)
+        # PERSON.email is shared; distinct() keeps a single delivery target.
+        self.assertEqual(emails.count(shared), 1)
+
+    def test_enqueue_fanout_creates_one_row_per_recipient(self):
+        with patch.object(send_outbound_message, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                created = enqueue_list_fanout(
+                    list_obj=self.lst,
+                    from_email="sender@example.org",
+                    subject="Hi",
+                    body="Inhalt",
+                )
+        self.assertEqual(len(created), 2)
+        self.assertEqual(OutboundMessage.objects.filter(list=self.lst).count(), 2)
+        # One defer per row, body forwarded verbatim.
+        self.assertEqual(mocked.call_count, 2)
+        deferred_ids = {call.kwargs["outbound_id"] for call in mocked.call_args_list}
+        self.assertEqual(deferred_ids, {om.pk for om in created})
+        for call in mocked.call_args_list:
+            self.assertEqual(call.kwargs["body"], "Inhalt")
+
+    def test_enqueue_fanout_defers_only_on_commit(self):
+        """A rolled-back enqueue must NOT defer tasks, otherwise the worker
+        would chase OutboundMessage rows that don't exist.
+
+        Wrapped in `captureOnCommitCallbacks(execute=True)` so the test
+        actually exercises the on-commit path — without the wrapper the outer
+        TestCase transaction would suppress on_commit unconditionally and the
+        assertion would pass for the wrong reason.
+        """
+        from django.db import transaction
+
+        with patch.object(send_outbound_message, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                try:
+                    with transaction.atomic():
+                        enqueue_list_fanout(
+                            list_obj=self.lst,
+                            from_email="sender@example.org",
+                            subject="Hi",
+                            body="Inhalt",
+                        )
+                        raise RuntimeError("force rollback")
+                except RuntimeError:
+                    pass
+        mocked.assert_not_called()
+        # Rows are rolled back too.
+        self.assertEqual(OutboundMessage.objects.filter(list=self.lst).count(), 0)
+
+    def test_enqueue_fanout_sanitises_subject_and_from(self):
+        with patch.object(send_outbound_message, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                created = enqueue_list_fanout(
+                    list_obj=self.lst,
+                    from_email="sender@example.org",
+                    subject="line one\r\nline two",
+                    body="body",
+                )
+        for om in created:
+            self.assertNotIn("\n", om.subject)
+            self.assertNotIn("\r", om.subject)
+            # Whitespace collapsed → single-line value.
+            self.assertEqual(om.subject, "line one line two")
+
+    def test_enqueue_fanout_empty_recipients_does_not_defer(self):
+        empty_list = List.objects.create(
+            title="leer", email_alias="leer", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        with patch.object(send_outbound_message, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                created = enqueue_list_fanout(
+                    list_obj=empty_list,
+                    from_email="x@y.z",
+                    subject="s",
+                    body="b",
+                )
+        self.assertEqual(created, [])
+        mocked.assert_not_called()
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class SendOutboundMessageTests(TestCase):
+    """The synchronous task body: SMTP send, status transitions, retries."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="m1@caos.cloud",
+            alias_token="TOK",
+            from_email="sender@example.org",
+            recipient_email="recipient@example.org",
+            subject="Test",
+        )
+
+    def _run_task(self, om_pk: int, body: str = "body") -> None:
+        """Invoke the task body synchronously, skipping the procrastinate queue."""
+        send_outbound_message.func(outbound_id=om_pk, body=body)
+
+    def test_success_marks_sent_and_writes_outbox(self):
+        mail.outbox = []
+        self._run_task(self.om.pk, body="Hallo")
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.SENT)
+        self.assertEqual(self.om.attempts, 1)
+        self.assertIsNotNone(self.om.sent_at)
+        self.assertEqual(self.om.last_error, "")
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.from_email, "bounce-TOK@caos.cloud")
+        self.assertEqual(sent.extra_headers["From"], "sender@example.org")
+        self.assertEqual(sent.to, ["recipient@example.org"])
+        self.assertEqual(sent.subject, "Test")
+        self.assertEqual(sent.body, "Hallo")
+
+    def test_idempotent_on_already_sent(self):
+        self.om.status = OutboundMessage.Status.SENT
+        self.om.save(update_fields=["status"])
+        mail.outbox = []
+        self._run_task(self.om.pk)
+        # Nothing sent, no attempt counter bump.
+        self.assertEqual(len(mail.outbox), 0)
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.attempts, 0)
+
+    def test_smtp_failure_keeps_pending_and_records_error(self):
+        mail.outbox = []
+        with patch(
+            "lists.tasks.EmailMessage.send",
+            side_effect=SMTPException("server temporarily unavailable"),
+        ):
+            with self.assertRaises(SMTPException):
+                self._run_task(self.om.pk)
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.PENDING)
+        self.assertEqual(self.om.attempts, 1)
+        self.assertIn("server temporarily unavailable", self.om.last_error)
+        self.assertIsNone(self.om.sent_at)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_final_attempt_failure_marks_failed(self):
+        # Pre-set attempts so this call is the last one allowed.
+        self.om.attempts = MAX_SEND_ATTEMPTS - 1
+        self.om.save(update_fields=["attempts"])
+        with patch(
+            "lists.tasks.EmailMessage.send",
+            side_effect=SMTPException("permanent"),
+        ):
+            with self.assertRaises(SMTPException):
+                self._run_task(self.om.pk)
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.FAILED)
+        self.assertEqual(self.om.attempts, MAX_SEND_ATTEMPTS)
+
+    def test_retries_then_succeeds(self):
+        mail.outbox = []
+        # First call fails with SMTPException, second succeeds.
+        call_count = {"n": 0}
+        real_send = mail.EmailMessage.send
+
+        def flaky_send(self_msg, *a, **kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise SMTPException("transient")
+            return real_send(self_msg, *a, **kw)
+
+        with patch("lists.tasks.EmailMessage.send", flaky_send):
+            with self.assertRaises(SMTPException):
+                self._run_task(self.om.pk)
+            # Procrastinate would re-invoke later; simulate that directly.
+            self._run_task(self.om.pk)
+
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.SENT)
+        self.assertEqual(self.om.attempts, 2)
+        # Error field is cleared on success.
+        self.assertEqual(self.om.last_error, "")
+        self.assertEqual(len(mail.outbox), 1)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class TestSendRouteTests(TestCase):
+    """The /lists/<id>/send-test/ super-admin endpoint."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.member = _make_user(username="m1", email="m1@example.org")
+        ListAccess.objects.create(list=self.lst, user=self.member)
+        self.regular_admin = _make_user(username="adm", email="adm@example.org")
+        ListAdmin.objects.create(list=self.lst, user=self.regular_admin)
+        self.super_ = _make_super()
+        self.client = Client()
+
+    def _url(self, pk: int | None = None) -> str:
+        return reverse("lists:send_test", kwargs={"pk": pk or self.lst.pk})
+
+    def test_anonymous_redirected_to_login(self):
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/login/", resp.url)
+
+    def test_regular_member_forbidden(self):
+        self.client.force_login(self.member)
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 403)
+
+    def test_list_admin_forbidden(self):
+        """A list-admin who is not super-admin is still blocked — test-send
+        bypasses the inbound anti-spoof gate, so only super-admin may use it."""
+        self.client.force_login(self.regular_admin)
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 403)
+
+    def test_super_admin_gets_form(self):
+        self.client.force_login(self.super_)
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Betreff")
+        # Recipient preview includes the one member with email.
+        self.assertContains(resp, "m1@example.org")
+
+    def test_post_creates_row_per_recipient_and_dispatches(self):
+        self.client.force_login(self.super_)
+        with patch.object(send_outbound_message, "defer") as mocked:
+            with self.captureOnCommitCallbacks(execute=True):
+                resp = self.client.post(
+                    self._url(),
+                    data={"subject": "Test", "body": "Hallo Klasse"},
+                )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            resp.url, reverse("lists:detail", kwargs={"pk": self.lst.pk})
+        )
+        rows = OutboundMessage.objects.filter(list=self.lst)
+        self.assertEqual(rows.count(), 1)
+        om = rows.first()
+        self.assertEqual(om.recipient_email, "m1@example.org")
+        self.assertEqual(om.subject, "Test")
+        mocked.assert_called_once()
+        self.assertEqual(mocked.call_args.kwargs["outbound_id"], om.pk)
+        self.assertEqual(mocked.call_args.kwargs["body"], "Hallo Klasse")
+
+    def test_post_archived_list_forbidden(self):
+        self.lst.archived_at = timezone.now()
+        self.lst.save(update_fields=["archived_at"])
+        self.client.force_login(self.super_)
+        resp = self.client.post(
+            self._url(),
+            data={"subject": "Test", "body": "x"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(OutboundMessage.objects.count(), 0)
+
+    def test_form_rejects_empty_subject(self):
+        form = TestSendForm(data={"subject": "   ", "body": "x"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("subject", form.errors)
+
+    def test_form_rejects_empty_body(self):
+        form = TestSendForm(data={"subject": "s", "body": "   "})
+        self.assertFalse(form.is_valid())
+        self.assertIn("body", form.errors)

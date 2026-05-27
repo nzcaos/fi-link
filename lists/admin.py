@@ -11,6 +11,7 @@ from .models import (
     ListRecordValue,
     ListSendPermission,
     ListTemplate,
+    OutboundMessage,
     PersonRelationship,
     RecordManager,
 )
@@ -149,6 +150,35 @@ class ListInviteTokenAdmin(admin.ModelAdmin):
     search_fields = ("token", "target_email", "list__title")
     autocomplete_fields = ("list", "invited_by", "target_person")
     readonly_fields = ("token", "created_at")
+
+
+@admin.register(OutboundMessage)
+class OutboundMessageAdmin(admin.ModelAdmin):
+    list_display = (
+        "message_id",
+        "list",
+        "from_email",
+        "recipient_email",
+        "status",
+        "attempts",
+        "sent_at",
+        "created_at",
+    )
+    list_filter = ("status", "anonymized_from", "list")
+    search_fields = (
+        "message_id",
+        "alias_token",
+        "from_email",
+        "recipient_email",
+        "subject",
+    )
+    autocomplete_fields = ("list",)
+    readonly_fields = (
+        "message_id",
+        "alias_token",
+        "created_at",
+        "sent_at",
+    )
 
 
 @admin.register(ListSendPermission)

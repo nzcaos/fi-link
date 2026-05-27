@@ -36,6 +36,11 @@
         <button type="button" class="secondary">QR-Codes</button>
       </a>
     {% endif %}
+    {% if request.user.is_superuser %}
+      <a href="{% url 'lists:send_test' pk=list_obj.pk %}" style="margin-left:0.5rem">
+        <button type="button" class="secondary">Test-Mail senden</button>
+      </a>
+    {% endif %}
   </div>
 
   {% if is_admin %}

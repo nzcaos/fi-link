@@ -9,6 +9,7 @@ urlpatterns = [
     path("new/", views.list_create, name="create"),
     path("<int:pk>/", views.list_detail, name="detail"),
     path("<int:pk>/invite/", views.list_invite, name="invite"),
+    path("<int:pk>/send-test/", views.list_send_test, name="send_test"),
     path("<int:pk>/join-tokens/", views.list_join_tokens, name="join_tokens"),
     path(
         "<int:pk>/join-tokens/<str:token>/revoke/",

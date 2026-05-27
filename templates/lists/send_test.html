@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Test-Mail senden — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Test-Mail an „{{ list_obj.title }}"</h1>
+
+  <div class="info">
+    <strong>Super-Admin-Funktion.</strong> Versendet eine Test-Nachricht direkt an
+    die Benutzergruppe der Liste, ohne den regulären Inbound-/Release-Pfad.
+    Empfänger: <strong>{{ recipients|length }}</strong>
+    {% if recipients %}
+      ({{ recipients|join:", " }})
+    {% else %}
+      — keine Mitglieder mit hinterlegter E-Mail-Adresse
+    {% endif %}.
+  </div>
+
+  <form method="post">
+    {% csrf_token %}
+    <label for="id_subject">Betreff</label>
+    {{ form.subject }}
+    {% if form.subject.errors %}<div class="error">{{ form.subject.errors|join:" " }}</div>{% endif %}
+
+    <label for="id_body">Nachricht</label>
+    {{ form.body }}
+    {% if form.body.errors %}<div class="error">{{ form.body.errors|join:" " }}</div>{% endif %}
+
+    <p style="margin-top:1rem">
+      <button type="submit" {% if not recipients %}disabled{% endif %}>
+        Test-Mail senden
+      </button>
+    </p>
+  </form>
+{% endblock %}

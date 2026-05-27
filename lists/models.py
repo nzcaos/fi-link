@@ -32,6 +32,16 @@ def _default_join_expiry():
     return timezone.now() + timedelta(hours=48)
 
 
+def _gen_alias_token() -> str:
+    """Per-outbound-message alias/bounce token.
+
+    16 url-safe bytes → 22 chars; short enough to keep `bounce-<token>@<domain>`
+    and `alias-<token>@<domain>` readable, long enough to make the address
+    space unguessable. Collision domain is per OutboundMessage row.
+    """
+    return secrets.token_urlsafe(16)
+
+
 # ---------------------------------------------------------------------------
 # Templates and attributes
 # ---------------------------------------------------------------------------
@@ -683,6 +693,92 @@ class ListJoinToken(models.Model):
     @property
     def is_usable(self) -> bool:
         return not (self.is_expired or self.is_revoked)
+
+
+# ---------------------------------------------------------------------------
+# Outbound mail (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class OutboundMessage(models.Model):
+    """One row per recipient of an outbound list mail.
+
+    Per the spec (CLAUDE.md / "Required state store"), this table feeds bounce
+    correlation, reply-routing for anonymisation aliases, OOO/autoresponder
+    suppression of replies, and double-receive detection. Phase 4 fills in the
+    "we sent this" half; Phase 5b uses the same rows on the inbound side.
+
+    Schema notes:
+    - `message_id` is the RFC-2822 Message-ID header value (without angle
+      brackets). Globally unique by construction (16 random bytes + host part).
+    - `alias_token` is unique per row and used both for the envelope-from
+      (`bounce-<token>@<MAIL_DOMAIN>`) and — when anonymisation is in effect —
+      for the From: header (`alias-<token>@<MAIL_DOMAIN>`). Reply-routing in
+      Phase 5b resolves an inbound to `alias-<token>@…` back to this row's
+      original sender.
+    - `from_email` is the **original** sender's address. Distinct from the
+      envelope-from we actually use; needed by reply-routing and to render
+      bounce notifications back to the right human.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "ausstehend"
+        SENT = "sent", "versendet"
+        FAILED = "failed", "fehlgeschlagen"
+        BOUNCED = "bounced", "Bounce"  # filled by Phase 5b DSN correlation
+
+    list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="outbound_messages",
+        verbose_name="Liste",
+    )
+    message_id = models.CharField(
+        "Message-ID",
+        max_length=255,
+        unique=True,
+        help_text="RFC-2822-Wert ohne spitze Klammern.",
+    )
+    alias_token = models.CharField(
+        "Alias-Token",
+        max_length=64,
+        unique=True,
+        default=_gen_alias_token,
+        help_text="Eindeutig pro Empfänger-Row; speist 'bounce-<token>@' und 'alias-<token>@'.",
+    )
+    from_email = models.EmailField(
+        "Ursprünglicher Absender",
+        help_text="Adresse des Original-Senders (für Bounce- und Reply-Routing in Phase 5b).",
+    )
+    recipient_email = models.EmailField("Empfänger")
+    subject = models.CharField("Betreff", max_length=998, blank=True)
+    anonymized_from = models.BooleanField(
+        "anonymisierte From-Adresse",
+        default=False,
+        help_text="True: From: wurde auf 'alias-<token>@…' umgeschrieben (Sender-Adress-Schutz).",
+    )
+    status = models.CharField(
+        "Status",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    attempts = models.PositiveSmallIntegerField("Sende-Versuche", default=0)
+    last_error = models.TextField("letzter Fehler", blank=True)
+    sent_at = models.DateTimeField("versendet am", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Versandte Nachricht"
+        verbose_name_plural = "Versandte Nachrichten"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["list", "-created_at"], name="lists_outbound_list_idx"),
+            models.Index(fields=["status"], name="lists_outbound_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.message_id} → {self.recipient_email}"
 
 
 # ---------------------------------------------------------------------------

@@ -398,6 +398,38 @@ _DEFAULT_ROLES = [
 ]
 
 
+class TestSendForm(forms.Form):
+    """Phase 4 super-admin test-send: triggers a real SMTP fan-out across the
+    list's Benutzergruppe.
+
+    Defense-in-depth: subject is whitespace-collapsed (M9) before reaching
+    the mail-task, in addition to the task-side sanitizer.
+    """
+
+    subject = forms.CharField(
+        label="Betreff",
+        max_length=200,
+        widget=forms.TextInput(attrs={"autocomplete": "off"}),
+    )
+    body = forms.CharField(
+        label="Nachricht",
+        widget=forms.Textarea(attrs={"rows": 6}),
+    )
+
+    def clean_subject(self):
+        raw = self.cleaned_data.get("subject") or ""
+        cleaned = " ".join(raw.split())
+        if not cleaned:
+            raise ValidationError("Pflichtfeld.")
+        return cleaned
+
+    def clean_body(self):
+        body = self.cleaned_data.get("body") or ""
+        if not body.strip():
+            raise ValidationError("Pflichtfeld.")
+        return body
+
+
 class AssociateWizardForm(forms.Form):
     """Single-page onboarding wizard for `via_associate` lists.
 
