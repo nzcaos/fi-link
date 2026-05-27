@@ -953,6 +953,79 @@ class CriticalFindingFixesTests(TestCase):
         self.assertIn(self.user.person, form.fields["target_person"].queryset)
 
 
+class M11RecordCreateModeCheckTests(TestCase):
+    """M11: record_create_self must refuse on `via_associate` templates —
+    the endpoint's "subject = request.user.person" assumption only holds
+    for `self`-mode lists. The full associate-wizard lands in Phase 3b-2.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.tmpl_self = ListTemplate.objects.create(
+            name="VHS-Kurs",
+            member_subject_mode=ListTemplate.MemberSubjectMode.SELF,
+        )
+        self.tmpl_associate = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        self.lst_self = List.objects.create(
+            title="Töpfern-Kurs",
+            email_alias="toepfern",
+            template=self.tmpl_self,
+            visibility=List.Visibility.PUBLIC_EDITABLE,
+        )
+        self.lst_associate = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.tmpl_associate,
+            visibility=List.Visibility.PUBLIC_EDITABLE,
+        )
+        self.user = _make_user(username="parent", given="Eva", family="P")
+
+    def test_self_mode_creates_record_and_redirects_to_edit(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("lists:record_create_self", kwargs={"pk": self.lst_self.pk})
+        )
+        self.assertEqual(resp.status_code, 302)
+        record = ListRecord.objects.get(list=self.lst_self, subject=self.user.person)
+        self.assertEqual(record.role, ListRecord.Role.MEMBER)
+        self.assertIn(f"/lists/{self.lst_self.pk}/records/{record.pk}/edit/", resp.url)
+
+    def test_via_associate_mode_refuses(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("lists:record_create_self", kwargs={"pk": self.lst_associate.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(
+            ListRecord.objects.filter(
+                list=self.lst_associate, subject=self.user.person
+            ).exists()
+        )
+
+    def test_via_associate_detail_page_hides_self_create_button(self):
+        """Defense-in-depth at the UI layer: the 'Mich eintragen' button must
+        not appear for via_associate lists, so users do not hit the 403 by
+        following a button they should never have seen.
+        """
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("lists:detail", kwargs={"pk": self.lst_associate.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "Mich eintragen")
+
+    def test_self_detail_page_still_shows_self_create_button(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(
+            reverse("lists:detail", kwargs={"pk": self.lst_self.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Mich eintragen")
+
+
 class HeaderSanitizationTests(TestCase):
     """M9: list titles with embedded newlines must not produce
     BadHeaderError when used in mail Subject headers.

@@ -17,10 +17,15 @@
       <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">
         <button type="button">Mein Eintrag bearbeiten</button>
       </a>
-    {% else %}
+    {% elif list_obj.template.member_subject_mode == 'self' %}
       <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">
         <button type="button">Mich eintragen</button>
       </a>
+    {% else %}
+      <span style="color:#666;font-size:0.9rem">
+        Diese Liste verlangt, dass Sie eine andere Person eintragen (z. B. Ihr Kind).
+        Der dafür nötige Wizard kommt in einer nächsten Phase.
+      </span>
     {% endif %}
     {% if is_admin %}
       <a href="{% url 'lists:invite' pk=list_obj.pk %}" style="margin-left:0.5rem">

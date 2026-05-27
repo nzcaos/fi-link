@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import ListCreateForm, ListInviteForm, RecordEditForm
-from .models import List, ListAdmin, ListInviteToken, ListRecord, RecordManager
+from .models import List, ListAdmin, ListInviteToken, ListRecord, ListTemplate, RecordManager
 
 
 def _sanitize_header_value(value: str, max_length: int = 200) -> str:
@@ -134,12 +134,28 @@ def record_create_self(request, pk: int):
     """Create an empty LIST_RECORD (role=member, subject=request.user.person)
     for the current user and redirect into the edit form. Only meaningful for
     `self`-mode LISTTEMPLATEs.
+
+    M11: Refuse on `via_associate` templates — in that mode the subject of a
+    record is *another* PERSON (e.g. a child) declared by the registering USER,
+    not the USER themselves. Creating `subject=user.person` blindly would
+    mis-model the list. The full associate-wizard lives in Phase 3b-2; until
+    then this endpoint must not silently produce wrong records.
     """
     lst = get_object_or_404(List, pk=pk)
     if not can_user_see_list(request.user, lst):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf diese Liste.")
     if lst.archived_at is not None:
         return HttpResponseForbidden("Diese Liste ist archiviert.")
+    if (
+        lst.template.member_subject_mode
+        == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+    ):
+        return HttpResponseForbidden(
+            "Diese Liste verlangt, dass Sie eine andere Person eintragen "
+            "(z. B. Ihr Kind). Der dafür nötige Wizard wird in einer "
+            "nächsten Phase ergänzt — bitte wenden Sie sich bis dahin an "
+            "die Listen-Admins."
+        )
     existing = ListRecord.objects.filter(
         list=lst, subject_id=request.user.person_id, archived_at__isnull=True
     ).first()
