@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Mitglied eintragen — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Mitglied zu „{{ list_obj.title }}" hinzufügen</h1>
+  <p style="color:#666">
+    In dieser Liste tragen Sie eine andere Person (z. B. Ihr Kind) als Mitglied
+    ein. Sie bleiben dabei als deren Erziehungsberechtigte / Bezugsperson hinterlegt
+    und können den Eintrag jederzeit bearbeiten.
+  </p>
+
+  {% if form.non_field_errors %}
+    <div class="error">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <fieldset style="border:1px solid #ddd;padding:0.75rem 1rem;margin-bottom:1rem">
+      <legend style="font-weight:500">Mitglied</legend>
+
+      <label for="{{ form.given_name.id_for_label }}">{{ form.given_name.label }}</label>
+      {{ form.given_name }}
+      {% if form.given_name.errors %}<div class="error">{{ form.given_name.errors }}</div>{% endif %}
+
+      <label for="{{ form.family_name.id_for_label }}">{{ form.family_name.label }}</label>
+      {{ form.family_name }}
+      {% if form.family_name.errors %}<div class="error">{{ form.family_name.errors }}</div>{% endif %}
+
+      <label for="{{ form.member_email.id_for_label }}">{{ form.member_email.label }}</label>
+      {{ form.member_email }}
+      <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">{{ form.member_email.help_text }}</p>
+      {% if form.member_email.errors %}<div class="error">{{ form.member_email.errors }}</div>{% endif %}
+    </fieldset>
+
+    <fieldset style="border:1px solid #ddd;padding:0.75rem 1rem;margin-bottom:1rem">
+      <legend style="font-weight:500">Ihre Rolle</legend>
+
+      <label for="{{ form.role.id_for_label }}">{{ form.role.label }}</label>
+      {{ form.role }}
+      {% if form.role.errors %}<div class="error">{{ form.role.errors }}</div>{% endif %}
+    </fieldset>
+
+    <fieldset style="border:1px solid #ddd;padding:0.75rem 1rem;margin-bottom:1rem">
+      <legend style="font-weight:500">Eintragsfelder</legend>
+      <p style="color:#666;font-size:0.85rem;margin:0 0 0.5rem">
+        Sichtbarkeit pro Feld können Sie nach dem Speichern in der Bearbeiten-Ansicht
+        einstellen. Der Name ist zunächst öffentlich sichtbar; das können Sie dort
+        auch anpassen.
+      </p>
+
+      {% for attribute, value_field in form.iter_attribute_rows %}
+        <label for="{{ value_field.id_for_label }}">{{ value_field.label }}</label>
+        {{ value_field }}
+        {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
+      {% endfor %}
+    </fieldset>
+
+    <p>
+      <button type="submit">Anlegen</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

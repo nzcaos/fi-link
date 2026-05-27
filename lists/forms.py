@@ -12,13 +12,17 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
+from accounts.models import Person
+
 from .models import (
     List,
+    ListAccess,
     ListAttribute,
     ListRecord,
     ListRecordAccess,
     ListRecordValue,
     ListTemplate,
+    PersonRelationship,
     RecordManager,
 )
 from .permissions import (
@@ -368,3 +372,116 @@ class RecordEditForm(forms.Form):
 
         self.record.save(update_fields=["updated_at"])
         return self.record
+
+
+# ---------------------------------------------------------------------------
+# Associate-wizard (Phase 3b-2)
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_ROLES = [
+    "Mutter von",
+    "Vater von",
+    "Erziehungsberechtigte von",
+]
+
+
+class AssociateWizardForm(forms.Form):
+    """Single-page onboarding wizard for `via_associate` lists.
+
+    The registering USER declares another PERSON (e.g. their child) as the
+    member of the list and picks their own relationship role (Mutter von,
+    Vater von, …) from the LISTTEMPLATE-configured taxonomy. One POST
+    creates Person + ListRecord (role=member, subject=child) +
+    PersonRelationship (subject=child, related=user.person, role) +
+    RecordManager (basis=guardian) + ListAccess (user joins the Benutzergruppe)
+    + all ListRecordValue rows for the record's attributes.
+
+    Visibility matrix is intentionally not part of this form — the M8 signal
+    sets a sensible default (name visible to public) and the saver can refine
+    it in the regular record-edit form right after.
+    """
+
+    given_name = forms.CharField(
+        label="Vorname des Mitglieds (z. B. Kind)",
+        max_length=200,
+    )
+    family_name = forms.CharField(
+        label="Nachname des Mitglieds",
+        max_length=200,
+    )
+    member_email = forms.EmailField(
+        label="E-Mail des Mitglieds (optional)",
+        required=False,
+        help_text=(
+            "Nur ausfüllen, wenn das Mitglied eine eigene E-Mail-Adresse hat. "
+            "Kinder bleiben meist leer."
+        ),
+    )
+    role = forms.ChoiceField(
+        label="Ihre Rolle gegenüber dem Mitglied",
+        choices=[],
+    )
+
+    def __init__(self, *args, list_obj: List, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.list_obj = list_obj
+        self.user = user
+
+        roles = list_obj.template.relationship_roles or _DEFAULT_ROLES
+        self.fields["role"].choices = [(r, r) for r in roles]
+
+        self._attribute_fields: dict[int, ListAttribute] = {}
+        for attribute in list_obj.template.attributes.all():
+            key = f"{_ATTR_FIELD_PREFIX}{attribute.pk}"
+            self.fields[key] = _build_field_for_attribute(attribute)
+            self._attribute_fields[attribute.pk] = attribute
+
+    def iter_attribute_rows(self):
+        """Render-helper: yields (attribute, bound_field)."""
+        for attribute in self.list_obj.template.attributes.all():
+            yield attribute, self[f"{_ATTR_FIELD_PREFIX}{attribute.pk}"]
+
+    @transaction.atomic
+    def save(self) -> ListRecord:
+        child = Person.objects.create(
+            given_name=self.cleaned_data["given_name"].strip(),
+            family_name=self.cleaned_data["family_name"].strip(),
+            email=self.cleaned_data.get("member_email") or None,
+        )
+        record = ListRecord.objects.create(
+            list=self.list_obj,
+            subject=child,
+            role=ListRecord.Role.MEMBER,
+        )
+        PersonRelationship.objects.create(
+            subject_person=child,
+            related_person=self.user.person,
+            role=self.cleaned_data["role"],
+        )
+        RecordManager.objects.create(
+            record=record,
+            user=self.user,
+            basis=RecordManager.Basis.GUARDIAN,
+        )
+        # The associate becomes a Benutzergruppen member so the list shows up
+        # in their index and the visibility matrix can address them as an
+        # audience. Idempotent across re-runs (a parent adding a second child
+        # to the same list).
+        ListAccess.objects.get_or_create(list=self.list_obj, user=self.user)
+
+        for pk, attribute in self._attribute_fields.items():
+            raw = self.cleaned_data.get(f"{_ATTR_FIELD_PREFIX}{pk}")
+            if attribute.type == ListAttribute.Type.CHECKBOX:
+                value_str = "true" if raw else "false"
+            elif raw in (None, ""):
+                value_str = ""
+            else:
+                value_str = str(raw)
+            ListRecordValue.objects.create(
+                record=record,
+                attribute=attribute,
+                value=value_str,
+            )
+
+        return record

@@ -18,7 +18,12 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import ListCreateForm, ListInviteForm, RecordEditForm
+from .forms import (
+    AssociateWizardForm,
+    ListCreateForm,
+    ListInviteForm,
+    RecordEditForm,
+)
 from .models import (
     List,
     ListAdmin,
@@ -502,14 +507,11 @@ def join_via_token(request, token: str):
             lst.template.member_subject_mode
             == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
         ):
+            # The wizard reads the session marker to allow access even when
+            # the visitor is not yet in the list's Benutzergruppe.
+            request.session["wizard_grant_list_id"] = lst.pk
             return redirect("lists:record_create_associate", pk=lst.pk)
         return _join_self_mode(request, lst)
-
-    # NOTE: `lists:record_create_associate` is wired in Phase 3b-2 / Wizard
-    # sub-task. Until that lands, scanning a QR for a via_associate-mode list
-    # while authenticated will hit a NoReverseMatch on POST. Tests in
-    # sub-phase A therefore only exercise the self-mode path; the associate
-    # path gets its own coverage in sub-phase B.
 
     # GET: render confirmation page, no side effects.
     if not request.user.is_authenticated:
@@ -524,4 +526,77 @@ def join_via_token(request, token: str):
             "join_token": join_token,
             "next_action": next_action,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# via_associate Wizard (Phase 3b-2)
+# ---------------------------------------------------------------------------
+
+
+def _user_may_open_associate_wizard(user, lst: List, request) -> bool:
+    """The wizard is reachable for:
+    - superusers,
+    - users who can already see the list (existing members/admins/public list),
+    - users who arrived via a fresh QR-join (session marker
+      `wizard_grant_list_id`).
+
+    The session marker is needed because a fresh visitor on a private list has
+    no ListAccess yet; without it `can_user_see_list` would 403 immediately
+    after the QR-handler redirected here.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    if can_user_see_list(user, lst):
+        return True
+    return request.session.get("wizard_grant_list_id") == lst.pk
+
+
+@login_required
+def record_create_associate(request, pk: int):
+    """`via_associate` onboarding: a USER declares another PERSON (a child,
+    typically) as the member and themselves as guardian.
+
+    Reachable via:
+    - `lists:record_create_associate` URL directly (from the list-detail UI),
+    - automatic redirect from `lists:join_via_token` POST when the LIST's
+      template is `via_associate` (the QR scanner is bounced through register/
+      login if needed and lands here authenticated).
+    """
+    lst = get_object_or_404(List, pk=pk)
+    if lst.archived_at is not None:
+        return HttpResponseForbidden("Diese Liste ist archiviert.")
+    if (
+        lst.template.member_subject_mode
+        != ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+    ):
+        return HttpResponseForbidden(
+            "Diese Liste ist nicht im via_associate-Modus. "
+            "Bitte den 'Mich eintragen'-Button benutzen."
+        )
+    if not _user_may_open_associate_wizard(request.user, lst, request):
+        return HttpResponseForbidden("Sie haben keinen Zugriff auf diese Liste.")
+
+    if request.method == "POST":
+        form = AssociateWizardForm(
+            request.POST, list_obj=lst, user=request.user
+        )
+        if form.is_valid():
+            record = form.save()
+            # One-shot session marker is now consumed.
+            request.session.pop("wizard_grant_list_id", None)
+            messages.success(
+                request,
+                f"„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.",
+            )
+            return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
+    else:
+        form = AssociateWizardForm(list_obj=lst, user=request.user)
+
+    return render(
+        request,
+        "lists/record_create_associate.html",
+        {"list_obj": lst, "form": form},
     )

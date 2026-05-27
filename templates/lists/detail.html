@@ -13,19 +13,20 @@
   </p>
 
   <div style="margin:1rem 0">
-    {% if own_record %}
-      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">
-        <button type="button">Mein Eintrag bearbeiten</button>
-      </a>
-    {% elif list_obj.template.member_subject_mode == 'self' %}
-      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">
-        <button type="button">Mich eintragen</button>
-      </a>
+    {% if list_obj.template.member_subject_mode == 'self' %}
+      {% if own_record %}
+        <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">
+          <button type="button">Mein Eintrag bearbeiten</button>
+        </a>
+      {% else %}
+        <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">
+          <button type="button">Mich eintragen</button>
+        </a>
+      {% endif %}
     {% else %}
-      <span style="color:#666;font-size:0.9rem">
-        Diese Liste verlangt, dass Sie eine andere Person eintragen (z. B. Ihr Kind).
-        Der dafür nötige Wizard kommt in einer nächsten Phase.
-      </span>
+      <a href="{% url 'lists:record_create_associate' pk=list_obj.pk %}">
+        <button type="button">Mitglied (z. B. Kind) hinzufügen</button>
+      </a>
     {% endif %}
     {% if is_admin %}
       <a href="{% url 'lists:invite' pk=list_obj.pk %}" style="margin-left:0.5rem">

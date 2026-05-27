@@ -27,6 +27,7 @@ from .models import (
     ListRecordAccess,
     ListRecordValue,
     ListTemplate,
+    PersonRelationship,
     RecordManager,
 )
 from .permissions import (
@@ -1460,3 +1461,195 @@ class QRJoinClickFlowTests(TestCase):
         self.tok.refresh_from_db()
         self.assertTrue(self.tok.is_usable)
         self.assertIsNone(self.tok.revoked_at)
+
+
+class AssociateWizardTests(TestCase):
+    """Phase 3b-2 / via_associate-Wizard: single-page form covering Person,
+    ListRecord, PersonRelationship, RecordManager and ListAccess in one POST.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von", "Erziehungsberechtigte von"],
+        )
+        self.attr_name = ListAttribute.objects.create(
+            template=self.template,
+            name="Klassen-Name",
+            type=ListAttribute.Type.TEXT,
+            must_be_public=True,
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template,
+            name="Telefon",
+            type=ListAttribute.Type.PHONE,
+            position=1,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="admin")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+        self.parent = _make_user(
+            username="parent",
+            given="Eva",
+            family="Mueller",
+            email="eva@example.test",
+        )
+        ListAccess.objects.create(list=self.lst, user=self.parent)
+        self.outsider = _make_user(username="outsider")
+
+    def _valid_post_data(self, **overrides):
+        data = {
+            "given_name": "Lina",
+            "family_name": "Mueller",
+            "member_email": "",
+            "role": "Mutter von",
+            f"attr_{self.attr_name.pk}": "5a",
+            f"attr_{self.attr_phone.pk}": "+49 123 456",
+        }
+        data.update(overrides)
+        return data
+
+    # --- Permission gates ---------------------------------------------------
+
+    def test_refused_on_self_mode_list(self):
+        self_tmpl = ListTemplate.objects.create(
+            name="Self-Tmpl",
+            member_subject_mode=ListTemplate.MemberSubjectMode.SELF,
+        )
+        self_lst = List.objects.create(
+            title="Self", email_alias="self", template=self_tmpl
+        )
+        self.client.force_login(self.parent)
+        resp = self.client.get(
+            reverse("lists:record_create_associate", kwargs={"pk": self_lst.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_refused_on_archived_list(self):
+        self.lst.archived_at = timezone.now()
+        self.lst.save(update_fields=["archived_at"])
+        self.client.force_login(self.parent)
+        resp = self.client.get(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_refused_for_user_without_list_access(self):
+        self.client.force_login(self.outsider)
+        resp = self.client.get(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_allowed_with_wizard_grant_session_marker(self):
+        """Fresh QR-visitor on a private list: no ListAccess yet, but the
+        QR-handler stashed `wizard_grant_list_id` in the session.
+        """
+        self.client.force_login(self.outsider)
+        session = self.client.session
+        session["wizard_grant_list_id"] = self.lst.pk
+        session.save()
+        resp = self.client.get(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    # --- Form behaviour -----------------------------------------------------
+
+    def test_role_choices_come_from_template(self):
+        self.client.force_login(self.parent)
+        resp = self.client.get(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Mutter von")
+        self.assertContains(resp, "Vater von")
+        self.assertContains(resp, "Erziehungsberechtigte von")
+
+    def test_post_creates_full_associate_record_atomic(self):
+        self.client.force_login(self.parent)
+        resp = self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=self._valid_post_data(),
+        )
+        self.assertEqual(resp.status_code, 302)
+
+        # Child PERSON exists, NO USER linked.
+        child = Person.objects.get(given_name="Lina", family_name="Mueller")
+        self.assertFalse(User.objects.filter(person=child).exists())
+        # Record exists, role=member, subject=child.
+        record = ListRecord.objects.get(list=self.lst, subject=child)
+        self.assertEqual(record.role, ListRecord.Role.MEMBER)
+        # PersonRelationship: subject=child, related=parent.person, role chosen.
+        rel = PersonRelationship.objects.get(
+            subject_person=child, related_person=self.parent.person
+        )
+        self.assertEqual(rel.role, "Mutter von")
+        # RecordManager: basis=guardian on the parent USER.
+        rm = RecordManager.objects.get(record=record, user=self.parent)
+        self.assertEqual(rm.basis, RecordManager.Basis.GUARDIAN)
+        # ListRecordValue rows for both attributes.
+        values = {
+            v.attribute_id: v.value
+            for v in ListRecordValue.objects.filter(record=record)
+        }
+        self.assertEqual(values[self.attr_name.pk], "5a")
+        self.assertEqual(values[self.attr_phone.pk], "+49 123 456")
+        # Redirect lands in record-edit for refinement.
+        self.assertIn(f"/records/{record.pk}/edit/", resp.url)
+
+    def test_session_marker_consumed_after_save(self):
+        self.client.force_login(self.outsider)
+        session = self.client.session
+        session["wizard_grant_list_id"] = self.lst.pk
+        session.save()
+        self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=self._valid_post_data(given_name="Tom"),
+        )
+        # Outsider also receives ListAccess as a side-effect of the save.
+        self.assertTrue(
+            ListAccess.objects.filter(list=self.lst, user=self.outsider).exists()
+        )
+        # Session marker is consumed so a second visit must re-qualify.
+        self.assertNotIn("wizard_grant_list_id", self.client.session)
+
+    def test_associate_can_add_multiple_children(self):
+        """A parent with two kids in the same class runs the wizard twice."""
+        self.client.force_login(self.parent)
+        self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=self._valid_post_data(given_name="Lina"),
+        )
+        self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=self._valid_post_data(given_name="Tom", role="Mutter von"),
+        )
+        self.assertEqual(
+            ListRecord.objects.filter(list=self.lst, role=ListRecord.Role.MEMBER).count(),
+            2,
+        )
+        # One ListAccess row total (get_or_create is idempotent).
+        self.assertEqual(
+            ListAccess.objects.filter(list=self.lst, user=self.parent).count(),
+            1,
+        )
+
+    def test_validation_error_does_not_create_anything(self):
+        self.client.force_login(self.parent)
+        data = self._valid_post_data(given_name="")  # required field missing
+        resp = self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=data,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Person.objects.filter(family_name="Mueller").count(), 1)  # only the parent
+        self.assertFalse(ListRecord.objects.filter(list=self.lst).exists())
+        self.assertFalse(PersonRelationship.objects.exists())

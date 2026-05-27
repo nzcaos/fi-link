@@ -16,6 +16,11 @@ urlpatterns = [
         name="revoke_join_token",
     ),
     path("<int:pk>/records/new/", views.record_create_self, name="record_create_self"),
+    path(
+        "<int:pk>/records/new-associate/",
+        views.record_create_associate,
+        name="record_create_associate",
+    ),
     path("<int:pk>/records/<int:record_pk>/edit/", views.record_edit, name="record_edit"),
     path("invite/<str:token>/", views.invite_accept, name="invite_accept"),
     path("join/<str:token>/", views.join_via_token, name="join_via_token"),
