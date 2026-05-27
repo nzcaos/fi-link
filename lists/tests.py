@@ -363,6 +363,38 @@ class RecordEditFormTests(TestCase):
         self.assertEqual(rows.count(), 1)
         self.assertEqual(rows.first().audience_id, self.lst.pk)
 
+    def test_n13_save_acquires_row_lock_on_record(self):
+        """N13: save() must run inside a tx that holds a row-level lock on
+        the record, otherwise two parallel POSTs race on the delete+insert
+        of LIST_RECORD_ACCESS. We verify the lock indirectly by capturing
+        the issued SQL — `SELECT ... FOR UPDATE` against lists_listrecord
+        must be there.
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_name.pk}": "Anna",
+                f"attr_{self.attr_phone.pk}": "0",
+                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        with CaptureQueriesContext(connection) as ctx:
+            form.save()
+        locking = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if "lists_listrecord" in q["sql"].lower() and "for update" in q["sql"].lower()
+        ]
+        self.assertTrue(
+            locking,
+            "expected a SELECT ... FOR UPDATE on lists_listrecord in save()",
+        )
+
 
 class B3VisibilityWriteGateTests(TestCase):
     """B3: only RecordManagers / subject's-own-USER / super-admin may toggle

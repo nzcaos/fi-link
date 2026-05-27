@@ -310,6 +310,18 @@ class RecordEditForm(forms.Form):
 
     @transaction.atomic
     def save(self) -> ListRecord:
+        # N13: serialize concurrent saves on the same record. Without this
+        # lock two parallel POSTs (e.g. owner with two browser tabs open on
+        # the same record-edit form, or an admin moderating while the owner
+        # tweaks visibility) would both run the delete+insert sequence on
+        # LIST_RECORD_ACCESS. The second tx's `delete(... attribute=X)` then
+        # wipes the first tx's freshly-inserted rows — the visibility matrix
+        # appears to silently reset. A row-level lock on the record blocks
+        # the second writer until the first commits; the second then re-runs
+        # delete+insert against the now-committed state, which is the
+        # intended last-writer-wins semantics.
+        ListRecord.objects.select_for_update().get(pk=self.record.pk)
+
         # 1) Values.
         for pk, attribute in self._attribute_fields.items():
             raw = self.cleaned_data.get(f"{_ATTR_FIELD_PREFIX}{pk}")

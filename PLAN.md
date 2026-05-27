@@ -108,7 +108,7 @@ Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefix
 **Niedrig (Performance + Edge-Cases, Phase 8):**
 
 - **N12 — `list_detail` ist N+1.** 30 Mitglieder × 8 Felder × ~5 Queries/Sicht-Check = ~1000 Queries pro Page-Load. Optimierung mit prefetch + In-Memory-Audience-Resolution.
-- **N13 — Sichtbarkeits-Matrix-Race bei parallelen POSTs.** Zwei Tabs auf dem gleichen Record können sich gegenseitig die Reihen löschen. Fix: `select_for_update()` auf den Record in `RecordEditForm.save()`.
+- ~~N13 — Sichtbarkeits-Matrix-Race bei parallelen POSTs.~~ **Gefixt 2026-05-27.** `RecordEditForm.save()` ruft zu Beginn der `@transaction.atomic`-Phase `ListRecord.objects.select_for_update().get(pk=self.record.pk)` auf. Der zweite paralleler POST blockt bis zum Commit des ersten, dann läuft sein delete+insert gegen den committed Zustand — last-writer-wins statt verlorener Reihen. Test `test_n13_save_acquires_row_lock_on_record` verifiziert die `SELECT … FOR UPDATE`-Anweisung via `CaptureQueriesContext`.
 - **N14 — `send_mail` ohne Error-Handling.** SMTPException → 500, Token in DB, Admin weiß nichts. Fix: try/except + Status-Message + ggf. Resend-Knopf.
 - **N15 — `register_force` ohne Rate-Limit.** Family-Shared-Mailbox-Fall ist legitim, aber unbegrenzte Konto-Anlage öffnet Abuse-Potenzial. Pragmatisch: per-IP-Throttle.
 - **N16 — Default-Sichtbarkeit „leer" bei neuen Records.** Non-public Felder sind ohne explizite Audience-Wahl für niemanden außer Owner/Admin/Super sichtbar. UX-Frage: sollte „eigene Liste" Default sein? Architektur-Klärung offen.
