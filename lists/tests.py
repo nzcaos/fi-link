@@ -720,7 +720,7 @@ class InviteFlowTests(TestCase):
 
     def test_unauth_branch_a_redirects_to_register_with_email_prefill(self):
         token = self._make_invite(target_email="newbie@example.test")
-        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        resp = self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/auth/register/", resp.url)
         self.assertIn("email=newbie%40example.test", resp.url)
@@ -732,7 +732,7 @@ class InviteFlowTests(TestCase):
         view would interpret as a space).
         """
         token = self._make_invite(target_email="user+tag@example.test")
-        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        resp = self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("email=user%2Btag%40example.test", resp.url)
         self.assertNotIn("user+tag", resp.url)
@@ -742,7 +742,7 @@ class InviteFlowTests(TestCase):
             target_person=self.existing.person, target_email=self.existing.person.email or "x@x"
         )
         self.client.force_login(self.existing)
-        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        resp = self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
         self.assertEqual(resp.status_code, 302)
         # Lands in record-edit for the newly-created record.
         record = ListRecord.objects.get(list=self.lst, subject=self.existing.person)
@@ -763,7 +763,7 @@ class InviteFlowTests(TestCase):
 
     def test_unauth_branch_b_redirects_to_login(self):
         token = self._make_invite(target_person=self.existing.person)
-        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        resp = self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/auth/login/", resp.url)
         self.assertEqual(self.client.session.get("pending_invite_token"), token.token)
@@ -776,7 +776,7 @@ class InviteFlowTests(TestCase):
         """
         token = self._make_invite()  # target_person=NULL
         self.client.force_login(self.existing)
-        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        resp = self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
         self.assertEqual(resp.status_code, 302)
         token.refresh_from_db()
         self.assertEqual(token.target_person_id, self.existing.person_id)
@@ -794,6 +794,77 @@ class InviteFlowTests(TestCase):
         body = resp.content.decode("utf-8")
         self.assertNotIn(self.existing.person.given_name, body)
         self.assertNotIn(self.existing.person.family_name, body)
+
+    # --- M10: GET must be side-effect-free (auto-preview safety) -------------
+
+    def test_m10_get_does_not_consume_token_when_authenticated_match(self):
+        """M10: An auto-preview-fetcher hitting the URL with the recipient's
+        cookies (rare but possible) must NOT consume the token. GET shows
+        a confirmation page; consumption requires an explicit POST.
+        """
+        token = self._make_invite(
+            target_person=self.existing.person,
+            target_email=self.existing.person.email or "x@x",
+        )
+        self.client.force_login(self.existing)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 200)
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
+        self.assertFalse(
+            ListRecord.objects.filter(list=self.lst, subject=self.existing.person).exists()
+        )
+
+    def test_m10_get_does_not_bind_target_person_for_blank_invite(self):
+        """M10: For a blank-target invite, GET while authenticated must NOT
+        rebind target_person — otherwise a preview-fetcher in an authenticated
+        browser would silently take over the invite.
+        """
+        token = self._make_invite()  # target_person=NULL
+        self.client.force_login(self.existing)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 200)
+        token.refresh_from_db()
+        self.assertIsNone(token.target_person_id)
+        self.assertIsNone(token.consumed_at)
+
+    def test_m10_get_does_not_write_session_for_unauth(self):
+        """M10: GET by an unauthenticated visitor must not seed
+        `pending_invite_token` in the session. That happens only on POST.
+        """
+        token = self._make_invite(target_person=self.existing.person)
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(self.client.session.get("pending_invite_token"))
+
+    def test_m10_get_confirm_page_for_blank_invite_unauth(self):
+        token = self._make_invite(target_email="newbie@example.test")
+        resp = self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertEqual(resp.status_code, 200)
+        # Page advertises register-and-join; no DB write performed.
+        self.assertContains(resp, "registrieren")
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
+
+    def test_m10_get_410_for_expired_no_side_effects(self):
+        """Expired/consumed tokens still render the problem page; GET safety
+        is the priority — the POST should not be reachable via the same URL.
+        """
+        token = self._make_invite()
+        token.expires_at = timezone.now() - timedelta(days=1)
+        token.save(update_fields=["expires_at"])
+        # GET → 410
+        self.assertEqual(
+            self.client.get(reverse("lists:invite_accept", kwargs={"token": token.token})).status_code,
+            410,
+        )
+        # POST → also 410, no consumption
+        self.assertEqual(
+            self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token})).status_code,
+            410,
+        )
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
 
 
 class CriticalFindingFixesTests(TestCase):

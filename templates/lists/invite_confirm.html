@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Einladung zu „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Einladung zur Liste „{{ list_obj.title }}"</h1>
+
+  {% if next_action == "register" %}
+    <p>
+      Um die Einladung anzunehmen, müssen Sie sich zuerst registrieren
+      (E-Mail bestätigen + Passkey anlegen). Danach werden Sie automatisch
+      zur Liste hinzugefügt.
+    </p>
+    <form method="post" action="{% url 'lists:invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Jetzt registrieren und beitreten</button>
+    </form>
+
+  {% elif next_action == "login" %}
+    <p>
+      Bitte melden Sie sich an, um die Einladung anzunehmen.
+    </p>
+    <form method="post" action="{% url 'lists:invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Anmelden und beitreten</button>
+    </form>
+
+  {% else %}
+    <p>
+      Sie sind eingeloggt und können der Liste jetzt beitreten.
+    </p>
+    <form method="post" action="{% url 'lists:invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Einladung annehmen</button>
+    </form>
+  {% endif %}
+
+  <p style="margin-top:1rem;color:#666;font-size:0.85rem">
+    Falls Sie diese Einladung nicht erwartet haben, ignorieren Sie diese
+    Seite einfach — es wird nichts gespeichert, solange Sie nicht oben
+    bestätigen.
+  </p>
+{% endblock %}

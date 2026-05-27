@@ -218,6 +218,11 @@ def invite_accept(request, token: str):
     - target_person IS NOT NULL → existing-USER. Require auth as the bound
       USER, otherwise login first; refuse on wrong-USER session; complete
       the join on match.
+
+    M10: GET is side-effect-free — auto-preview fetchers (Outlook Safe Links,
+    Slack/Teams unfurlers, mail-client previews) must not consume tokens,
+    bind target_person, or pollute the session. GET shows a confirmation page;
+    the actual join is committed only on POST (CSRF-protected).
     """
     invite = get_object_or_404(ListInviteToken, token=token)
     if invite.is_consumed:
@@ -235,26 +240,13 @@ def invite_accept(request, token: str):
             status=410,
         )
 
-    if invite.target_person_id is None:
-        if request.user.is_authenticated:
-            invite.target_person_id = request.user.person_id
-            invite.save(update_fields=["target_person"])
-            return _consume_invite_and_redirect(request, invite)
-        request.session["pending_invite_token"] = invite.token
-        return redirect(
-            reverse("accounts:register_start")
-            + "?"
-            + urlencode({"email": invite.target_email})
-        )
-
-    if not request.user.is_authenticated:
-        request.session["pending_invite_token"] = invite.token
-        return redirect(
-            reverse("accounts:login") + "?" + urlencode({"next": request.path})
-        )
-    if request.user.person_id != invite.target_person_id:
-        # Generic message — do not leak the target person's name to a holder
-        # of the token who turned out to be the wrong user. See review B4.
+    # Wrong-user session is a terminal state on either method: even GET refuses
+    # without leaking the target name (see B4). No side-effect, so safe on GET.
+    if (
+        invite.target_person_id is not None
+        and request.user.is_authenticated
+        and request.user.person_id != invite.target_person_id
+    ):
         return render(
             request,
             "lists/invite_problem.html",
@@ -267,7 +259,43 @@ def invite_accept(request, token: str):
             },
             status=403,
         )
-    return _consume_invite_and_redirect(request, invite)
+
+    if request.method == "POST":
+        if invite.target_person_id is None:
+            if request.user.is_authenticated:
+                invite.target_person_id = request.user.person_id
+                invite.save(update_fields=["target_person"])
+                return _consume_invite_and_redirect(request, invite)
+            request.session["pending_invite_token"] = invite.token
+            return redirect(
+                reverse("accounts:register_start")
+                + "?"
+                + urlencode({"email": invite.target_email})
+            )
+
+        if not request.user.is_authenticated:
+            request.session["pending_invite_token"] = invite.token
+            return redirect(
+                reverse("accounts:login") + "?" + urlencode({"next": request.path})
+            )
+        return _consume_invite_and_redirect(request, invite)
+
+    # GET: render a confirmation page. No DB writes, no session writes.
+    if invite.target_person_id is None and not request.user.is_authenticated:
+        next_action = "register"
+    elif invite.target_person_id is not None and not request.user.is_authenticated:
+        next_action = "login"
+    else:
+        next_action = "accept"
+    return render(
+        request,
+        "lists/invite_confirm.html",
+        {
+            "list_obj": invite.list,
+            "invite": invite,
+            "next_action": next_action,
+        },
+    )
 
 
 @login_required
