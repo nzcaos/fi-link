@@ -1962,8 +1962,14 @@ class OutboundHelpersTests(TestCase):
         msg = build_outbound_email(om, body="Inhalt")
         # Envelope-from goes to the bounce alias so DSNs route back to a token.
         self.assertEqual(msg.from_email, "bounce-TOK@caos.cloud")
-        # Visible From: header is the original sender for non-anonymised mail.
-        self.assertEqual(msg.extra_headers["From"], "sender@example.org")
+        # DMARC From-munging: visible From: is on MAIL_DOMAIN (our routing
+        # alias), NOT the sender's foreign address. Sender stays identifiable
+        # via display name + Reply-To.
+        from_header = msg.extra_headers["From"]
+        self.assertIn("alias-TOK@caos.cloud", from_header)
+        self.assertIn("via Klasse 5a", from_header)
+        self.assertNotEqual(from_header, "sender@example.org")
+        self.assertEqual(msg.extra_headers["Reply-To"], "sender@example.org")
         self.assertEqual(msg.to, ["member@example.org"])
         self.assertEqual(msg.extra_headers["Message-ID"], "<abc@caos.cloud>")
         self.assertEqual(msg.extra_headers["List-Id"], "<5a.caos.cloud>")
@@ -1977,7 +1983,7 @@ class OutboundHelpersTests(TestCase):
         self.assertEqual(msg.body, "Inhalt")
         self.assertEqual(msg.subject, "Hallo Liste")
 
-    def test_build_outbound_email_anonymised_swaps_visible_from(self):
+    def test_build_outbound_email_anonymised_hides_sender(self):
         om = OutboundMessage.objects.create(
             list=self.lst,
             message_id="abc@caos.cloud",
@@ -1990,11 +1996,16 @@ class OutboundHelpersTests(TestCase):
         msg = build_outbound_email(om, body="")
         # Envelope still goes to the bounce alias…
         self.assertEqual(msg.from_email, "bounce-TOK2@caos.cloud")
-        # …but the visible From: is the alias too — original sender hidden.
-        self.assertEqual(msg.extra_headers["From"], "alias-TOK2@caos.cloud")
+        from_header = msg.extra_headers["From"]
+        # …visible From: is the alias, generic display, no real address anywhere,
+        # and no Reply-To that could leak it.
+        self.assertIn("alias-TOK2@caos.cloud", from_header)
+        self.assertNotIn("sender@example.org", from_header)
+        self.assertNotIn("Reply-To", msg.extra_headers)
 
-    def test_message_message_id_header_round_trips_via_django(self):
-        """Django's EmailMessage.message() must not strip our Message-ID."""
+    def test_message_from_header_is_munged_onto_mail_domain(self):
+        """Django's EmailMessage.message() keeps our munged From: and Message-ID;
+        the From: domain must be MAIL_DOMAIN so DMARC aligns."""
         om = OutboundMessage.objects.create(
             list=self.lst,
             message_id="m1@caos.cloud",
@@ -2005,7 +2016,9 @@ class OutboundHelpersTests(TestCase):
         )
         msg = build_outbound_email(om, body="b")
         rendered = msg.message()
-        self.assertEqual(rendered["From"], "x@y.z")
+        self.assertIn("alias-MID@caos.cloud", rendered["From"])
+        self.assertNotIn("@y.z>", rendered["From"])  # foreign domain not in From
+        self.assertEqual(rendered["Reply-To"], "x@y.z")
         self.assertEqual(rendered["Message-ID"], "<m1@caos.cloud>")
         self.assertEqual(rendered["List-Id"], "<5a.caos.cloud>")
 
@@ -2176,7 +2189,9 @@ class SendOutboundMessageTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         sent = mail.outbox[0]
         self.assertEqual(sent.from_email, "bounce-TOK@caos.cloud")
-        self.assertEqual(sent.extra_headers["From"], "sender@example.org")
+        # From is munged onto MAIL_DOMAIN (DMARC); sender kept in Reply-To.
+        self.assertIn("alias-TOK@caos.cloud", sent.extra_headers["From"])
+        self.assertEqual(sent.extra_headers["Reply-To"], "sender@example.org")
         self.assertEqual(sent.to, ["recipient@example.org"])
         self.assertEqual(sent.subject, "Test")
         self.assertEqual(sent.body, "Hallo")

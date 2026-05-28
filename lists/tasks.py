@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from email.utils import make_msgid
+from email.utils import formataddr, make_msgid
 from smtplib import SMTPException
 
 from django.conf import settings
@@ -98,34 +98,59 @@ def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
     """Construct the EmailMessage for a single OutboundMessage row.
 
     Envelope-from (= SMTP MAIL FROM, used by Django's SMTP backend as the
-    `from_email` value) is `bounce-<token>@<MAIL_DOMAIN>` so DSNs come back
-    to a token we can correlate (CLAUDE.md / "Envelope-From / SRS"). The
-    visible From: header — overridden via the `headers` dict, which Django's
-    EmailMessage.message() honours — is either the original sender (default
-    forward) or `alias-<token>@<MAIL_DOMAIN>` (anonymised forward).
+    `from_email` value) is always `bounce-<token>@<MAIL_DOMAIN>` so DSNs come
+    back to a token we can correlate (CLAUDE.md / "Envelope-From / SRS").
+
+    **From-munging for every forward** (CLAUDE.md / "From-header munging
+    (DMARC)"): the visible From: header is ALWAYS an address on `<MAIL_DOMAIN>`,
+    never the original sender's address. A foreign From: relayed through our
+    provider fails DMARC alignment for any sender whose domain publishes a
+    strict policy (gmail, gmx, t-online, most corporate domains) → the
+    receiving MTA rejects with 5.7.x. Munging From: onto our own domain makes
+    our SPF + DKIM align, so forwards pass regardless of the sender's domain.
+
+    `anonymized_from` now only governs *whether the sender is disclosed*, not
+    *whether From: is rewritten* (it always is):
+
+    - not anonymised (sender consented to show their address): the From display
+      name names the sender and Reply-To carries their real address, so replies
+      reach them directly.
+    - anonymised: the From display is generic (the list) and Reply-To is
+      omitted; the original address never appears in any header.
+
+    Either way the From: *address* is the per-recipient `alias-<token>@` so a
+    reply that ignores Reply-To still routes back to the sender 1:1 via the
+    reply-routing task.
     """
-    visible_from = (
-        alias_address("alias", message.alias_token)
-        if message.anonymized_from
-        else message.from_email
-    )
+    reply_alias = alias_address("alias", message.alias_token)
+    list_title = _sanitize_header_value(message.list.title, max_length=120)
+    headers = {
+        "Message-ID": f"<{message.message_id}>",
+        "List-Id": _list_id_header(message.list),
+        "List-Post": _list_post_header(message.list),
+        "List-Unsubscribe": _list_unsubscribe_header(message.list),
+        # RFC 3834: mark our own outbound as auto-generated so well-behaved
+        # autoresponders skip it. Anti-loop on the inbound side leans on this.
+        "Auto-Submitted": "auto-generated",
+        "Precedence": "list",
+    }
+    if message.anonymized_from:
+        display = f"{list_title} (anonym)" if list_title else "anonym"
+        headers["From"] = formataddr((display, reply_alias))
+    else:
+        sender = (message.from_email or "").strip()
+        label = f"{sender} via {list_title}" if list_title else f"{sender} via Liste"
+        headers["From"] = formataddr(
+            (_sanitize_header_value(label, max_length=200), reply_alias)
+        )
+        if sender:
+            headers["Reply-To"] = sender
     return EmailMessage(
         subject=message.subject,
         body=body,
         from_email=alias_address("bounce", message.alias_token),
         to=[message.recipient_email],
-        headers={
-            "Message-ID": f"<{message.message_id}>",
-            "From": visible_from,
-            "List-Id": _list_id_header(message.list),
-            "List-Post": _list_post_header(message.list),
-            "List-Unsubscribe": _list_unsubscribe_header(message.list),
-            # RFC 3834: mark our own outbound as auto-generated so well-
-            # behaved autoresponders skip it. Anti-loop on the inbound side
-            # (Phase 5b) leans on this same header.
-            "Auto-Submitted": "auto-generated",
-            "Precedence": "list",
-        },
+        headers=headers,
     )
 
 

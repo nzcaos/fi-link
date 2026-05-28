@@ -34,7 +34,7 @@ The data model in the spec uses these entities — keep these names and relation
 - Incoming mail to a list address is **not stored** — only the reception and forwarding are logged.
 - **Sender-is-member path:** before forwarding, the server sends the sender a confirmation email with a release link. Mail is only forwarded after that link is clicked. This is the anti-spoofing mechanism — do not skip it.
 - **Sender-is-not-member path:** the release link goes to a list admin, who decides whether to forward.
-- **Anonymization:** if the sender is a member but has not consented to publishing their address, the From: address is rewritten to an auto-generated alias on the list-server domain before forwarding. Replies to that alias must be routed back to the original sender by the server.
+- **Anonymization:** if the sender is a member but has not consented to publishing their address, the From: address is rewritten to an auto-generated alias on the list-server domain before forwarding. Replies to that alias must be routed back to the original sender by the server. (Note: *all* forwards rewrite the From: header onto the list domain for DMARC — see *From-header munging (DMARC)* below; anonymization additionally hides the sender's identity by dropping the revealing display name and Reply-To.)
 - A list admin can configure who is permitted to send to the list — including members of a parent (übergeordnete) list, per the hierarchy rule above.
 
 ## Architecture decisions (domain model)
@@ -413,6 +413,19 @@ Delivery Status Notifications (RFC 3464) arrive as ordinary inbound mail to the 
 ### Envelope-From / SRS
 
 Envelope-From on outbound mail to list members must **never** be the original sender — relaying via our provider IP would break the original sender's SPF and the mail would land in spam. Use the same alias mechanism as anonymization (`alias-<token>@<domain>`); for non-anonymized forwards, use a technical bounce-only alias (`bounce-<token>@<domain>`). This guarantees every DSN comes back to a token we can correlate to the original outbound row.
+
+### From-header munging (DMARC)
+
+Agreed 2026-05-28, after a live test bounced with `550 5.7.26 Message rejected per DMARC policy`. The **visible `From:` header** on every forward is munged onto `<MAIL_DOMAIN>` — it is **never** the original sender's address, for *any* forward (not just anonymized ones). Rationale: a `From:` whose domain we don't control, relayed through our provider, can never satisfy DMARC alignment — our SPF (envelope = `bounce-<token>@<MAIL_DOMAIN>`) and DKIM (`d=<MAIL_DOMAIN>`) align to *our* domain, not the sender's. Any sender on a domain with a strict DMARC policy (Gmail, GMX, T-Online, most corporate domains all publish `p=reject`/`quarantine` today) would otherwise be rejected by the receiving MTA. Munging `From:` onto our own domain makes the only domain that matters one we configure SPF/DKIM for.
+
+This reframes `anonymized_from`: it no longer means "was `From:` rewritten" (it always is) — it now governs only **whether the sender is disclosed**:
+
+- **Not anonymized** (sender consented to show their address): `From: "<sender> via <list>" <alias-<token>@<MAIL_DOMAIN>>` and `Reply-To: <sender's real address>`, so replies reach them directly.
+- **Anonymized** (not consented): generic display (`"<list> (anonym)"`), **no `Reply-To`**, the real address appears in no header at all.
+
+In both cases the `From:` *address* is the per-recipient `alias-<token>@<MAIL_DOMAIN>`, so a reply that ignores `Reply-To` still routes back to the sender 1:1 through the existing reply-routing task. The reply-routing forward (the mail we send back to the original sender) is munged by the same code path, so it is DMARC-safe too. Implementation: `lists/tasks.build_outbound_email` — the single chokepoint every outbound passes through.
+
+Prerequisite this exposes: `<MAIL_DOMAIN>` itself must have SPF + DKIM configured at the mail provider, otherwise even the munged `From:` fails. That is a one-time DNS/provider setup for the one domain we own — the whole point of munging is to reduce the DMARC surface to that single controllable domain.
 
 ### Retention
 
