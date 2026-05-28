@@ -66,27 +66,30 @@ def list_address(list_obj: List) -> str:
     return f"{list_obj.email_alias}@{settings.MAIL_DOMAIN}"
 
 
-def _list_id_header(list_obj: List) -> str:
+def _list_id_header(message: OutboundMessage) -> str:
     """RFC 2919 List-Id: a fixed identifier rooted in our mail domain.
 
     Format `<local.MAIL_DOMAIN>` keeps it stable across renames in the UI
-    (the email_alias is the renamable thing) and globally unique.
+    (the email_alias is the renamable thing) and globally unique. Works for
+    both list and aggregate-alias sources via `source_email_alias`.
     """
-    return f"<{list_obj.email_alias}.{settings.MAIL_DOMAIN}>"
+    return f"<{message.source_email_alias}.{settings.MAIL_DOMAIN}>"
 
 
-def _list_post_header(list_obj: List) -> str:
-    return f"<mailto:{list_address(list_obj)}>"
+def _list_post_header(message: OutboundMessage) -> str:
+    return f"<mailto:{message.source_email_alias}@{settings.MAIL_DOMAIN}>"
 
 
-def _list_unsubscribe_header(list_obj: List) -> str:
-    """Pointer to the list detail page until Phase 6 wires a true self-removal
-    endpoint. RFC 2369 only requires that the value is a well-formed URI in
-    angle brackets; a deep-link satisfies OOO heuristics that key on the
-    header's presence (CLAUDE.md / "Autoresponder / loop suppression").
+def _list_unsubscribe_header(message: OutboundMessage) -> str:
+    """RFC 2369 only requires a well-formed URI in angle brackets; its mere
+    presence satisfies OOO heuristics (CLAUDE.md / "Autoresponder / loop
+    suppression"). List mail deep-links the list detail page; aggregate-alias
+    mail has no per-recipient page, so it points at the site root.
     """
     origin = (settings.RP_ORIGIN or "").rstrip("/")
-    return f"<{origin}/lists/{list_obj.pk}/>"
+    if message.list_id:
+        return f"<{origin}/lists/{message.list_id}/>"
+    return f"<{origin}/>"
 
 
 # ---------------------------------------------------------------------------
@@ -123,12 +126,12 @@ def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
     reply-routing task.
     """
     reply_alias = alias_address("alias", message.alias_token)
-    list_title = _sanitize_header_value(message.list.title, max_length=120)
+    list_title = _sanitize_header_value(message.source_title, max_length=120)
     headers = {
         "Message-ID": f"<{message.message_id}>",
-        "List-Id": _list_id_header(message.list),
-        "List-Post": _list_post_header(message.list),
-        "List-Unsubscribe": _list_unsubscribe_header(message.list),
+        "List-Id": _list_id_header(message),
+        "List-Post": _list_post_header(message),
+        "List-Unsubscribe": _list_unsubscribe_header(message),
         # RFC 3834: mark our own outbound as auto-generated so well-behaved
         # autoresponders skip it. Anti-loop on the inbound side leans on this.
         "Auto-Submitted": "auto-generated",
@@ -178,7 +181,7 @@ def send_outbound_message(outbound_id: int, body: str) -> None:
     row is flipped to FAILED so the admin UI can surface it (Phase 5b will
     add resend/cancel buttons).
     """
-    om = OutboundMessage.objects.select_related("list").get(pk=outbound_id)
+    om = OutboundMessage.objects.select_related("list", "aggregate").get(pk=outbound_id)
     if om.status == OutboundMessage.Status.SENT:
         return
 
@@ -234,31 +237,32 @@ def list_recipient_emails(list_obj: List) -> list[str]:
     return list(emails)
 
 
-def enqueue_list_fanout(
+def _enqueue_fanout(
     *,
-    list_obj: List,
+    recipients: list[str],
     from_email: str,
     subject: str,
     body: str,
-    anonymize: bool = False,
+    anonymize: bool,
+    list_obj: List | None = None,
+    aggregate=None,
 ) -> list[OutboundMessage]:
-    """Create one OutboundMessage row per recipient and enqueue a send task
-    per row. The task deferral runs on `transaction.on_commit`, so callers
-    inside a rolled-back transaction do not produce orphan tasks.
-
-    Returns the created rows (mainly useful for the test-send admin UI to
-    report counts; callers in Phase 5b's forwarding path can ignore it).
+    """Create one OutboundMessage row per recipient and enqueue a send task per
+    row. Exactly one of ``list_obj`` / ``aggregate`` identifies the source. The
+    task deferral runs on `transaction.on_commit`, so callers inside a rolled-
+    back transaction do not produce orphan tasks.
     """
     safe_from = _sanitize_header_value(from_email, max_length=254)
     safe_subject = _sanitize_header_value(subject, max_length=998)
 
     created: list[OutboundMessage] = []
-    for recipient in list_recipient_emails(list_obj):
+    for recipient in recipients:
         # email.utils.make_msgid returns "<id@domain>"; strip the brackets
         # since the column holds the raw value and we re-bracket in headers.
         msgid = make_msgid(domain=settings.MAIL_DOMAIN).strip("<>")
         om = OutboundMessage.objects.create(
             list=list_obj,
+            aggregate=aggregate,
             message_id=msgid,
             from_email=safe_from,
             recipient_email=recipient,
@@ -276,6 +280,49 @@ def enqueue_list_fanout(
 
         transaction.on_commit(_defer)
     return created
+
+
+def enqueue_list_fanout(
+    *,
+    list_obj: List,
+    from_email: str,
+    subject: str,
+    body: str,
+    anonymize: bool = False,
+) -> list[OutboundMessage]:
+    """Fan out to a list's Benutzergruppe. Returns the created rows (the test-
+    send admin UI reports counts; the forwarding path can ignore it).
+    """
+    return _enqueue_fanout(
+        recipients=list_recipient_emails(list_obj),
+        from_email=from_email,
+        subject=subject,
+        body=body,
+        anonymize=anonymize,
+        list_obj=list_obj,
+    )
+
+
+def enqueue_aggregate_fanout(
+    *,
+    aggregate,
+    recipients: list[str],
+    from_email: str,
+    subject: str,
+    body: str,
+    anonymize: bool = False,
+) -> list[OutboundMessage]:
+    """Fan out an aggregate-alias message to pre-resolved recipients (resolved
+    by the caller via `aggregates.aggregate_recipient_emails`, since recipient
+    resolution is send-time and not cached on the alias)."""
+    return _enqueue_fanout(
+        recipients=recipients,
+        from_email=from_email,
+        subject=subject,
+        body=body,
+        anonymize=anonymize,
+        aggregate=aggregate,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +346,23 @@ def _list_admin_emails(list_obj: List) -> list[str]:
 
     emails = (
         Person.objects.filter(user__admin_of_lists__list=list_obj)
+        .exclude(email__isnull=True)
+        .exclude(email__exact="")
+        .values_list("email", flat=True)
+        .distinct()
+    )
+    return list(emails)
+
+
+def _super_admin_emails() -> list[str]:
+    """Deliverable addresses of all active super-admins — the approval audience
+    for aggregate aliases, which have no list-admin of their own (CLAUDE.md /
+    "Aggregate email aliases": approval routes to the super-admin).
+    """
+    from accounts.models import Person
+
+    emails = (
+        Person.objects.filter(user__is_superuser=True, user__is_active=True)
         .exclude(email__isnull=True)
         .exclude(email__exact="")
         .values_list("email", flat=True)
@@ -387,8 +451,11 @@ def _route_reply(inbound: InboundMessage, msg) -> None:
 
     subject, body = extract_subject_and_body(msg)
     with transaction.atomic():
+        # Carry the originating source (list or aggregate) onto the reply so the
+        # exactly-one-source invariant holds and List-* headers stay consistent.
         reply = OutboundMessage.objects.create(
             list=om.list,
+            aggregate=om.aggregate,
             message_id=make_msgid(domain=settings.MAIL_DOMAIN).strip("<>"),
             from_email=(inbound.from_email or settings.DEFAULT_FROM_EMAIL),
             recipient_email=original_sender,
@@ -408,8 +475,9 @@ def _route_reply(inbound: InboundMessage, msg) -> None:
 
 def _create_release_token(
     inbound: InboundMessage,
-    target: List,
+    target: List | None = None,
     *,
+    aggregate=None,
     kind: str,
     offer_anonymize: bool,
     recipients: list[str],
@@ -420,12 +488,15 @@ def _create_release_token(
     transaction, then defer the notification mail on commit. The single-
     transaction write keeps process_inbound idempotent: if it ever re-runs, the
     top-of-task guard sees a non-PENDING decision and bails before duplicating.
+
+    Exactly one of ``target`` (list) / ``aggregate`` identifies the source.
     """
     recipients = [r for r in recipients if r]
     with transaction.atomic():
         token = MailReleaseToken.objects.create(
             inbound=inbound,
             list=target,
+            aggregate=aggregate,
             kind=kind,
             offer_anonymize=offer_anonymize,
         )
@@ -516,6 +587,80 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
              inbound.pk, target.email_alias, len(admin_emails))
 
 
+def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) -> None:
+    """Act on an aggregate-alias decision (CLAUDE.md / "Aggregate email
+    aliases"). Mirrors `_dispatch_decision` but fans out to the send-time
+    resolved recipient set and routes approval to the super-admin (aggregate
+    aliases have no list-admin)."""
+    from .aggregates import AggregateOutcome, aggregate_recipient_emails
+    from .inbound_pipeline import extract_subject_and_body
+
+    if decision.outcome == AggregateOutcome.FORWARD:
+        subject, body = extract_subject_and_body(msg)
+        recipients = aggregate_recipient_emails(agg)
+        with transaction.atomic():
+            enqueue_aggregate_fanout(
+                aggregate=agg,
+                recipients=recipients,
+                from_email=inbound.from_email or settings.DEFAULT_FROM_EMAIL,
+                subject=subject,
+                body=body,
+                anonymize=False,
+            )
+            _mark(
+                inbound,
+                InboundMessage.Decision.FORWARDED,
+                f"Aggregat-Alias {agg.email_alias}: direkt an {len(recipients)} "
+                f"Empfänger weitergeleitet (Senderecht, ohne Freigabe-Klick).",
+            )
+        log.info("process_inbound: aggregate direct forward inbound=%d alias=%s n=%d",
+                 inbound.pk, agg.email_alias, len(recipients))
+        return
+
+    if decision.outcome == AggregateOutcome.PERMITTED_RELEASE:
+        _create_release_token(
+            inbound,
+            aggregate=agg,
+            kind=MailReleaseToken.Kind.MEMBER,
+            offer_anonymize=False,
+            recipients=[inbound.from_email],
+            notify_subject=f'Freigabe für Ihre Mail an „{agg.title}"',
+            notify_body=(
+                f"Hallo,\n\n"
+                f'Sie haben eine Mail an den Verteiler „{agg.title}" gesendet.\n'
+                f"Aus Sicherheitsgründen wird sie erst nach Ihrer Bestätigung "
+                f"weitergeleitet.\n\n"
+                f"Bitte klicken Sie zum Freigeben:\n__LINK__\n\n"
+                f"Wenn Sie diese Mail nicht gesendet haben, ignorieren Sie "
+                f"diese Nachricht — es wird nichts weitergeleitet.\n"
+            ),
+        )
+        log.info("process_inbound: aggregate member release inbound=%d alias=%s",
+                 inbound.pk, agg.email_alias)
+        return
+
+    # SUPER_ADMIN_APPROVAL
+    super_emails = _super_admin_emails()
+    _create_release_token(
+        inbound,
+        aggregate=agg,
+        kind=MailReleaseToken.Kind.ADMIN,
+        offer_anonymize=False,
+        recipients=super_emails,
+        notify_subject=f'Freigabe nötig: Mail an Verteiler „{agg.title}"',
+        notify_body=(
+            f"Hallo,\n\n"
+            f'{inbound.from_email or "(unbekannt)"} möchte eine Mail an den '
+            f'Verteiler „{agg.title}" senden, ist aber nicht für alle '
+            f"betroffenen Listen berechtigt.\n"
+            f'Betreff: {inbound.subject or "(kein Betreff)"}\n\n'
+            f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"
+        ),
+    )
+    log.info("process_inbound: aggregate super-admin approval inbound=%d alias=%s recipients=%d",
+             inbound.pk, agg.email_alias, len(super_emails))
+
+
 @app.task(name="lists.process_inbound", queue="mail", pass_context=False)
 def process_inbound(inbound_id: int) -> None:
     """The Phase 5b decision pipeline. Enqueued once per persisted
@@ -563,12 +708,29 @@ def process_inbound(inbound_id: int) -> None:
         _route_reply(inbound, msg)
         return
 
-    # 3. List-addressed mail.
+    # 3. List-addressed mail. If no list matched, the alias may still be an
+    #    aggregate alias (resolved here at decision time — its recipient set is
+    #    send-time, never cached on the consumer's structural pass).
     if inbound.matched_list_id is None:
+        from .models import AggregateAlias
+
+        agg = AggregateAlias.objects.filter(email_alias__iexact=alias).first()
+        if agg is not None:
+            reason = suppression_reason(msg, check_in_reply_to=True)
+            if reason:
+                _mark(inbound, InboundMessage.Decision.SUPPRESSED, reason)
+                return
+            from .aggregates import decide_aggregate
+
+            sender_users = list(identify_sender_users(inbound.from_email))
+            decision = decide_aggregate(agg, sender_users)
+            _dispatch_aggregate_decision(inbound, agg, decision, msg)
+            return
+
         _mark(
             inbound,
             InboundMessage.Decision.UNKNOWN_ALIAS,
-            f"Kein Listen-/Outbound-Match für Alias {alias!r}.",
+            f"Kein Listen-/Aggregat-/Outbound-Match für Alias {alias!r}.",
         )
         return
 

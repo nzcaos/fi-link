@@ -3776,3 +3776,372 @@ class AdminHandoverTests(TestCase):
         self.client.force_login(_make_user(username="outsider"))
         resp = self.client.get(reverse("lists:admin_manage", kwargs={"pk": self.lst.pk}))
         self.assertEqual(resp.status_code, 403)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7a — Aggregate aliases
+# ---------------------------------------------------------------------------
+
+
+from django.core.exceptions import ValidationError  # noqa: E402
+from django.db import IntegrityError, transaction  # noqa: E402
+
+from .aggregates import (  # noqa: E402
+    AggregateOutcome,
+    aggregate_recipient_emails,
+    aggregate_target_list_ids,
+    decide_aggregate,
+    subtree_list_ids,
+)
+from .models import AggregateAlias  # noqa: E402
+from .tasks import enqueue_aggregate_fanout  # noqa: E402
+
+
+def _person(given, family, email=None):
+    return Person.objects.create(given_name=given, family_name=family, email=email)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class AggregateAliasBase(TestCase):
+    """Shared school hierarchy: Elternbeirat → {5a, 5b}, children as member
+    records, parents linked via PersonRelationship. `eltern` aggregates the
+    parents of the whole Elternbeirat subtree by role.
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            relationship_roles=["Mutter von", "Vater von", "Erziehungsberechtigte von"],
+        )
+        self.eb = List.objects.create(
+            title="Elternbeirat", email_alias="eb", template=self.template
+        )
+        self.c5a = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, parent=self.eb
+        )
+        self.c5b = List.objects.create(
+            title="Klasse 5b", email_alias="5b", template=self.template, parent=self.eb
+        )
+
+        # 5a: child with a mother, a father, and a (role-excluded) guardian.
+        child_a = _person("Kind", "A")
+        ListRecord.objects.create(
+            list=self.c5a, subject=child_a, role=ListRecord.Role.MEMBER
+        )
+        self._link("Mutter von", child_a, "Mutter", "A", "m_a@x.org")
+        self._link("Vater von", child_a, "Vater", "A", "f_a@x.org")
+        # Role not in included_roles → must be excluded from the eltern alias.
+        self._link("Erziehungsberechtigte von", child_a, "Oma", "A", "g_a@x.org")
+        # A parent without email → never deliverable, must be excluded.
+        self._link("Mutter von", child_a, "Stief", "A", None)
+
+        # 5b: one child with a mother.
+        child_b = _person("Kind", "B")
+        ListRecord.objects.create(
+            list=self.c5b, subject=child_b, role=ListRecord.Role.MEMBER
+        )
+        self._link("Mutter von", child_b, "Mutter", "B", "m_b@x.org")
+
+        self.superu = _make_user(
+            username="root", email="root@x.org", is_superuser=True, is_staff=True
+        )
+        self.agg = AggregateAlias.objects.create(
+            email_alias="eltern",
+            title="Eltern",
+            scope_list=self.eb,
+            included_roles=["Mutter von", "Vater von"],
+            created_by=self.superu,
+        )
+
+    def _link(self, role, child, given, family, email):
+        """Create a parent Person(+User) and relate them to `child`."""
+        parent = _person(given, family, email)
+        User.objects.create_user(
+            person=parent, username=f"{given}{family}".lower()
+        )
+        PersonRelationship.objects.create(
+            subject_person=child, related_person=parent, role=role
+        )
+        return parent
+
+
+class AggregateResolutionTests(AggregateAliasBase):
+    def test_subtree_includes_root_and_children(self):
+        self.assertEqual(
+            subtree_list_ids(self.eb.pk), {self.eb.pk, self.c5a.pk, self.c5b.pk}
+        )
+
+    def test_subtree_excludes_archived(self):
+        self.c5b.archived_at = timezone.now()
+        self.c5b.save(update_fields=["archived_at"])
+        self.assertEqual(subtree_list_ids(self.eb.pk), {self.eb.pk, self.c5a.pk})
+
+    def test_subtree_none_scope_is_whole_install(self):
+        self.assertEqual(
+            subtree_list_ids(None), {self.eb.pk, self.c5a.pk, self.c5b.pk}
+        )
+
+    def test_recipients_filtered_by_role_and_email(self):
+        # Mutter/Vater of 5a + Mutter of 5b; guardian (wrong role) and the
+        # email-less parent are excluded.
+        self.assertEqual(
+            set(aggregate_recipient_emails(self.agg)),
+            {"m_a@x.org", "f_a@x.org", "m_b@x.org"},
+        )
+
+    def test_recipients_deduped_per_address(self):
+        # A shared family mailbox: a second child's parent reuses an address.
+        child_c = _person("Kind", "C")
+        ListRecord.objects.create(
+            list=self.c5a, subject=child_c, role=ListRecord.Role.MEMBER
+        )
+        self._link("Mutter von", child_c, "Mutter", "C", "m_a@x.org")
+        emails = aggregate_recipient_emails(self.agg)
+        self.assertEqual(emails.count("m_a@x.org"), 1)
+
+    def test_recipients_respect_scope_subtree(self):
+        # A class outside the Elternbeirat subtree contributes no recipients.
+        other = List.objects.create(
+            title="VHS", email_alias="vhs", template=self.template
+        )
+        child_x = _person("Kind", "X")
+        ListRecord.objects.create(
+            list=other, subject=child_x, role=ListRecord.Role.MEMBER
+        )
+        self._link("Mutter von", child_x, "Mutter", "X", "m_x@x.org")
+        self.assertNotIn("m_x@x.org", aggregate_recipient_emails(self.agg))
+
+    def test_target_list_ids_are_contributing_classes(self):
+        # Only the classes that actually hold member-children with the roles —
+        # the Elternbeirat itself has no such records.
+        self.assertEqual(
+            aggregate_target_list_ids(self.agg), {self.c5a.pk, self.c5b.pk}
+        )
+
+
+class AggregateDecisionTests(AggregateAliasBase):
+    def test_elternbeirat_member_forwards_directly(self):
+        # Vorsitz is a member of the Elternbeirat, the parent of every class →
+        # implicit parent send grant on each → permitted, no click → FORWARD.
+        vorsitz = _make_user(username="vorsitz", email="v@x.org")
+        ListAccess.objects.create(list=self.eb, user=vorsitz)
+        decision = decide_aggregate(self.agg, [vorsitz])
+        self.assertEqual(decision.outcome, AggregateOutcome.FORWARD)
+        self.assertEqual(decision.target_list_ids, frozenset({self.c5a.pk, self.c5b.pk}))
+
+    def test_single_class_ev_routes_to_super_admin(self):
+        # An ordinary Elternvertreter is a member of one class only and holds no
+        # send permission on the others → super-admin approval.
+        ev = _make_user(username="ev", email="ev@x.org")
+        ListAccess.objects.create(list=self.c5a, user=ev)
+        decision = decide_aggregate(self.agg, [ev])
+        self.assertEqual(decision.outcome, AggregateOutcome.SUPER_ADMIN_APPROVAL)
+
+    def test_unknown_sender_routes_to_super_admin(self):
+        decision = decide_aggregate(self.agg, [])
+        self.assertEqual(decision.outcome, AggregateOutcome.SUPER_ADMIN_APPROVAL)
+
+    def test_release_click_required_when_any_target_demands_it(self):
+        # Vorsitz is permitted everywhere, but an explicit grant on 5a tightens
+        # the implicit parent default to require a click → PERMITTED_RELEASE,
+        # because the aggregate takes the strictest per-list value.
+        vorsitz = _make_user(username="vorsitz", email="v@x.org")
+        ListAccess.objects.create(list=self.eb, user=vorsitz)
+        ListSendPermission.objects.create(
+            target_list=self.c5a,
+            granted_to_list=self.eb,
+            granted_by=self.superu,
+            requires_release_click=True,
+        )
+        decision = decide_aggregate(self.agg, [vorsitz])
+        self.assertEqual(decision.outcome, AggregateOutcome.PERMITTED_RELEASE)
+
+
+class AggregateOutboundEmailTests(AggregateAliasBase):
+    def test_build_outbound_munges_from_and_list_headers(self):
+        om = OutboundMessage.objects.create(
+            aggregate=self.agg,
+            message_id="agg@caos.cloud",
+            alias_token="A1",
+            from_email="v@x.org",
+            recipient_email="m_a@x.org",
+            subject="Hallo Eltern",
+        )
+        msg = build_outbound_email(om, body="Text")
+        # Envelope-from is the bounce alias; visible From: is munged onto our
+        # domain (DMARC) using the aggregate's alias, sender kept in Reply-To.
+        self.assertEqual(msg.from_email, "bounce-A1@caos.cloud")
+        self.assertIn("alias-A1@caos.cloud", msg.extra_headers["From"])
+        self.assertIn("via Eltern", msg.extra_headers["From"])
+        self.assertEqual(msg.extra_headers["Reply-To"], "v@x.org")
+        self.assertEqual(msg.extra_headers["List-Id"], "<eltern.caos.cloud>")
+        self.assertEqual(msg.extra_headers["List-Post"], "<mailto:eltern@caos.cloud>")
+        # No per-recipient detail page for an aggregate → site root.
+        self.assertEqual(
+            msg.extra_headers["List-Unsubscribe"], "<https://fichtelink.caos.cloud/>"
+        )
+
+    def test_enqueue_aggregate_fanout_tags_rows_with_aggregate(self):
+        with patch.object(send_outbound_message, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                created = enqueue_aggregate_fanout(
+                    aggregate=self.agg,
+                    recipients=["a@x.org", "b@x.org"],
+                    from_email="v@x.org",
+                    subject="S",
+                    body="B",
+                )
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(om.aggregate_id == self.agg.pk for om in created))
+        self.assertTrue(all(om.list_id is None for om in created))
+        self.assertEqual(defer.call_count, 2)
+
+
+class AggregateProcessInboundTests(AggregateAliasBase):
+    def _inbound(self, *, from_email, to_alias="eltern"):
+        raw = _eml(from_addr=from_email, to_addr=f"{to_alias}@caos.cloud", subject="Hallo")
+        return InboundMessage.objects.create(
+            imap_uidvalidity=1,
+            imap_uid=InboundMessage.objects.count() + 1,
+            message_id=f"in-{from_email}@x.org",
+            from_email=from_email,
+            to_alias=to_alias,
+            to_domain="caos.cloud",
+            subject="Hallo",
+            raw_eml=raw,
+            received_at=timezone.now(),
+            matched_list=None,
+        )
+
+    def test_permitted_sender_forwards_to_resolved_recipients(self):
+        vorsitz = _make_user(username="vorsitz", email="v@x.org")
+        ListAccess.objects.create(list=self.eb, user=vorsitz)
+        inbound = self._inbound(from_email="v@x.org")
+        with patch.object(send_outbound_message, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.FORWARDED)
+        self.assertFalse(MailReleaseToken.objects.filter(inbound=inbound).exists())
+        rows = OutboundMessage.objects.filter(aggregate=self.agg)
+        self.assertEqual(
+            set(rows.values_list("recipient_email", flat=True)),
+            {"m_a@x.org", "f_a@x.org", "m_b@x.org"},
+        )
+        self.assertEqual(defer.call_count, 3)
+
+    def test_unpermitted_sender_routes_to_super_admin_approval(self):
+        ev = _make_user(username="ev", email="ev@x.org")
+        ListAccess.objects.create(list=self.c5a, user=ev)
+        inbound = self._inbound(from_email="ev@x.org")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        tok = MailReleaseToken.objects.get(inbound=inbound)
+        self.assertEqual(tok.kind, MailReleaseToken.Kind.ADMIN)
+        self.assertEqual(tok.aggregate_id, self.agg.pk)
+        self.assertIsNone(tok.list_id)
+        # Approval audience is the super-admin, not a list admin.
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["root@x.org"])
+
+    def test_aggregate_mail_suppressed_on_auto_submitted(self):
+        raw = _eml(
+            from_addr="v@x.org",
+            to_addr="eltern@caos.cloud",
+            extra_headers={"Auto-Submitted": "auto-replied"},
+        )
+        inbound = InboundMessage.objects.create(
+            imap_uidvalidity=1, imap_uid=99, message_id="s@x.org",
+            from_email="v@x.org", to_alias="eltern", to_domain="caos.cloud",
+            subject="x", raw_eml=raw, received_at=timezone.now(), matched_list=None,
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
+
+    def test_real_unknown_alias_still_unknown(self):
+        inbound = self._inbound(from_email="v@x.org", to_alias="ghost")
+        process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.UNKNOWN_ALIAS)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class AggregateReleaseClickTests(AggregateAliasBase):
+    def test_super_admin_approval_click_fans_out(self):
+        inbound = InboundMessage.objects.create(
+            imap_uidvalidity=1, imap_uid=1, message_id="rc@x.org",
+            from_email="ev@x.org", to_alias="eltern", to_domain="caos.cloud",
+            subject="Bitte", raw_eml=_eml(to_addr="eltern@caos.cloud"),
+            received_at=timezone.now(), matched_list=None,
+        )
+        rel = MailReleaseToken.objects.create(
+            inbound=inbound,
+            aggregate=self.agg,
+            kind=MailReleaseToken.Kind.ADMIN,
+        )
+        client = Client()
+        with patch.object(send_outbound_message, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                resp = client.post(
+                    reverse("lists:mail_release", kwargs={"token": rel.token}),
+                    {"action": "approve"},
+                )
+        self.assertEqual(resp.status_code, 200)
+        rel.refresh_from_db()
+        inbound.refresh_from_db()
+        self.assertEqual(rel.resolution, MailReleaseToken.Resolution.FORWARDED)
+        self.assertEqual(inbound.decision, InboundMessage.Decision.FORWARDED)
+        self.assertEqual(
+            set(
+                OutboundMessage.objects.filter(aggregate=self.agg).values_list(
+                    "recipient_email", flat=True
+                )
+            ),
+            {"m_a@x.org", "f_a@x.org", "m_b@x.org"},
+        )
+        self.assertEqual(defer.call_count, 3)
+
+
+class AggregateModelConstraintTests(AggregateAliasBase):
+    def test_outbound_requires_exactly_one_source(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                OutboundMessage.objects.create(
+                    message_id="bad@x", alias_token="BAD",
+                    from_email="a@x.org", recipient_email="b@x.org",
+                )
+
+    def test_alias_collision_with_list_rejected(self):
+        a = AggregateAlias(
+            email_alias="5a", title="Kollision", created_by=self.superu
+        )
+        with self.assertRaises(ValidationError):
+            a.full_clean()
+
+    def test_reserved_prefix_rejected(self):
+        a = AggregateAlias(
+            email_alias="bounce-foo", title="Reserviert", created_by=self.superu
+        )
+        with self.assertRaises(ValidationError):
+            a.full_clean()
+
+    def test_clean_normalises_to_lowercase(self):
+        a = AggregateAlias(
+            email_alias="  Eltern2  ", title="Norm", created_by=self.superu
+        )
+        a.full_clean()
+        self.assertEqual(a.email_alias, "eltern2")

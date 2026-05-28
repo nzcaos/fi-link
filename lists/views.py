@@ -64,7 +64,7 @@ from .permissions import (
     would_self_removal_leave_no_admin,
 )
 from . import lifecycle
-from .tasks import enqueue_list_fanout, list_recipient_emails
+from .tasks import enqueue_aggregate_fanout, enqueue_list_fanout, list_recipient_emails
 from .visibility import can_user_see_subject_name, visible_attributes_for
 
 
@@ -684,9 +684,10 @@ def list_send_test(request, pk: int):
 # ---------------------------------------------------------------------------
 
 
-def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, lst: List, anonymize: bool) -> None:
-    """Commit a forward: fan out the stored message to the list, flip the
-    inbound to FORWARDED, consume the token. Re-locks the token under
+def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: bool) -> None:
+    """Commit a forward: fan out the stored message to the token's source (a
+    list, or an aggregate alias resolved to its send-time recipient set), flip
+    the inbound to FORWARDED, consume the token. Re-locks the token under
     select_for_update so two concurrent clicks (e.g. two list admins) cannot
     double-forward — the loser sees a consumed token and no-ops.
     """
@@ -694,17 +695,30 @@ def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, lst: List, 
 
     msg = parse_message(bytes(inbound.raw_eml))
     subject, body = extract_subject_and_body(msg)
+    from_email = inbound.from_email or settings.DEFAULT_FROM_EMAIL
     with transaction.atomic():
         locked = MailReleaseToken.objects.select_for_update().get(pk=rel.pk)
         if not locked.is_usable:
             return
-        enqueue_list_fanout(
-            list_obj=lst,
-            from_email=inbound.from_email or settings.DEFAULT_FROM_EMAIL,
-            subject=subject,
-            body=body,
-            anonymize=anonymize,
-        )
+        if locked.aggregate_id is not None:
+            from .aggregates import aggregate_recipient_emails
+
+            enqueue_aggregate_fanout(
+                aggregate=locked.aggregate,
+                recipients=aggregate_recipient_emails(locked.aggregate),
+                from_email=from_email,
+                subject=subject,
+                body=body,
+                anonymize=anonymize,
+            )
+        else:
+            enqueue_list_fanout(
+                list_obj=locked.list,
+                from_email=from_email,
+                subject=subject,
+                body=body,
+                anonymize=anonymize,
+            )
         inbound.decision = InboundMessage.Decision.FORWARDED
         inbound.reason = f"Über Freigabe-Link weitergeleitet (anonymize={anonymize})."
         inbound.save(update_fields=["decision", "reason"])
@@ -736,7 +750,8 @@ def mail_release(request, token: str):
     on the CSRF-protected POST.
     """
     rel = get_object_or_404(
-        MailReleaseToken.objects.select_related("inbound", "list"), token=token
+        MailReleaseToken.objects.select_related("inbound", "list", "aggregate"),
+        token=token,
     )
     if rel.is_consumed:
         return render(
@@ -754,7 +769,9 @@ def mail_release(request, token: str):
         )
 
     inbound = rel.inbound
-    lst = rel.list
+    # The release target is either a list or an aggregate alias; both expose a
+    # `.title`, which is all the release templates render.
+    target = rel.list or rel.aggregate
 
     if request.method == "POST":
         if request.POST.get("action") == "reject":
@@ -762,20 +779,20 @@ def mail_release(request, token: str):
             return render(
                 request,
                 "lists/mail_release_done.html",
-                {"list_obj": lst, "rel": rel, "action": "rejected"},
+                {"list_obj": target, "rel": rel, "action": "rejected"},
             )
         anonymize = rel.offer_anonymize and bool(request.POST.get("anonymize"))
-        _release_forward(rel, inbound, lst, anonymize)
+        _release_forward(rel, inbound, anonymize)
         return render(
             request,
             "lists/mail_release_done.html",
-            {"list_obj": lst, "rel": rel, "action": "forwarded", "anonymized": anonymize},
+            {"list_obj": target, "rel": rel, "action": "forwarded", "anonymized": anonymize},
         )
 
     return render(
         request,
         "lists/mail_release_confirm.html",
-        {"list_obj": lst, "rel": rel, "inbound": inbound},
+        {"list_obj": target, "rel": rel, "inbound": inbound},
     )
 
 

@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     AdminInviteToken,
+    AggregateAlias,
     InboundMessage,
     List,
     ListAccess,
@@ -161,6 +162,7 @@ class OutboundMessageAdmin(admin.ModelAdmin):
     list_display = (
         "message_id",
         "list",
+        "aggregate",
         "from_email",
         "recipient_email",
         "status",
@@ -176,7 +178,7 @@ class OutboundMessageAdmin(admin.ModelAdmin):
         "recipient_email",
         "subject",
     )
-    autocomplete_fields = ("list",)
+    autocomplete_fields = ("list", "aggregate")
     readonly_fields = (
         "message_id",
         "alias_token",
@@ -222,6 +224,7 @@ class InboundMessageAdmin(admin.ModelAdmin):
 class MailReleaseTokenAdmin(admin.ModelAdmin):
     list_display = (
         "list",
+        "aggregate",
         "kind",
         "offer_anonymize",
         "created_at",
@@ -230,8 +233,8 @@ class MailReleaseTokenAdmin(admin.ModelAdmin):
         "resolution",
     )
     list_filter = ("kind", "resolution", "offer_anonymize")
-    search_fields = ("token", "list__title", "inbound__from_email")
-    autocomplete_fields = ("list",)
+    search_fields = ("token", "list__title", "aggregate__title", "inbound__from_email")
+    autocomplete_fields = ("list", "aggregate")
     readonly_fields = ("token", "inbound", "created_at")
 
 
@@ -246,6 +249,24 @@ class ListSendPermissionAdmin(admin.ModelAdmin):
     )
     list_filter = ("requires_release_click", "transitive")
     autocomplete_fields = ("target_list", "granted_to_list", "granted_by")
+
+
+@admin.register(AggregateAlias)
+class AggregateAliasAdmin(admin.ModelAdmin):
+    """Super-admin-only (Django Admin access = is_staff, which only super-admins
+    hold in Fichtelink). CLAUDE.md / "Aggregate email aliases": configuration is
+    super-admin only.
+    """
+
+    list_display = ("email_alias", "title", "scope_list", "created_by", "created_at")
+    search_fields = ("email_alias", "title")
+    autocomplete_fields = ("scope_list",)
+    readonly_fields = ("created_by", "created_at")
+
+    def save_model(self, request, obj, form, change):
+        if not change and not obj.created_by_id:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(PendingTransfer)

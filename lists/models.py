@@ -571,6 +571,86 @@ class ListSendPermission(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Aggregate aliases (Phase 7a — CLAUDE.md / "Aggregate email aliases")
+# ---------------------------------------------------------------------------
+
+
+class AggregateAlias(models.Model):
+    """An email address that fans out across multiple lists by relationship
+    role — e.g. ``eltern@<domain>`` reaches every Person who is a parent/guardian
+    (``included_roles``) of a member inside ``scope_list``'s subtree.
+
+    Not a List: it has no Benutzergruppe and no admins. Recipients are resolved
+    at *send time* from PERSON_RELATIONSHIP, never cached. Send permission is
+    derived from the LIST_SEND_PERMISSION graph (there is no separate permission
+    table here): the sender must hold send permission on **every** target list
+    the alias resolves to. Configuration is super-admin only (Django Admin).
+    """
+
+    email_alias = models.CharField(
+        "E-Mail-Alias",
+        max_length=100,
+        unique=True,
+        help_text="Local-Part der Verteiler-Adresse, z.B. 'eltern' für eltern@<MAIL_DOMAIN>.",
+    )
+    title = models.CharField("Titel", max_length=200)
+    scope_list = models.ForeignKey(
+        List,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="aggregate_aliases",
+        verbose_name="Geltungsbereich (Liste)",
+        help_text=(
+            "Leer = alle Listen. Gesetzt: nur dieser Teilbaum (Liste + Unter-Listen). "
+            "PROTECT: eine als Geltungsbereich genutzte Liste lässt sich nicht löschen, "
+            "ohne den Alias vorher umzukonfigurieren — sonst würde der Bereich still "
+            "auf 'alle Listen' aufgeweitet."
+        ),
+    )
+    included_roles = models.JSONField(
+        "Einbezogene Rollen",
+        default=list,
+        blank=True,
+        help_text='PersonRelationship-Rollen, z.B. ["Mutter von", "Vater von", "Erziehungsberechtigte von"].',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_aggregate_aliases",
+        verbose_name="erstellt von",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Aggregat-Alias (Verteiler)"
+        verbose_name_plural = "Aggregat-Aliase (Verteiler)"
+        ordering = ["email_alias"]
+
+    def __str__(self) -> str:
+        return f"{self.email_alias}@… ({self.title})"
+
+    def clean(self):
+        # Normalise + guard against collisions with list addresses and with the
+        # reserved bounce-/alias- routing prefixes (lists/inbound.resolve_alias
+        # matches list aliases first, so a clash would be silently shadowed).
+        from django.core.exceptions import ValidationError
+
+        alias = (self.email_alias or "").strip().lower()
+        self.email_alias = alias
+        if not alias:
+            raise ValidationError({"email_alias": "Darf nicht leer sein."})
+        if alias.startswith(("bounce-", "alias-")):
+            raise ValidationError(
+                {"email_alias": "Reservierter Präfix (bounce-/alias-)."}
+            )
+        if List.objects.filter(email_alias__iexact=alias).exists():
+            raise ValidationError(
+                {"email_alias": "Kollidiert mit einer bestehenden Listen-Adresse."}
+            )
+
+
+# ---------------------------------------------------------------------------
 # Invitations (CLAUDE.md / "Member invitation and LIST_INVITE_TOKEN")
 # ---------------------------------------------------------------------------
 
@@ -744,9 +824,21 @@ class OutboundMessage(models.Model):
 
     list = models.ForeignKey(
         List,
+        null=True,
+        blank=True,
         on_delete=models.CASCADE,
         related_name="outbound_messages",
         verbose_name="Liste",
+        help_text="Gesetzt bei Listen-Mail; leer bei Aggregat-Alias-Versand.",
+    )
+    aggregate = models.ForeignKey(
+        "AggregateAlias",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="outbound_messages",
+        verbose_name="Aggregat-Alias",
+        help_text="Gesetzt bei Aggregat-Alias-Versand; leer bei normaler Listen-Mail.",
     )
     message_id = models.CharField(
         "Message-ID",
@@ -791,9 +883,29 @@ class OutboundMessage(models.Model):
             models.Index(fields=["list", "-created_at"], name="lists_outbound_list_idx"),
             models.Index(fields=["status"], name="lists_outbound_status_idx"),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(list__isnull=False, aggregate__isnull=True)
+                    | models.Q(list__isnull=True, aggregate__isnull=False)
+                ),
+                name="outbound_exactly_one_source",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.message_id} → {self.recipient_email}"
+
+    @property
+    def source_email_alias(self) -> str:
+        """Local-part of the From/List-* address — the list's or the aggregate's
+        alias, whichever this row carries."""
+        return self.list.email_alias if self.list_id else self.aggregate.email_alias
+
+    @property
+    def source_title(self) -> str:
+        """Human title used in the From display name and List-* headers."""
+        return self.list.title if self.list_id else self.aggregate.title
 
 
 # ---------------------------------------------------------------------------
@@ -970,9 +1082,21 @@ class MailReleaseToken(models.Model):
     )
     list = models.ForeignKey(
         List,
+        null=True,
+        blank=True,
         on_delete=models.CASCADE,
         related_name="release_tokens",
         verbose_name="Ziel-Liste",
+        help_text="Gesetzt bei Listen-Freigabe; leer bei Aggregat-Alias-Freigabe.",
+    )
+    aggregate = models.ForeignKey(
+        "AggregateAlias",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="release_tokens",
+        verbose_name="Ziel-Aggregat-Alias",
+        help_text="Gesetzt bei Aggregat-Alias-Freigabe (Super-Admin-Approval / Permitted-Release).",
     )
     kind = models.CharField("Art", max_length=20, choices=Kind.choices)
     offer_anonymize = models.BooleanField(
@@ -998,9 +1122,18 @@ class MailReleaseToken(models.Model):
         verbose_name = "Mail-Freigabe-Token"
         verbose_name_plural = "Mail-Freigabe-Tokens"
         ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(list__isnull=False, aggregate__isnull=True)
+                    | models.Q(list__isnull=True, aggregate__isnull=False)
+                ),
+                name="release_token_exactly_one_source",
+            ),
+        ]
 
     def __str__(self) -> str:
-        return f"{self.kind} release {self.token[:8]}… → {self.list}"
+        return f"{self.kind} release {self.token[:8]}… → {self.list or self.aggregate}"
 
     @property
     def is_expired(self) -> bool:
