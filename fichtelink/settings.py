@@ -148,7 +148,18 @@ EMAIL_HOST = os.environ.get("SMTP_HOST", "")
 EMAIL_PORT = int(os.environ.get("SMTP_PORT", "587"))
 EMAIL_HOST_USER = os.environ.get("SMTP_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("SMTP_PASS", "")
-EMAIL_USE_TLS = os.environ.get("SMTP_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
+# STARTTLS (port 587) and implicit TLS (port 465) are mutually exclusive in
+# Django — setting both True raises at connect time. SMTP_USE_SSL wins: if it is
+# on, STARTTLS is forced off, so switching to a 465 endpoint means flipping one
+# variable instead of remembering to also turn SMTP_USE_TLS off.
+EMAIL_USE_SSL = os.environ.get("SMTP_USE_SSL", "False").lower() in ("1", "true", "yes", "on")
+EMAIL_USE_TLS = (
+    not EMAIL_USE_SSL
+    and os.environ.get("SMTP_USE_TLS", "True").lower() in ("1", "true", "yes", "on")
+)
+# Bound every SMTP socket operation so a black-holed or wrong-mode endpoint
+# fails fast (retryable) instead of hanging the worker indefinitely.
+EMAIL_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "30"))
 
 # Mail domain used to construct list aliases (`<email_alias>@<MAIL_DOMAIN>`) and
 # the alias/bounce tokens used in Phase 4 outbound. Tests fall back to a literal.
