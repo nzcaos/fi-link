@@ -65,12 +65,13 @@ def _classify(lst: List) -> tuple[str, int | None, str | None]:
 
 def default_label(grade: int, track: str | None, curriculum: str) -> tuple[str, str]:
     """Suggested ``(title, email_alias)`` for a target cohort. The rollover
-    wizard pre-fills these; the super-admin may edit before executing.
+    wizard pre-fills these; the super-admin may edit before executing. Only
+    called for ``advance`` / ``k1_to_k2`` / ``merge`` targets (grade is set).
     """
     if track:
         return (f"Klasse {grade}{track}", f"{grade}{track}")
-    L = LAST_LETTERED_GRADE.get(curriculum, grade - 1)
-    stage = grade - L  # 1 → K1, 2 → K2
+    L = LAST_LETTERED_GRADE.get(curriculum)
+    stage = grade - L if L is not None else grade  # 1 → K1, 2 → K2
     return (f"Kursstufe K{stage}", f"k{stage}")
 
 
@@ -151,7 +152,12 @@ def plan_rollover(lists=None) -> RolloverPlan:
             key = f"{lst.curriculum_track}:{lst.parent_id or 0}"
             merge_buckets.setdefault(key, []).append(lst)
             continue
-        dt, da = default_label(new_grade, new_track, lst.curriculum_track)
+        if kind == "k2_archive":
+            # No target cohort — the list is just archived. Defaults are
+            # display-only here (the wizard renders no inputs for this row).
+            dt, da = lst.title, lst.email_alias
+        else:
+            dt, da = default_label(new_grade, new_track, lst.curriculum_track)
         actions.append(
             ListAction(
                 list_id=lst.id,
