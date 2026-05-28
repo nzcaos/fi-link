@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ form_obj.title }} — Fichtelink{% endblock %}
+{% block content %}
+  <p><a href="{% url 'forms:index' %}">← Zurück zu den Formularen</a></p>
+  <h1>{{ form_obj.title }}</h1>
+
+  {% for entry in parts %}
+    <section style="margin:1.5rem 0">
+      {% if entry.part.title %}
+        <h2 style="font-size:1.15rem">{{ entry.part.title }}</h2>
+      {% endif %}
+
+      {% if entry.body %}
+        <div class="form-part-body">{{ entry.body }}</div>
+      {% endif %}
+
+      {% if entry.rows is not None %}
+        <p style="color:#666;margin:.5rem 0">
+          Liste: <strong>{{ entry.part.list.title }}</strong>
+          {% if entry.part.list.archived_at %} · <span style="color:#b00020">archiviert</span>{% endif %}
+        </p>
+        {% if entry.rows %}
+          <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+            <thead>
+              <tr style="background:#f4f4f4">
+                <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Person</th>
+                <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Felder</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in entry.rows %}
+                <tr>
+                  <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+                    {{ row.subject_display }}
+                    {% if row.record.role == 'associate' %}
+                      <span style="color:#888">(zugeordnet)</span>
+                    {% endif %}
+                  </td>
+                  <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+                    {% for attr, value in row.fields %}
+                      <div><span style="color:#666">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
+                    {% empty %}
+                      <span style="color:#888">keine sichtbaren Felder</span>
+                    {% endfor %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p style="color:#666">Keine Einträge in dieser Liste.</p>
+        {% endif %}
+      {% endif %}
+    </section>
+  {% empty %}
+    <p style="color:#666">Dieses Formular hat noch keine Inhalte.</p>
+  {% endfor %}
+{% endblock %}

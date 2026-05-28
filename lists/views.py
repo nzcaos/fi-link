@@ -65,7 +65,7 @@ from .permissions import (
 )
 from . import lifecycle
 from .tasks import enqueue_aggregate_fanout, enqueue_list_fanout, list_recipient_emails
-from .visibility import can_user_see_subject_name, visible_attributes_for
+from .visibility import build_visible_rows
 
 
 @login_required
@@ -119,28 +119,9 @@ def list_detail(request, pk: int):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf diese Liste.")
     is_admin = can_user_admin_list(request.user, lst)
 
-    records_qs = lst.records.filter(archived_at__isnull=True).select_related("subject")
-    rows = []
-    anon_counter = 0
-    for record in records_qs:
-        attrs = list(visible_attributes_for(request.user, record))
-        values_map = {v.attribute_id: v.value for v in record.values.all()}
-        fields = [(a, values_map.get(a.pk, "")) for a in attrs]
-        # M8: subject-name anonymisation. Counter is per-render — ?N is a
-        # display hack, not a stable identifier (see CLAUDE.md).
-        if can_user_see_subject_name(request.user, record):
-            subject_display = str(record.subject)
-        else:
-            anon_counter += 1
-            subject_display = f"?{anon_counter}"
-        rows.append(
-            {
-                "record": record,
-                "subject_display": subject_display,
-                "fields": fields,
-                "can_edit": can_user_edit_record(request.user, record),
-            }
-        )
+    rows = build_visible_rows(request.user, lst)
+    for row in rows:
+        row["can_edit"] = can_user_edit_record(request.user, row["record"])
 
     own_record = None
     if request.user.is_authenticated and request.user.person_id:

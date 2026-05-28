@@ -95,6 +95,37 @@ def visible_attributes_for(user, record: ListRecord) -> Iterable[ListAttribute]:
             yield attribute
 
 
+def build_visible_rows(user, lst: List) -> list[dict]:
+    """Render-ready rows for `lst`'s active records as seen by `user`.
+
+    Each row is ``{"record", "subject_display", "fields"}`` where ``fields`` is
+    a list of ``(attribute, value)`` pairs limited to the attributes `user` may
+    see, and ``subject_display`` is the subject's name or a per-render ``?N``
+    anonymisation placeholder (M8). Shared by the list-detail page and the
+    dynamic list part of a Form so both honour the exact same visibility rules.
+    """
+    rows: list[dict] = []
+    anon_counter = 0
+    records_qs = lst.records.filter(archived_at__isnull=True).select_related("subject")
+    for record in records_qs:
+        attrs = list(visible_attributes_for(user, record))
+        values_map = {v.attribute_id: v.value for v in record.values.all()}
+        fields = [(a, values_map.get(a.pk, "")) for a in attrs]
+        if can_user_see_subject_name(user, record):
+            subject_display = str(record.subject)
+        else:
+            anon_counter += 1
+            subject_display = f"?{anon_counter}"
+        rows.append(
+            {
+                "record": record,
+                "subject_display": subject_display,
+                "fields": fields,
+            }
+        )
+    return rows
+
+
 def can_user_see_subject_name(user, record: ListRecord) -> bool:
     """M8: subject-name visibility — same audience semantics as
     `can_user_see_field`, but the matching `LIST_RECORD_ACCESS` rows have
