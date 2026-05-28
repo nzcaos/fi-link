@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Umzug beantragen — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Klassenwechsel beantragen</h1>
+  <p style="color:#666">
+    Person: <strong>{{ record.subject }}</strong> · aktuelle Liste:
+    <strong>{{ list_obj.title }}</strong>
+  </p>
+  <p style="color:#666">
+    Der Umzug wird erst wirksam, wenn ein Admin der Ziel-Liste zustimmt. Zugehörige
+    Einträge (z. B. Eltern) ziehen mit um; die alten Einträge werden archiviert.
+  </p>
+
+  {% if form.non_field_errors %}<div class="error">{{ form.non_field_errors }}</div>{% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <label for="{{ form.to_list.id_for_label }}">{{ form.to_list.label }}</label>
+    {{ form.to_list }}
+    {% if form.to_list.errors %}<div class="error">{{ form.to_list.errors }}</div>{% endif %}
+
+    <p style="margin-top:1rem">
+      <button type="submit">Umzug beantragen</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    AdminInviteToken,
     InboundMessage,
     List,
     ListAccess,
@@ -14,6 +15,7 @@ from .models import (
     ListTemplate,
     MailReleaseToken,
     OutboundMessage,
+    PendingTransfer,
     PersonRelationship,
     RecordManager,
 )
@@ -244,3 +246,42 @@ class ListSendPermissionAdmin(admin.ModelAdmin):
     )
     list_filter = ("requires_release_click", "transitive")
     autocomplete_fields = ("target_list", "granted_to_list", "granted_by")
+
+
+@admin.register(PendingTransfer)
+class PendingTransferAdmin(admin.ModelAdmin):
+    list_display = (
+        "person",
+        "from_list",
+        "to_list",
+        "status",
+        "requested_by",
+        "requested_at",
+        "resolved_at",
+    )
+    list_filter = ("status",)
+    search_fields = (
+        "person__family_name",
+        "person__given_name",
+        "from_list__title",
+        "to_list__title",
+    )
+    autocomplete_fields = ("from_list", "to_list", "person", "requested_by", "resolved_by")
+    readonly_fields = ("requested_at",)
+
+
+@admin.register(AdminInviteToken)
+class AdminInviteTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        "list",
+        "to_email",
+        "mode",
+        "from_user",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+    )
+    list_filter = ("mode", "consumed_at")
+    search_fields = ("token", "to_email", "list__title")
+    autocomplete_fields = ("list", "from_user")
+    readonly_fields = ("token", "created_at")

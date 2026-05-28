@@ -168,7 +168,7 @@ Outputs (erledigt 2026-05-28):
 
 ## Phase 6 — Schulklassen-Lifecycle
 
-- [ ] **Ziel:** Rollover, Klassenwechsel, Admin-Handover live nutzbar.
+- [x] **Ziel:** Rollover, Klassenwechsel, Admin-Handover live nutzbar.
 
 Outputs:
 - Cohort-UI auf LIST (Edit für Super- bzw. Listen-Admin)

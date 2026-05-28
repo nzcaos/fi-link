@@ -15,6 +15,7 @@ from django.db import transaction
 from accounts.models import Person
 
 from .models import (
+    AdminInviteToken,
     List,
     ListAccess,
     ListAttribute,
@@ -529,3 +530,67 @@ class AssociateWizardForm(forms.Form):
             )
 
         return record
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class CohortEditForm(forms.ModelForm):
+    """Edit the school-class cohort metadata on a List (CLAUDE.md / *Cohort
+    metadata*). Only meaningful for school-class templates; other templates
+    simply leave these null and never participate in rollover.
+    """
+
+    class Meta:
+        model = List
+        fields = ["cohort_grade", "cohort_track", "curriculum_track"]
+        widgets = {
+            "cohort_track": forms.TextInput(attrs={"autocomplete": "off"}),
+        }
+
+    def clean_cohort_track(self):
+        raw = (self.cleaned_data.get("cohort_track") or "").strip().lower()
+        return raw or None
+
+
+class TransferInitiateForm(forms.Form):
+    """Pick the destination list for a single-PERSON class transfer. Restricted
+    to non-archived lists of the *same template* — cross-template moves are not
+    supported in v1 (CLAUDE.md / *Class transfer*).
+    """
+
+    to_list = forms.ModelChoiceField(
+        queryset=None,
+        label="Ziel-Liste",
+        empty_label="— Ziel-Liste wählen —",
+    )
+
+    def __init__(self, *args, source_list: List, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.source_list = source_list
+        self.fields["to_list"].queryset = (
+            List.objects.filter(
+                archived_at__isnull=True, template=source_list.template
+            )
+            .exclude(pk=source_list.pk)
+            .order_by("title")
+        )
+
+
+class AdminInviteForm(forms.Form):
+    """Create an AdminInviteToken: invite a successor (`handover`) or an
+    additional admin (`add`). Authentication on click is mandatory — the token
+    alone never confers rights (CLAUDE.md / *Admin handover*).
+    """
+
+    to_email = forms.EmailField(label="E-Mail-Adresse")
+    mode = forms.ChoiceField(
+        label="Modus",
+        choices=AdminInviteToken.Mode.choices,
+        initial=AdminInviteToken.Mode.ADD,
+    )
+
+    def clean_to_email(self):
+        return (self.cleaned_data.get("to_email") or "").strip().lower()

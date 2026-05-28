@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Kohorten-Daten — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Kohorten-Daten: {{ list_obj.title }}</h1>
+  <p style="color:#666">
+    Nur für Schulklassen relevant. Diese Felder steuern den Schuljahres-Übergang.
+    Kursstufe: Klassen-Buchstabe leer lassen.
+  </p>
+
+  {% if form.non_field_errors %}<div class="error">{{ form.non_field_errors }}</div>{% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+
+    <label for="{{ form.cohort_grade.id_for_label }}">{{ form.cohort_grade.label }}</label>
+    {{ form.cohort_grade }}
+    {% if form.cohort_grade.errors %}<div class="error">{{ form.cohort_grade.errors }}</div>{% endif %}
+
+    <label for="{{ form.cohort_track.id_for_label }}">{{ form.cohort_track.label }}</label>
+    {{ form.cohort_track }}
+    <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">a, b, c, … — leer für Kursstufe.</p>
+    {% if form.cohort_track.errors %}<div class="error">{{ form.cohort_track.errors }}</div>{% endif %}
+
+    <label for="{{ form.curriculum_track.id_for_label }}">{{ form.curriculum_track.label }}</label>
+    {{ form.curriculum_track }}
+    <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">
+      G8/G9 bestimmt den Übergangspfad. Leer = nimmt nicht am Übergang teil.
+    </p>
+    {% if form.curriculum_track.errors %}<div class="error">{{ form.curriculum_track.errors }}</div>{% endif %}
+
+    <p style="margin-top:1rem">
+      <button type="submit">Speichern</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

@@ -448,6 +448,9 @@ def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
     pending_join = request.session.pop("pending_join_token", None)
     if pending_join:
         return reverse("lists:join_via_token", kwargs={"token": pending_join})
+    pending_admin = request.session.pop("pending_admin_invite_token", None)
+    if pending_admin:
+        return reverse("lists:admin_invite_accept", kwargs={"token": pending_admin})
     return default
 
 

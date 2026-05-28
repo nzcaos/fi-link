@@ -17,23 +17,32 @@ from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from .forms import (
+    AdminInviteForm,
     AssociateWizardForm,
+    CohortEditForm,
     ListCreateForm,
     ListInviteForm,
     RecordEditForm,
     TestSendForm,
+    TransferInitiateForm,
 )
 from .models import (
+    AdminInviteToken,
     InboundMessage,
     List,
+    ListAccess,
     ListAdmin,
     ListInviteToken,
     ListJoinToken,
     ListRecord,
+    ListRecordValue,
     ListTemplate,
     MailReleaseToken,
+    PendingTransfer,
+    PersonRelationship,
     RecordManager,
 )
 
@@ -47,10 +56,14 @@ def _sanitize_header_value(value: str, max_length: int = 200) -> str:
     return " ".join((value or "").split())[:max_length]
 from .permissions import (
     can_user_admin_list,
+    can_user_decide_transfer,
     can_user_edit_record,
+    can_user_initiate_transfer,
     can_user_see_list,
     is_super_admin,
+    would_self_removal_leave_no_admin,
 )
+from . import lifecycle
 from .tasks import enqueue_list_fanout, list_recipient_emails
 from .visibility import can_user_see_subject_name, visible_attributes_for
 
@@ -763,4 +776,425 @@ def mail_release(request, token: str):
         request,
         "lists/mail_release_confirm.html",
         {"list_obj": lst, "rel": rel, "inbound": inbound},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: school-class lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _rollover_field_key(merge_key: str) -> str:
+    """Merge keys look like "G8:0" (curriculum:parent_id); ":" is awkward in
+    HTML form-field names, so swap it for "-" for the override field names.
+    """
+    return merge_key.replace(":", "-")
+
+
+@login_required
+def list_cohort_edit(request, pk: int):
+    """Edit a list's cohort metadata (grade / track / curriculum). List admins
+    and super-admin only — these fields drive the rollover.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins dürfen Kohorten-Daten ändern.")
+    if request.method == "POST":
+        form = CohortEditForm(request.POST, instance=lst)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Kohorten-Daten gespeichert.")
+            return redirect("lists:detail", pk=lst.pk)
+    else:
+        form = CohortEditForm(instance=lst)
+    return render(request, "lists/cohort_edit.html", {"list_obj": lst, "form": form})
+
+
+@login_required
+def rollover_preview(request):
+    """Super-admin-only rollover wizard: show the proposed action for every
+    school-class list. No side effects — execution is a separate POST.
+    """
+    if not is_super_admin(request.user):
+        return HttpResponseForbidden("Nur Super-Admins dürfen den Schuljahres-Übergang ausführen.")
+    plan = lifecycle.plan_rollover()
+    actions = [
+        {
+            "list_id": a.list_id,
+            "title": a.title,
+            "current_label": a.current_label,
+            "kind": a.kind,
+            "default_title": a.default_title,
+            "default_alias": a.default_alias,
+        }
+        for a in plan.actions
+    ]
+    merges = [
+        {
+            "field_key": _rollover_field_key(m.key),
+            "curriculum": m.curriculum,
+            "source_labels": m.source_labels,
+            "default_title": m.default_title,
+            "default_alias": m.default_alias,
+        }
+        for m in plan.merges
+    ]
+    return render(
+        request,
+        "lists/rollover_preview.html",
+        {"actions": actions, "merges": merges, "is_empty": plan.is_empty},
+    )
+
+
+@login_required
+@require_POST
+def rollover_execute(request):
+    if not is_super_admin(request.user):
+        return HttpResponseForbidden("Nur Super-Admins dürfen den Schuljahres-Übergang ausführen.")
+    plan = lifecycle.plan_rollover()
+    if plan.is_empty:
+        messages.info(request, "Keine Klassenlisten zum Hochstufen gefunden.")
+        return redirect("lists:rollover_preview")
+
+    overrides = {"list": {}, "merge": {}}
+    for a in plan.actions:
+        title = (request.POST.get(f"title_{a.list_id}") or "").strip()
+        alias = (request.POST.get(f"alias_{a.list_id}") or "").strip()
+        overrides["list"][a.list_id] = {"title": title, "alias": alias}
+    for m in plan.merges:
+        fk = _rollover_field_key(m.key)
+        title = (request.POST.get(f"merge_title_{fk}") or "").strip()
+        alias = (request.POST.get(f"merge_alias_{fk}") or "").strip()
+        overrides["merge"][m.key] = {"title": title, "alias": alias}
+
+    try:
+        result = lifecycle.execute_rollover(plan, overrides)
+    except Exception as exc:  # noqa: BLE001 — surface alias clashes etc. to the admin
+        messages.error(
+            request,
+            f"Übergang fehlgeschlagen (nichts geändert): {exc}. "
+            "Bitte E-Mail-Aliase auf Eindeutigkeit prüfen.",
+        )
+        return redirect("lists:rollover_preview")
+
+    messages.success(
+        request,
+        "Schuljahres-Übergang ausgeführt: "
+        f"{len(result['advanced'])} hochgestuft, "
+        f"{len(result['k1_to_k2'])} K1→K2, "
+        f"{len(result['merged_into'])} neue Kursstufe(n), "
+        f"{len(result['archived'])} archiviert.",
+    )
+    return redirect("lists:rollover_preview")
+
+
+@login_required
+def transfer_initiate(request, pk: int, record_pk: int):
+    """Request a single-PERSON class transfer. Creates a PENDING_TRANSFER that
+    the destination-list admin must accept (CLAUDE.md / *Class transfer*).
+    """
+    lst = get_object_or_404(List, pk=pk)
+    record = get_object_or_404(ListRecord, pk=record_pk, list=lst)
+    if not can_user_initiate_transfer(request.user, record):
+        return HttpResponseForbidden("Sie dürfen diesen Eintrag nicht umziehen.")
+
+    if request.method == "POST":
+        form = TransferInitiateForm(request.POST, source_list=lst)
+        if form.is_valid():
+            to_list = form.cleaned_data["to_list"]
+            existing = PendingTransfer.objects.filter(
+                person=record.subject,
+                from_list=lst,
+                to_list=to_list,
+                status=PendingTransfer.Status.PENDING,
+            ).exists()
+            if existing:
+                messages.info(request, "Für diese Person läuft bereits ein Antrag auf diese Liste.")
+            else:
+                PendingTransfer.objects.create(
+                    from_list=lst,
+                    to_list=to_list,
+                    person=record.subject,
+                    requested_by=request.user,
+                )
+                messages.success(
+                    request,
+                    f'Umzug von „{record.subject}" nach „{to_list.title}" beantragt — '
+                    "die Ziel-Admins müssen zustimmen.",
+                )
+            return redirect("lists:detail", pk=lst.pk)
+    else:
+        form = TransferInitiateForm(source_list=lst)
+    return render(
+        request,
+        "lists/transfer_initiate.html",
+        {"list_obj": lst, "record": record, "form": form},
+    )
+
+
+@login_required
+def transfers_pending(request, pk: int):
+    """Destination-admin queue: pending incoming transfers for this list."""
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins sehen die Umzugs-Anträge.")
+    transfers = (
+        PendingTransfer.objects.filter(to_list=lst, status=PendingTransfer.Status.PENDING)
+        .select_related("from_list", "person", "requested_by__person")
+    )
+    return render(
+        request,
+        "lists/transfers_pending.html",
+        {"list_obj": lst, "transfers": transfers},
+    )
+
+
+def _copy_record_to(src: ListRecord, dest_list: List, now) -> ListRecord | None:
+    """Copy one record (values + managers + manager access) into dest_list and
+    archive the source. Returns the new record, or None if the subject already
+    has an active record in dest (then the source is still archived).
+    """
+    if ListRecord.objects.filter(
+        list=dest_list, subject=src.subject, archived_at__isnull=True
+    ).exists():
+        src.archived_at = now
+        src.save(update_fields=["archived_at"])
+        return None
+    new = ListRecord.objects.create(
+        list=dest_list, subject=src.subject, role=src.role
+    )
+    for v in src.values.all():
+        ListRecordValue.objects.create(record=new, attribute=v.attribute, value=v.value)
+    for mgr in src.managers.all():
+        RecordManager.objects.get_or_create(
+            record=new, user=mgr.user, defaults={"basis": mgr.basis}
+        )
+        ListAccess.objects.get_or_create(list=dest_list, user=mgr.user)
+    src.archived_at = now
+    src.save(update_fields=["archived_at"])
+    return new
+
+
+@login_required
+@require_POST
+def transfer_decide(request, transfer_pk: int):
+    """Destination admin accepts or rejects a pending transfer. On accept the
+    moving Person's record plus their associates' records migrate to the
+    destination; source records are archived (trail kept).
+    """
+    transfer = get_object_or_404(
+        PendingTransfer.objects.select_related("from_list", "to_list", "person"),
+        pk=transfer_pk,
+    )
+    if not can_user_decide_transfer(request.user, transfer):
+        return HttpResponseForbidden("Nur Ziel-Admins entscheiden über den Umzug.")
+    if not transfer.is_pending:
+        messages.info(request, "Dieser Antrag wurde bereits bearbeitet.")
+        return redirect("lists:transfers_pending", pk=transfer.to_list_id)
+
+    action = request.POST.get("action")
+    now = timezone.now()
+    with transaction.atomic():
+        locked = PendingTransfer.objects.select_for_update().get(pk=transfer.pk)
+        if not locked.is_pending:
+            return redirect("lists:transfers_pending", pk=transfer.to_list_id)
+
+        if action == "reject":
+            locked.status = PendingTransfer.Status.REJECTED
+        else:
+            person = locked.person
+            src = locked.from_list
+            dest = locked.to_list
+            parent_ids = list(
+                PersonRelationship.objects.filter(subject_person=person).values_list(
+                    "related_person_id", flat=True
+                )
+            )
+            to_move = list(
+                ListRecord.objects.filter(
+                    list=src, subject=person, archived_at__isnull=True
+                )
+            ) + list(
+                ListRecord.objects.filter(
+                    list=src,
+                    subject_id__in=parent_ids,
+                    role=ListRecord.Role.ASSOCIATE,
+                    archived_at__isnull=True,
+                )
+            )
+            for rec in to_move:
+                _copy_record_to(rec, dest, now)
+            locked.status = PendingTransfer.Status.ACCEPTED
+
+        locked.resolved_at = now
+        locked.resolved_by = request.user
+        locked.save(update_fields=["status", "resolved_at", "resolved_by"])
+
+    if action == "reject":
+        messages.success(request, "Umzug abgelehnt.")
+    else:
+        messages.success(
+            request, f'„{transfer.person}" wurde nach „{transfer.to_list.title}" übernommen.'
+        )
+    return redirect("lists:transfers_pending", pk=transfer.to_list_id)
+
+
+@login_required
+@require_POST
+def record_remove(request, pk: int, record_pk: int):
+    """Self-removal: archive a record. Not transfer-gated (CLAUDE.md). When the
+    visitor removes *their own* record (opting out of the list) they also leave
+    the Benutzergruppe and drop any admin row — unless that would orphan the
+    list (zero admins), which is blocked with a "handover first" message.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    record = get_object_or_404(ListRecord, pk=record_pk, list=lst)
+    if not can_user_edit_record(request.user, record):
+        return HttpResponseForbidden("Sie dürfen diesen Eintrag nicht entfernen.")
+
+    leaving_self = record.subject_id == getattr(request.user, "person_id", None)
+    if leaving_self and would_self_removal_leave_no_admin(request.user, lst):
+        messages.error(
+            request,
+            "Sie sind der einzige Admin dieser Liste. Bitte übergeben Sie die "
+            "Admin-Rolle zuerst an eine Nachfolgerin/einen Nachfolger.",
+        )
+        return redirect("lists:detail", pk=lst.pk)
+
+    with transaction.atomic():
+        record.archived_at = timezone.now()
+        record.save(update_fields=["archived_at"])
+        if leaving_self:
+            ListAccess.objects.filter(list=lst, user=request.user).delete()
+            ListAdmin.objects.filter(list=lst, user=request.user).delete()
+    messages.success(request, "Eintrag entfernt.")
+    return redirect("lists:detail", pk=lst.pk)
+
+
+# ---------------------------------------------------------------------------
+# Admin handover (ADMIN_INVITE_TOKEN)
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def admin_manage(request, pk: int):
+    """List admins, plus a form to invite a successor (`handover`) or an extra
+    admin (`add`). Admins of the list and super-admin only.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins verwalten die Admin-Rollen.")
+
+    if request.method == "POST":
+        form = AdminInviteForm(request.POST)
+        if form.is_valid():
+            initiator_is_admin = ListAdmin.objects.filter(
+                list=lst, user=request.user
+            ).exists()
+            with transaction.atomic():
+                token = AdminInviteToken.objects.create(
+                    list=lst,
+                    from_user=request.user if initiator_is_admin else None,
+                    to_email=form.cleaned_data["to_email"],
+                    mode=form.cleaned_data["mode"],
+                )
+            link = request.build_absolute_uri(
+                reverse("lists:admin_invite_accept", kwargs={"token": token.token})
+            )
+            safe_title = _sanitize_header_value(lst.title)
+            send_mail(
+                subject=f'Admin-Einladung: Liste „{safe_title}"',
+                message=(
+                    f"Hallo,\n\n"
+                    f'Sie wurden als Admin der Liste „{safe_title}" vorgesehen.\n\n'
+                    f"Öffnen Sie den folgenden Link und melden Sie sich an, um die "
+                    f"Admin-Rolle zu übernehmen:\n{link}\n\n"
+                    f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[token.to_email],
+            )
+            messages.success(request, f"Admin-Einladung an {token.to_email} versendet.")
+            return redirect("lists:admin_manage", pk=lst.pk)
+    else:
+        form = AdminInviteForm()
+
+    admins = ListAdmin.objects.filter(list=lst).select_related("user__person")
+    pending = lst.admin_invitations.filter(consumed_at__isnull=True)
+    return render(
+        request,
+        "lists/admin_manage.html",
+        {"list_obj": lst, "form": form, "admins": admins, "pending": pending},
+    )
+
+
+def admin_invite_accept(request, token: str):
+    """Click handler for an AdminInviteToken. Authentication is mandatory — a
+    click alone never confers admin rights (CLAUDE.md / *Admin handover*).
+
+    M10 pattern: GET is side-effect-free (confirmation page); the token is
+    consumed only on the CSRF-protected POST. An unauthenticated POST stashes
+    the token and routes the visitor through login (existing USER) or
+    registration + passkey enrollment (not-yet-USER), returning here afterwards.
+    """
+    inv = get_object_or_404(AdminInviteToken.objects.select_related("list"), token=token)
+    if inv.is_consumed:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Diese Admin-Einladung wurde bereits eingelöst."},
+            status=410,
+        )
+    if inv.is_expired:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Diese Admin-Einladung ist abgelaufen."},
+            status=410,
+        )
+
+    lst = inv.list
+
+    if request.method == "POST":
+        if not request.user.is_authenticated:
+            request.session["pending_admin_invite_token"] = inv.token
+            from accounts.models import Person
+
+            is_user = Person.objects.filter(
+                email__iexact=inv.to_email, user__isnull=False
+            ).exists()
+            if is_user:
+                return redirect(
+                    reverse("accounts:login") + "?" + urlencode({"next": request.path})
+                )
+            return redirect(
+                reverse("accounts:register_start")
+                + "?"
+                + urlencode({"email": inv.to_email})
+            )
+
+        with transaction.atomic():
+            locked = AdminInviteToken.objects.select_for_update().get(pk=inv.pk)
+            if not locked.is_usable:
+                return redirect("lists:detail", pk=lst.pk)
+            ListAdmin.objects.get_or_create(list=locked.list, user=request.user)
+            if (
+                locked.mode == AdminInviteToken.Mode.HANDOVER
+                and locked.from_user_id
+                and locked.from_user_id != request.user.id
+            ):
+                ListAdmin.objects.filter(
+                    list=locked.list, user_id=locked.from_user_id
+                ).delete()
+            locked.consumed_at = timezone.now()
+            locked.save(update_fields=["consumed_at"])
+        messages.success(request, f'Sie sind jetzt Admin der Liste „{lst.title}".')
+        return redirect("lists:detail", pk=lst.pk)
+
+    # GET: confirmation page, no side effects.
+    next_action = "accept" if request.user.is_authenticated else "auth"
+    return render(
+        request,
+        "lists/admin_invite_confirm.html",
+        {"list_obj": lst, "invite": inv, "next_action": next_action},
     )

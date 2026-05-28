@@ -174,6 +174,53 @@ def can_user_edit_record(user, record: ListRecord) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle (Phase 6): transfers, self-removal, admin handover
+# ---------------------------------------------------------------------------
+
+
+def can_user_initiate_transfer(user, record: ListRecord) -> bool:
+    """Who may request a class transfer for a record (CLAUDE.md / *Class
+    transfer*): the source-list admin, a RecordManager of the moving Person,
+    the Person's own User, or super-admin. Archived records can't be moved.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if record.archived_at is not None:
+        return False
+    if user.is_superuser:
+        return True
+    if record.subject_id == getattr(user, "person_id", None):
+        return True
+    if RecordManager.objects.filter(record=record, user=user).exists():
+        return True
+    return ListAdmin.objects.filter(list=record.list, user=user).exists()
+
+
+def can_user_decide_transfer(user, transfer) -> bool:
+    """Only an admin of the *destination* list (or super-admin) accepts/rejects
+    a pending transfer — destination consent is the whole point of the two-step
+    flow.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superuser:
+        return True
+    return ListAdmin.objects.filter(list=transfer.to_list, user=user).exists()
+
+
+def would_self_removal_leave_no_admin(user, lst: List) -> bool:
+    """True iff `user` is the *only* admin of `lst`. Used to block a self-
+    removal / handover that would orphan the list (CLAUDE.md / *Admin
+    handover*: "must add a successor first"). A non-admin leaving never drops
+    the admin count, so this is False for them.
+    """
+    admin_ids = set(ListAdmin.objects.filter(list=lst).values_list("user_id", flat=True))
+    if getattr(user, "id", None) not in admin_ids:
+        return False
+    return len(admin_ids) <= 1
+
+
 def can_user_edit_record_visibility(user, record: ListRecord) -> bool:
     """B3: who may write the per-(record, attribute, audience) visibility
     matrix. Only the subject's own User, explicit RecordManagers, and the

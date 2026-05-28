@@ -15,8 +15,10 @@ from django.utils import timezone
 from django.core import mail
 
 from accounts.models import Person, User
+from . import lifecycle
 from .forms import ListCreateForm, ListInviteForm, RecordEditForm
 from .models import (
+    AdminInviteToken,
     List,
     ListAccess,
     ListAdmin,
@@ -27,6 +29,7 @@ from .models import (
     ListRecordAccess,
     ListRecordValue,
     ListTemplate,
+    PendingTransfer,
     PersonRelationship,
     RecordManager,
 )
@@ -3353,3 +3356,408 @@ class PeriodicMaintenanceTests(TestCase):
         fake.select.assert_called_once_with("INBOX")
         self.assertEqual(fake.store.call_count, 3)
         fake.expunge.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: school-class lifecycle
+# ---------------------------------------------------------------------------
+
+
+class RolloverPlanTests(TestCase):
+    def setUp(self):
+        self.t = ListTemplate.objects.create(name="Schulklasse")
+
+    def _mk(self, alias, grade, track, cur, **extra):
+        return List.objects.create(
+            title=alias,
+            email_alias=alias,
+            template=self.t,
+            visibility=List.Visibility.PRIVATE,
+            cohort_grade=grade,
+            cohort_track=track,
+            curriculum_track=cur,
+            **extra,
+        )
+
+    def test_g8_classification(self):
+        c9 = self._mk("9a", 9, "a", "G8")
+        c10a = self._mk("10a", 10, "a", "G8")
+        c10b = self._mk("10b", 10, "b", "G8")
+        k1 = self._mk("k1", 11, None, "G8")
+        k2 = self._mk("k2", 12, None, "G8")
+        plan = lifecycle.plan_rollover()
+        kinds = {a.list_id: a.kind for a in plan.actions}
+        self.assertEqual(kinds[c9.id], "advance")
+        self.assertEqual(kinds[k1.id], "k1_to_k2")
+        self.assertEqual(kinds[k2.id], "k2_archive")
+        self.assertNotIn(c10a.id, kinds)
+        self.assertNotIn(c10b.id, kinds)
+        self.assertEqual(len(plan.merges), 1)
+        self.assertEqual(set(plan.merges[0].source_list_ids), {c10a.id, c10b.id})
+        self.assertEqual(plan.merges[0].new_grade, 11)
+
+    def test_g9_last_lettered_is_grade_11(self):
+        self._mk("11a", 11, "a", "G9")
+        plan = lifecycle.plan_rollover()
+        self.assertEqual([a.kind for a in plan.actions], [])
+        self.assertEqual(len(plan.merges), 1)
+        self.assertEqual(plan.merges[0].new_grade, 12)
+
+    def test_non_school_lists_skipped(self):
+        List.objects.create(
+            title="Förderverein",
+            email_alias="fv",
+            template=self.t,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.assertTrue(lifecycle.plan_rollover().is_empty)
+
+
+class RolloverExecuteTests(TestCase):
+    def setUp(self):
+        self.t = ListTemplate.objects.create(name="Schulklasse")
+        self.parent = List.objects.create(
+            title="Elternbeirat", email_alias="eb", template=self.t
+        )
+        self.admin = _make_user(username="rolladmin")
+
+    def _mk(self, alias, grade, track, cur):
+        return List.objects.create(
+            title=alias,
+            email_alias=alias,
+            template=self.t,
+            visibility=List.Visibility.PRIVATE,
+            parent=self.parent,
+            cohort_grade=grade,
+            cohort_track=track,
+            curriculum_track=cur,
+        )
+
+    def test_full_g8_rollover(self):
+        c9 = self._mk("9a", 9, "a", "G8")
+        c10a = self._mk("10a", 10, "a", "G8")
+        c10b = self._mk("10b", 10, "b", "G8")
+        k1 = self._mk("k1", 11, None, "G8")
+        k2 = self._mk("k2", 12, None, "G8")
+        ListAdmin.objects.create(list=c10a, user=self.admin)
+
+        child = Person.objects.create(given_name="Kind", family_name="Test")
+        parent_user = _make_user(username="parent1", email="p@x.de")
+        rec_child = ListRecord.objects.create(
+            list=c10a, subject=child, role=ListRecord.Role.MEMBER
+        )
+        rec_parent = ListRecord.objects.create(
+            list=c10a, subject=parent_user.person, role=ListRecord.Role.ASSOCIATE
+        )
+        RecordManager.objects.create(
+            record=rec_child, user=parent_user, basis=RecordManager.Basis.GUARDIAN
+        )
+
+        plan = lifecycle.plan_rollover()
+        result = lifecycle.execute_rollover(plan)
+
+        for obj in (c9, c10a, c10b, k1, k2):
+            obj.refresh_from_db()
+
+        # 9a → 10a (mutated in place).
+        self.assertEqual((c9.cohort_grade, c9.cohort_track), (10, "a"))
+        self.assertEqual(c9.email_alias, "10a")
+        self.assertIsNone(c9.archived_at)
+
+        # K1 → K2.
+        self.assertEqual((k1.cohort_grade, k1.cohort_track), (12, None))
+        self.assertEqual(k1.email_alias, "k2")
+
+        # K2 archived, alias retired (no longer resolvable).
+        self.assertIsNotNone(k2.archived_at)
+        self.assertNotEqual(k2.email_alias, "k2")
+
+        # 10a / 10b merged → archived.
+        self.assertIsNotNone(c10a.archived_at)
+        self.assertIsNotNone(c10b.archived_at)
+
+        # New K1 list.
+        new_k1 = List.objects.get(id=result["merged_into"][0])
+        self.assertEqual((new_k1.cohort_grade, new_k1.cohort_track), (11, None))
+        self.assertEqual(new_k1.email_alias, "k1")
+        self.assertIsNone(new_k1.archived_at)
+
+        # Records re-parented onto the new K1.
+        rec_child.refresh_from_db()
+        rec_parent.refresh_from_db()
+        self.assertEqual(rec_child.list_id, new_k1.id)
+        self.assertEqual(rec_parent.list_id, new_k1.id)
+
+        # Source admin + manager access carried onto K1.
+        self.assertTrue(ListAdmin.objects.filter(list=new_k1, user=self.admin).exists())
+        self.assertTrue(ListAccess.objects.filter(list=new_k1, user=parent_user).exists())
+
+    def test_alias_swap_no_collision_on_advance_chain(self):
+        # 5a..7a all advance; aliases must shuffle up without a unique clash.
+        c5 = self._mk("5a", 5, "a", "G8")
+        c6 = self._mk("6a", 6, "a", "G8")
+        c7 = self._mk("7a", 7, "a", "G8")
+        lifecycle.execute_rollover(lifecycle.plan_rollover())
+        for obj in (c5, c6, c7):
+            obj.refresh_from_db()
+        self.assertEqual(c5.email_alias, "6a")
+        self.assertEqual(c6.email_alias, "7a")
+        self.assertEqual(c7.email_alias, "8a")
+
+
+class TransferFlowTests(TestCase):
+    def setUp(self):
+        self.t = ListTemplate.objects.create(name="Schulklasse")
+        self.attr = ListAttribute.objects.create(
+            template=self.t, name="Tel", type=ListAttribute.Type.PHONE
+        )
+        self.src = List.objects.create(
+            title="8a", email_alias="8a", template=self.t,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.dest = List.objects.create(
+            title="9b", email_alias="9b", template=self.t,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.dest_admin = _make_user(username="destadmin")
+        ListAdmin.objects.create(list=self.dest, user=self.dest_admin)
+        self.parent = _make_user(username="parent", email="m@x.de")
+        self.child = Person.objects.create(given_name="Kind", family_name="Müller")
+        self.rec_child = ListRecord.objects.create(
+            list=self.src, subject=self.child, role=ListRecord.Role.MEMBER
+        )
+        self.rec_parent = ListRecord.objects.create(
+            list=self.src, subject=self.parent.person, role=ListRecord.Role.ASSOCIATE
+        )
+        RecordManager.objects.create(
+            record=self.rec_child, user=self.parent, basis=RecordManager.Basis.GUARDIAN
+        )
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=self.parent.person, role="Mutter von"
+        )
+        ListRecordValue.objects.create(
+            record=self.rec_child, attribute=self.attr, value="0151"
+        )
+        self.client = Client()
+
+    def test_initiate_creates_pending(self):
+        self.client.force_login(self.parent)
+        resp = self.client.post(
+            reverse("lists:transfer_initiate", kwargs={"pk": self.src.pk, "record_pk": self.rec_child.pk}),
+            {"to_list": self.dest.pk},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            PendingTransfer.objects.filter(
+                person=self.child, from_list=self.src, to_list=self.dest, status="pending"
+            ).exists()
+        )
+
+    def test_accept_migrates_member_and_associate(self):
+        transfer = PendingTransfer.objects.create(
+            from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
+        )
+        self.client.force_login(self.dest_admin)
+        resp = self.client.post(
+            reverse("lists:transfer_decide", kwargs={"transfer_pk": transfer.pk}),
+            {"action": "accept"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, "accepted")
+
+        self.rec_child.refresh_from_db()
+        self.rec_parent.refresh_from_db()
+        self.assertIsNotNone(self.rec_child.archived_at)
+        self.assertIsNotNone(self.rec_parent.archived_at)
+
+        new_child = ListRecord.objects.get(
+            list=self.dest, subject=self.child, archived_at__isnull=True
+        )
+        self.assertTrue(
+            ListRecord.objects.filter(
+                list=self.dest, subject=self.parent.person, archived_at__isnull=True
+            ).exists()
+        )
+        self.assertEqual(
+            ListRecordValue.objects.get(record=new_child, attribute=self.attr).value, "0151"
+        )
+        self.assertTrue(RecordManager.objects.filter(record=new_child, user=self.parent).exists())
+        self.assertTrue(ListAccess.objects.filter(list=self.dest, user=self.parent).exists())
+
+    def test_reject_keeps_source(self):
+        transfer = PendingTransfer.objects.create(
+            from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
+        )
+        self.client.force_login(self.dest_admin)
+        self.client.post(
+            reverse("lists:transfer_decide", kwargs={"transfer_pk": transfer.pk}),
+            {"action": "reject"},
+        )
+        transfer.refresh_from_db()
+        self.assertEqual(transfer.status, "rejected")
+        self.rec_child.refresh_from_db()
+        self.assertIsNone(self.rec_child.archived_at)
+
+    def test_non_destination_admin_cannot_decide(self):
+        transfer = PendingTransfer.objects.create(
+            from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
+        )
+        outsider = _make_user(username="outsider")
+        self.client.force_login(outsider)
+        resp = self.client.post(
+            reverse("lists:transfer_decide", kwargs={"transfer_pk": transfer.pk}),
+            {"action": "accept"},
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
+class SelfRemovalTests(TestCase):
+    def setUp(self):
+        self.t = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="5a", email_alias="5a", template=self.t,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.user = _make_user(username="u1", email="u1@x.de")
+        self.rec = ListRecord.objects.create(
+            list=self.lst, subject=self.user.person, role=ListRecord.Role.MEMBER
+        )
+        RecordManager.objects.create(
+            record=self.rec, user=self.user, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        ListAccess.objects.create(list=self.lst, user=self.user)
+        self.client = Client()
+
+    def test_remove_own_record_when_not_admin(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("lists:record_remove", kwargs={"pk": self.lst.pk, "record_pk": self.rec.pk})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.rec.refresh_from_db()
+        self.assertIsNotNone(self.rec.archived_at)
+        self.assertFalse(ListAccess.objects.filter(list=self.lst, user=self.user).exists())
+
+    def test_sole_admin_self_removal_blocked(self):
+        ListAdmin.objects.create(list=self.lst, user=self.user)
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("lists:record_remove", kwargs={"pk": self.lst.pk, "record_pk": self.rec.pk})
+        )
+        self.rec.refresh_from_db()
+        self.assertIsNone(self.rec.archived_at)
+        self.assertTrue(ListAdmin.objects.filter(list=self.lst, user=self.user).exists())
+
+    def test_self_removal_allowed_with_second_admin(self):
+        ListAdmin.objects.create(list=self.lst, user=self.user)
+        ListAdmin.objects.create(list=self.lst, user=_make_user(username="admin2"))
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("lists:record_remove", kwargs={"pk": self.lst.pk, "record_pk": self.rec.pk})
+        )
+        self.rec.refresh_from_db()
+        self.assertIsNotNone(self.rec.archived_at)
+        self.assertFalse(ListAdmin.objects.filter(list=self.lst, user=self.user).exists())
+
+    def test_guardian_removes_managed_child(self):
+        child = Person.objects.create(given_name="Kind", family_name="X")
+        child_rec = ListRecord.objects.create(
+            list=self.lst, subject=child, role=ListRecord.Role.MEMBER
+        )
+        RecordManager.objects.create(
+            record=child_rec, user=self.user, basis=RecordManager.Basis.GUARDIAN
+        )
+        self.client.force_login(self.user)
+        self.client.post(
+            reverse("lists:record_remove", kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk})
+        )
+        child_rec.refresh_from_db()
+        self.assertIsNotNone(child_rec.archived_at)
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=self.user).exists())
+
+
+class AdminHandoverTests(TestCase):
+    def setUp(self):
+        self.t = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="5a", email_alias="5a", template=self.t,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_a = _make_user(username="adminA", email="a@x.de")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_a)
+        self.client = Client()
+
+    def test_admin_manage_creates_token_and_mail(self):
+        self.client.force_login(self.admin_a)
+        resp = self.client.post(
+            reverse("lists:admin_manage", kwargs={"pk": self.lst.pk}),
+            {"to_email": "succ@x.de", "mode": "add"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        tok = AdminInviteToken.objects.get(list=self.lst, to_email="succ@x.de")
+        self.assertEqual(tok.mode, "add")
+        self.assertEqual(tok.from_user, self.admin_a)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_add_mode_adds_admin(self):
+        b = _make_user(username="adminB", email="b@x.de")
+        tok = AdminInviteToken.objects.create(
+            list=self.lst, from_user=self.admin_a, to_email="b@x.de",
+            mode=AdminInviteToken.Mode.ADD,
+        )
+        self.client.force_login(b)
+        resp = self.client.post(
+            reverse("lists:admin_invite_accept", kwargs={"token": tok.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(ListAdmin.objects.filter(list=self.lst, user=b).exists())
+        self.assertTrue(ListAdmin.objects.filter(list=self.lst, user=self.admin_a).exists())
+        tok.refresh_from_db()
+        self.assertIsNotNone(tok.consumed_at)
+
+    def test_handover_removes_initiator(self):
+        c = _make_user(username="adminC", email="c@x.de")
+        tok = AdminInviteToken.objects.create(
+            list=self.lst, from_user=self.admin_a, to_email="c@x.de",
+            mode=AdminInviteToken.Mode.HANDOVER,
+        )
+        self.client.force_login(c)
+        self.client.post(
+            reverse("lists:admin_invite_accept", kwargs={"token": tok.token})
+        )
+        self.assertTrue(ListAdmin.objects.filter(list=self.lst, user=c).exists())
+        self.assertFalse(ListAdmin.objects.filter(list=self.lst, user=self.admin_a).exists())
+
+    def test_unauth_post_does_not_consume(self):
+        tok = AdminInviteToken.objects.create(
+            list=self.lst, from_user=self.admin_a, to_email="new@x.de",
+            mode=AdminInviteToken.Mode.ADD,
+        )
+        resp = self.client.post(
+            reverse("lists:admin_invite_accept", kwargs={"token": tok.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        tok.refresh_from_db()
+        self.assertIsNone(tok.consumed_at)
+        self.assertEqual(self.client.session.get("pending_admin_invite_token"), tok.token)
+
+    def test_get_is_side_effect_free(self):
+        b = _make_user(username="adminB", email="b@x.de")
+        tok = AdminInviteToken.objects.create(
+            list=self.lst, from_user=self.admin_a, to_email="b@x.de",
+            mode=AdminInviteToken.Mode.ADD,
+        )
+        self.client.force_login(b)
+        resp = self.client.get(
+            reverse("lists:admin_invite_accept", kwargs={"token": tok.token})
+        )
+        self.assertEqual(resp.status_code, 200)
+        tok.refresh_from_db()
+        self.assertIsNone(tok.consumed_at)
+        self.assertFalse(ListAdmin.objects.filter(list=self.lst, user=b).exists())
+
+    def test_non_admin_cannot_manage(self):
+        self.client.force_login(_make_user(username="outsider"))
+        resp = self.client.get(reverse("lists:admin_manage", kwargs={"pk": self.lst.pk}))
+        self.assertEqual(resp.status_code, 403)

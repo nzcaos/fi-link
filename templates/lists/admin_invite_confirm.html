@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Admin-Einladung zu „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Admin-Rolle für „{{ list_obj.title }}"</h1>
+
+  {% if next_action == "auth" %}
+    <p>
+      Um die Admin-Rolle zu übernehmen, müssen Sie sich zuerst anmelden — oder,
+      falls Sie noch kein Konto haben, sich registrieren und einen Passkey
+      einrichten. Ein Klick allein überträgt keine Rechte.
+    </p>
+    <form method="post" action="{% url 'lists:admin_invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Anmelden und Admin-Rolle übernehmen</button>
+    </form>
+  {% else %}
+    <p>Sie sind angemeldet und können die Admin-Rolle jetzt übernehmen.</p>
+    <form method="post" action="{% url 'lists:admin_invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Admin-Rolle übernehmen</button>
+    </form>
+  {% endif %}
+
+  <p style="margin-top:1rem;color:#666;font-size:0.85rem">
+    Falls Sie diese Einladung nicht erwartet haben, ignorieren Sie diese Seite —
+    es wird nichts gespeichert, solange Sie nicht oben bestätigen.
+  </p>
+{% endblock %}

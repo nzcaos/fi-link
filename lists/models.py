@@ -215,7 +215,11 @@ class List(models.Model):
         "Klassenstufe",
         null=True,
         blank=True,
-        help_text="5–12. Nur für Schulklassen-Vorlagen.",
+        help_text=(
+            "Klassenstufe der Lettern-Klassen (5–10 G8, 5–11 G9). Kursstufe wird "
+            "über cohort_track=leer markiert; K1/K2 sind die Stufen oberhalb der "
+            "letzten Lettern-Klasse (G8: 11/12, G9: 12/13). Nur Schulklassen-Vorlagen."
+        ),
     )
     cohort_track = models.CharField(
         "Klassen-Buchstabe",
@@ -997,6 +1001,162 @@ class MailReleaseToken(models.Model):
 
     def __str__(self) -> str:
         return f"{self.kind} release {self.token[:8]}… → {self.list}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_consumed(self) -> bool:
+        return self.consumed_at is not None
+
+    @property
+    def is_usable(self) -> bool:
+        return not (self.is_consumed or self.is_expired)
+
+
+# ---------------------------------------------------------------------------
+# School-class lifecycle (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class PendingTransfer(models.Model):
+    """A single PERSON's pending move between two lists, awaiting the
+    destination-list admin's consent (CLAUDE.md / *Class transfer*).
+
+    Distinct from cohort rollover (which is a batch operation): this models one
+    student repeating a grade or switching track. The two-step flow protects
+    the destination list — an admin there must accept before the record (and
+    its associate records) migrate over.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "ausstehend"
+        ACCEPTED = "accepted", "angenommen"
+        REJECTED = "rejected", "abgelehnt"
+
+    from_list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="outgoing_transfers",
+        verbose_name="von Liste",
+    )
+    to_list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="incoming_transfers",
+        verbose_name="nach Liste",
+    )
+    person = models.ForeignKey(
+        "accounts.Person",
+        on_delete=models.CASCADE,
+        related_name="pending_transfers",
+        verbose_name="Person",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="requested_transfers",
+        verbose_name="beantragt von",
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        "Status",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    resolved_at = models.DateTimeField("entschieden am", null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="resolved_transfers",
+        verbose_name="entschieden von",
+    )
+
+    class Meta:
+        verbose_name = "Klassenwechsel-Antrag"
+        verbose_name_plural = "Klassenwechsel-Anträge"
+        ordering = ["-requested_at"]
+        constraints = [
+            # At most one open transfer per (person, from, to). Resolved rows
+            # stay for the audit trail and don't block a future re-request.
+            models.UniqueConstraint(
+                fields=["person", "from_list", "to_list"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_transfer_per_person_route",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.person}: {self.from_list} → {self.to_list} ({self.status})"
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == self.Status.PENDING
+
+
+class AdminInviteToken(models.Model):
+    """Hands a list's admin rights to a successor (CLAUDE.md / *Admin handover*).
+
+    Does NOT grant membership — that is `ListInviteToken`'s job. A click alone
+    never confers admin rights: the recipient must authenticate (passkey login,
+    or registration + enrollment if not yet a USER) before the token is
+    consumed. This blocks "compromised mailbox = instant admin takeover".
+
+    - ``add``      — insert the successor as an additional LIST_ADMIN.
+    - ``handover`` — insert the successor and, in the same transaction, remove
+      the initiating admin's LIST_ADMIN row.
+    """
+
+    class Mode(models.TextChoices):
+        HANDOVER = "handover", "Übergabe (ich gebe ab)"
+        ADD = "add", "Hinzufügen (zusätzlicher Admin)"
+
+    token = models.CharField(
+        "Token",
+        max_length=64,
+        unique=True,
+        default=_gen_invite_token,
+    )
+    list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="admin_invitations",
+        verbose_name="Liste",
+    )
+    from_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="sent_admin_invitations",
+        verbose_name="übergebender Admin",
+        help_text="Leer, wenn von einem Super-Admin angestoßen.",
+    )
+    to_email = models.EmailField(
+        "Ziel-E-Mail",
+        help_text="Adresse, an die die Admin-Einladung versendet wird.",
+    )
+    mode = models.CharField(
+        "Modus",
+        max_length=20,
+        choices=Mode.choices,
+        default=Mode.ADD,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("läuft ab", default=_default_invite_expiry)
+    consumed_at = models.DateTimeField("eingelöst am", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Admin-Einladung"
+        verbose_name_plural = "Admin-Einladungen"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.mode} {self.to_email} → {self.list}"
 
     @property
     def is_expired(self) -> bool:

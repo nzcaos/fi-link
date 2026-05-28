@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Schuljahres-Übergang — Fichtelink{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:index' %}">← Zurück zur Übersicht</a></p>
+  <h1>Schuljahres-Übergang</h1>
+  <p style="color:#666">
+    Vorschau aller Klassenlisten mit ihrer geplanten Aktion. Titel und E-Mail-Alias
+    sind editierbar; prüfen, anpassen, dann ausführen. <strong>Die Aktion ist
+    nicht automatisiert reversibel</strong> — bitte vorher ein Backup ziehen.
+  </p>
+
+  {% if is_empty %}
+    <div class="info">Keine Klassenlisten mit gesetztem Schulzweig (G8/G9) gefunden.</div>
+  {% else %}
+    <form method="post" action="{% url 'lists:rollover_execute' %}">
+      {% csrf_token %}
+
+      {% if actions %}
+        <h2 style="font-size:1.1rem;margin-top:1.5rem">Klassen / Kursstufen</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem">
+          <thead>
+            <tr style="background:#f4f4f4">
+              <th style="text-align:left;padding:0.4rem">Aktuell</th>
+              <th style="text-align:left;padding:0.4rem">Aktion</th>
+              <th style="text-align:left;padding:0.4rem">Neuer Titel</th>
+              <th style="text-align:left;padding:0.4rem">Neuer Alias</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in actions %}
+              <tr>
+                <td style="padding:0.4rem;border-bottom:1px solid #eee">
+                  {{ a.current_label }}<br><span style="color:#888">{{ a.title }}</span>
+                </td>
+                <td style="padding:0.4rem;border-bottom:1px solid #eee">
+                  {% if a.kind == "advance" %}hochstufen
+                  {% elif a.kind == "k1_to_k2" %}K1 → K2
+                  {% elif a.kind == "k2_archive" %}<span style="color:#b00020">K2 endet → archivieren</span>
+                  {% endif %}
+                </td>
+                {% if a.kind == "k2_archive" %}
+                  <td style="padding:0.4rem;border-bottom:1px solid #eee" colspan="2"><em>wird archiviert</em></td>
+                {% else %}
+                  <td style="padding:0.4rem;border-bottom:1px solid #eee">
+                    <input type="text" name="title_{{ a.list_id }}" value="{{ a.default_title }}">
+                  </td>
+                  <td style="padding:0.4rem;border-bottom:1px solid #eee">
+                    <input type="text" name="alias_{{ a.list_id }}" value="{{ a.default_alias }}">
+                  </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      {% if merges %}
+        <h2 style="font-size:1.1rem;margin-top:1.5rem">Neue Kursstufen (Zusammenführung)</h2>
+        {% for m in merges %}
+          <div style="border:1px solid #ddd;border-radius:6px;padding:0.75rem;margin:0.5rem 0">
+            <p style="margin:0 0 0.5rem">
+              {{ m.curriculum }}: {{ m.source_labels|join:", " }} → <strong>neue K1</strong>
+              (Mitglieder werden übernommen, Quell-Listen werden archiviert)
+            </p>
+            <label>Titel der neuen Kursstufe</label>
+            <input type="text" name="merge_title_{{ m.field_key }}" value="{{ m.default_title }}">
+            <label>E-Mail-Alias</label>
+            <input type="text" name="merge_alias_{{ m.field_key }}" value="{{ m.default_alias }}">
+          </div>
+        {% endfor %}
+      {% endif %}
+
+      <p style="margin-top:1.5rem">
+        <button type="submit" onclick="return confirm('Schuljahres-Übergang jetzt ausführen? Diese Aktion ist nicht automatisch reversibel.')">
+          Übergang ausführen
+        </button>
+        <a href="{% url 'lists:index' %}"><button type="button" class="secondary">Abbrechen</button></a>
+      </p>
+    </form>
+  {% endif %}
+{% endblock %}

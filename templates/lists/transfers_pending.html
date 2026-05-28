@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Umzugs-Anträge — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Eingehende Umzugs-Anträge</h1>
+  <p style="color:#666">Liste: <strong>{{ list_obj.title }}</strong></p>
+
+  {% if transfers %}
+    <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+      <thead>
+        <tr style="background:#f4f4f4">
+          <th style="text-align:left;padding:0.4rem">Person</th>
+          <th style="text-align:left;padding:0.4rem">von Liste</th>
+          <th style="text-align:left;padding:0.4rem">beantragt von</th>
+          <th style="padding:0.4rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in transfers %}
+          <tr>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ t.person }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ t.from_list.title }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ t.requested_by.person }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;text-align:right;white-space:nowrap">
+              <form method="post" action="{% url 'lists:transfer_decide' transfer_pk=t.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="accept">
+                <button type="submit" style="padding:0.3rem 0.7rem">Übernehmen</button>
+              </form>
+              <form method="post" action="{% url 'lists:transfer_decide' transfer_pk=t.pk %}" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="reject">
+                <button type="submit" class="secondary" style="padding:0.3rem 0.7rem">Ablehnen</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666">Keine offenen Umzugs-Anträge.</p>
+  {% endif %}
+{% endblock %}
