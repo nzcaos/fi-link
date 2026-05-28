@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Mail-Freigabe für „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block content %}
+  {% if rel.kind == "member" %}
+    <h1>Ihre Mail an „{{ list_obj.title }}" freigeben</h1>
+    <p>
+      Sie haben eine Mail an die Liste „{{ list_obj.title }}" gesendet. Aus
+      Sicherheitsgründen wird sie erst nach Ihrer Bestätigung an die
+      Mitglieder weitergeleitet.
+    </p>
+  {% else %}
+    <h1>Freigabe einer Mail an „{{ list_obj.title }}"</h1>
+    <p>
+      {{ inbound.from_email|default:"(unbekannter Absender)" }} möchte eine Mail
+      an die Liste „{{ list_obj.title }}" senden, ist aber kein berechtigter
+      Absender. Als Listen-Admin entscheiden Sie über die Weiterleitung.
+    </p>
+  {% endif %}
+
+  <table style="margin:1rem 0;border-collapse:collapse">
+    <tr><td style="padding:.2rem .8rem .2rem 0;color:#666">Absender</td>
+        <td>{{ inbound.from_email|default:"(unbekannt)" }}</td></tr>
+    <tr><td style="padding:.2rem .8rem .2rem 0;color:#666">Betreff</td>
+        <td>{{ inbound.subject|default:"(kein Betreff)" }}</td></tr>
+    <tr><td style="padding:.2rem .8rem .2rem 0;color:#666">Empfangen</td>
+        <td>{{ inbound.received_at|date:"d.m.Y H:i" }}</td></tr>
+  </table>
+
+  <form method="post" action="{% url 'lists:mail_release' token=rel.token %}">
+    {% csrf_token %}
+    {% if rel.offer_anonymize %}
+      <p style="margin:1rem 0">
+        <label>
+          <input type="checkbox" name="anonymize" value="1" checked>
+          Meine Absender-Adresse nicht anzeigen (anonymisiert weiterleiten).
+          Antworten erreichen mich trotzdem.
+        </label>
+      </p>
+    {% endif %}
+    <button type="submit" name="action" value="approve">Weiterleiten</button>
+    <button type="submit" name="action" value="reject"
+            style="margin-left:.5rem">Ablehnen</button>
+  </form>
+
+  <p style="margin-top:1rem;color:#666;font-size:0.85rem">
+    Dieser Link läuft am {{ rel.expires_at|date:"d.m.Y H:i" }} ab. Solange Sie
+    nicht oben bestätigen, wird nichts weitergeleitet.
+  </p>
+{% endblock %}

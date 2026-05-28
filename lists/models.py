@@ -32,6 +32,17 @@ def _default_join_expiry():
     return timezone.now() + timedelta(hours=48)
 
 
+def _default_release_expiry():
+    """7-day default for mail-release/approval tokens.
+
+    Matches the IMAP 7-day grace period (CLAUDE.md / "Retention"): after that
+    the raw message may be EXPUNGE'd from the catch-all anyway, and we keep the
+    `raw_eml` copy in InboundMessage for the metadata-retention window, so a
+    release link living longer than the grace would be of dubious value.
+    """
+    return timezone.now() + timedelta(days=7)
+
+
 def _gen_alias_token() -> str:
     """Per-outbound-message alias/bounce token.
 
@@ -905,6 +916,99 @@ class InboundMessage(models.Model):
 
     def __str__(self) -> str:
         return f"{self.message_id or '(no Message-ID)'} → {self.to_alias}"
+
+
+# ---------------------------------------------------------------------------
+# Mail release / approval (Phase 5b)
+# ---------------------------------------------------------------------------
+
+
+class MailReleaseToken(models.Model):
+    """A pending forward awaiting a confirmation click.
+
+    Two kinds, mirroring the spec's two release paths
+    (CLAUDE.md / "Mailing-list behavior"):
+
+    - ``MEMBER`` — the sender is a member of the target list (or a permitted
+      cross-list sender whose grant requires a release click). The release
+      link is mailed to the **sender**: clicking it proves access to the
+      claimed mailbox, which is the anti-spoofing guarantee. The member may
+      additionally choose to anonymise their From: address at click time when
+      ``offer_anonymize`` is set.
+    - ``ADMIN`` — the sender is neither a member nor permitted. The release
+      link is mailed to the list's **admins**, who decide whether to forward.
+
+    The token references the InboundMessage rather than copying the body —
+    ``InboundMessage.raw_eml`` is the canonical source, re-parsed at click time
+    to build the forward. Tokens are swept by a periodic task and cascade away
+    with their InboundMessage when metadata retention prunes it.
+    """
+
+    class Kind(models.TextChoices):
+        MEMBER = "member", "Mitglieder-Freigabe"
+        ADMIN = "admin", "Admin-Freigabe"
+
+    class Resolution(models.TextChoices):
+        FORWARDED = "forwarded", "weitergeleitet"
+        REJECTED = "rejected", "abgelehnt"
+
+    token = models.CharField(
+        "Token",
+        max_length=64,
+        unique=True,
+        default=_gen_invite_token,
+    )
+    inbound = models.ForeignKey(
+        "InboundMessage",
+        on_delete=models.CASCADE,
+        related_name="release_tokens",
+        verbose_name="eingegangene Nachricht",
+    )
+    list = models.ForeignKey(
+        List,
+        on_delete=models.CASCADE,
+        related_name="release_tokens",
+        verbose_name="Ziel-Liste",
+    )
+    kind = models.CharField("Art", max_length=20, choices=Kind.choices)
+    offer_anonymize = models.BooleanField(
+        "Anonymisierung anbieten",
+        default=False,
+        help_text=(
+            "Nur bei MEMBER-Freigabe echter Mitglieder: der Sender darf beim "
+            "Klick wählen, ob seine Absender-Adresse durch einen Alias ersetzt "
+            "wird."
+        ),
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("läuft ab", default=_default_release_expiry)
+    consumed_at = models.DateTimeField("eingelöst am", null=True, blank=True)
+    resolution = models.CharField(
+        "Ergebnis",
+        max_length=20,
+        choices=Resolution.choices,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Mail-Freigabe-Token"
+        verbose_name_plural = "Mail-Freigabe-Tokens"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.kind} release {self.token[:8]}… → {self.list}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_consumed(self) -> bool:
+        return self.consumed_at is not None
+
+    @property
+    def is_usable(self) -> bool:
+        return not (self.is_consumed or self.is_expired)
 
 
 # ---------------------------------------------------------------------------

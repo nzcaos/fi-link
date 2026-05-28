@@ -168,6 +168,17 @@ IMAP_FALLBACK_POLL_INTERVAL = int(
     os.environ.get("IMAP_FALLBACK_POLL_INTERVAL", str(5 * 60))
 )
 
+# Phase 5b retention (CLAUDE.md / "Retention").
+# IMAP EXPUNGE grace: processed (\Seen) catch-all mail is deleted from the
+# server this many days after receipt — long enough that an operator can still
+# inspect a raw message on the IMAP side during that window.
+IMAP_EXPUNGE_GRACE_DAYS = int(os.environ.get("IMAP_EXPUNGE_GRACE_DAYS", "7"))
+# Local Inbound/Outbound metadata retention: rows older than this are pruned
+# by a periodic task. Kept 30–90 days for bounce correlation; default 90.
+MAIL_METADATA_RETENTION_DAYS = int(
+    os.environ.get("MAIL_METADATA_RETENTION_DAYS", "90")
+)
+
 LOGIN_URL = "/auth/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"

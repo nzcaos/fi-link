@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Mail-Freigabe — Fichtelink{% endblock %}
+{% block content %}
+  {% if action == "forwarded" %}
+    <h1>Mail freigegeben</h1>
+    <p>
+      Die Mail an „{{ list_obj.title }}" wird an die Mitglieder weitergeleitet.
+      {% if anonymized %}Ihre Absender-Adresse wurde anonymisiert.{% endif %}
+    </p>
+  {% else %}
+    <h1>Mail abgelehnt</h1>
+    <p>
+      Die Mail an „{{ list_obj.title }}" wurde nicht weitergeleitet.
+    </p>
+  {% endif %}
+{% endblock %}

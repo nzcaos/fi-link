@@ -2700,3 +2700,656 @@ class ImapIdleCommandTests(TestCase):
         with override_settings(IMAP_HOST="imap.example.org", IMAP_USER=""):
             with self.assertRaises(CommandError):
                 call_command("imap_idle_daemon")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5b — Inbound decision pipeline
+# ---------------------------------------------------------------------------
+
+
+from unittest.mock import MagicMock
+
+from .inbound_pipeline import (
+    Outcome,
+    decide,
+    extract_subject_and_body,
+    identify_sender_users,
+    looks_like_dsn,
+    parse_dsn,
+    parse_message,
+    referenced_message_ids,
+    resolve_send_permission,
+    sender_is_member,
+    suppression_reason,
+)
+from .models import ListSendPermission, MailReleaseToken
+from .tasks import (
+    expire_release_tokens,
+    imap_expunge_processed,
+    prune_mail_metadata,
+    send_notification_mail,
+    send_outbound_message,
+)
+
+
+def _dsn_eml(to_addr: str = "bounce-TOK@caos.cloud") -> bytes:
+    """A minimal RFC-3464 multipart/report delivery-status notification."""
+    return (
+        "From: MAILER-DAEMON@provider.example\r\n"
+        f"To: {to_addr}\r\n"
+        "Subject: Undelivered Mail Returned to Sender\r\n"
+        "Return-Path: <>\r\n"
+        'Content-Type: multipart/report; report-type=delivery-status; boundary="B"\r\n'
+        "MIME-Version: 1.0\r\n"
+        "\r\n"
+        "--B\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "Delivery to the following recipient failed.\r\n"
+        "--B\r\n"
+        "Content-Type: message/delivery-status\r\n\r\n"
+        "Reporting-MTA: dns; provider.example\r\n\r\n"
+        "Final-Recipient: rfc822; dead@example.org\r\n"
+        "Action: failed\r\n"
+        "Status: 5.1.1\r\n"
+        "Diagnostic-Code: smtp; 550 5.1.1 user unknown\r\n"
+        "--B--\r\n"
+    ).encode("utf-8")
+
+
+class SuppressionTests(TestCase):
+    def _msg(self, **headers):
+        return parse_message(_eml(extra_headers=headers))
+
+    def test_auto_submitted_suppresses(self):
+        msg = self._msg(**{"Auto-Submitted": "auto-replied"})
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=False))
+
+    def test_auto_submitted_no_passes(self):
+        msg = self._msg(**{"Auto-Submitted": "no"})
+        self.assertIsNone(suppression_reason(msg, check_in_reply_to=False))
+
+    def test_empty_return_path_suppresses(self):
+        msg = self._msg(**{"Return-Path": "<>"})
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=False))
+
+    def test_precedence_bulk_suppresses(self):
+        msg = self._msg(Precedence="bulk")
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=False))
+
+    def test_clean_message_passes(self):
+        self.assertIsNone(suppression_reason(self._msg(), check_in_reply_to=True))
+
+    def test_referenced_message_ids_parsed(self):
+        msg = self._msg(**{
+            "In-Reply-To": "<a@x>",
+            "References": "<b@x> <c@x>",
+        })
+        self.assertEqual(referenced_message_ids(msg), {"a@x", "b@x", "c@x"})
+
+    def test_in_reply_to_matching_outbound_suppressed_only_when_checked(self):
+        template = ListTemplate.objects.create(name="T")
+        lst = List.objects.create(title="L", email_alias="l", template=template)
+        OutboundMessage.objects.create(
+            list=lst,
+            message_id="out1@caos.cloud",
+            alias_token="A1",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+        msg = self._msg(**{"In-Reply-To": "<out1@caos.cloud>"})
+        # List path checks In-Reply-To → suppressed.
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=True))
+        # Alias-reply path must NOT check it (always matches by construction).
+        self.assertIsNone(suppression_reason(msg, check_in_reply_to=False))
+
+
+class SenderIdentificationTests(TestCase):
+    def test_resolves_by_email_case_insensitive(self):
+        u = _make_user(username="a", email="parent@example.org")
+        self.assertEqual(list(identify_sender_users("PARENT@example.org")), [u])
+
+    def test_shared_mailbox_returns_all_users(self):
+        u1 = _make_user(username="a", email="fam@example.org")
+        u2 = _make_user(username="b", email="fam@example.org")
+        self.assertEqual(set(identify_sender_users("fam@example.org")), {u1, u2})
+
+    def test_inactive_user_excluded(self):
+        _make_user(username="a", email="x@example.org", is_active=False)
+        self.assertEqual(list(identify_sender_users("x@example.org")), [])
+
+    def test_empty_email_returns_none(self):
+        self.assertEqual(list(identify_sender_users("")), [])
+
+
+class DecisionAlgorithmTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.parent = List.objects.create(
+            title="Elternbeirat", email_alias="eb", template=self.template
+        )
+        self.child = List.objects.create(
+            title="5a", email_alias="5a", template=self.template, parent=self.parent
+        )
+        self.other = List.objects.create(
+            title="Lehrerkollegium", email_alias="lk", template=self.template
+        )
+        self.granter = _make_super("granter")
+
+    def _member_of(self, lst, username, email):
+        u = _make_user(username=username, email=email)
+        ListAccess.objects.create(list=lst, user=u)
+        return u
+
+    def test_member_gets_release(self):
+        u = self._member_of(self.child, "m", "m@x.org")
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.MEMBER_RELEASE)
+        self.assertTrue(sender_is_member(self.child, [u]))
+
+    def test_unknown_sender_admin_approval(self):
+        self.assertEqual(decide(self.child, []).outcome, Outcome.ADMIN_APPROVAL)
+
+    def test_parent_member_implicit_forward(self):
+        u = self._member_of(self.parent, "p", "p@x.org")
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.FORWARD)
+
+    def test_unrelated_member_admin_approval(self):
+        u = self._member_of(self.other, "o", "o@x.org")
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.ADMIN_APPROVAL)
+
+    def test_explicit_grant_with_click(self):
+        u = self._member_of(self.other, "o", "o@x.org")
+        ListSendPermission.objects.create(
+            target_list=self.child,
+            granted_to_list=self.other,
+            granted_by=self.granter,
+            requires_release_click=True,
+        )
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.PERMITTED_RELEASE)
+
+    def test_explicit_grant_without_click(self):
+        u = self._member_of(self.other, "o", "o@x.org")
+        ListSendPermission.objects.create(
+            target_list=self.child,
+            granted_to_list=self.other,
+            granted_by=self.granter,
+            requires_release_click=False,
+        )
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.FORWARD)
+
+    def test_explicit_parent_row_tightens_implicit_grant(self):
+        u = self._member_of(self.parent, "p", "p@x.org")
+        ListSendPermission.objects.create(
+            target_list=self.child,
+            granted_to_list=self.parent,
+            granted_by=self.granter,
+            requires_release_click=True,
+        )
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.PERMITTED_RELEASE)
+
+    def test_transitive_grant_from_ancestor(self):
+        grandparent = List.objects.create(
+            title="Schule", email_alias="schule", template=self.template
+        )
+        self.parent.parent = grandparent
+        self.parent.save(update_fields=["parent"])
+        u = self._member_of(self.other, "o", "o@x.org")
+        ListSendPermission.objects.create(
+            target_list=grandparent,
+            granted_to_list=self.other,
+            granted_by=self.granter,
+            transitive=True,
+            requires_release_click=False,
+        )
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.FORWARD)
+
+    def test_non_transitive_ancestor_grant_does_not_reach_child(self):
+        grandparent = List.objects.create(
+            title="Schule", email_alias="schule", template=self.template
+        )
+        self.parent.parent = grandparent
+        self.parent.save(update_fields=["parent"])
+        u = self._member_of(self.other, "o", "o@x.org")
+        ListSendPermission.objects.create(
+            target_list=grandparent,
+            granted_to_list=self.other,
+            granted_by=self.granter,
+            transitive=False,
+        )
+        # grandparent grant is NOT transitive → child not reached → admin.
+        self.assertEqual(decide(self.child, [u]).outcome, Outcome.ADMIN_APPROVAL)
+
+    def test_resolve_send_permission_empty_membership(self):
+        self.assertEqual(resolve_send_permission(self.child, set()), (False, False))
+
+
+class DsnParseTests(TestCase):
+    def test_looks_like_dsn_and_parse(self):
+        msg = parse_message(_dsn_eml())
+        self.assertTrue(looks_like_dsn(msg))
+        status, diagnostic = parse_dsn(msg)
+        self.assertIn("5.1.1", status)
+        self.assertIn("user unknown", diagnostic)
+
+    def test_plain_mail_not_dsn(self):
+        msg = parse_message(_eml())
+        self.assertFalse(looks_like_dsn(msg))
+
+    def test_extract_subject_and_body(self):
+        msg = parse_message(_eml(subject="Hallo", body="Inhalt\r\n"))
+        subject, body = extract_subject_and_body(msg)
+        self.assertEqual(subject, "Hallo")
+        self.assertIn("Inhalt", body)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class ProcessInboundTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self._uid = 0
+
+    def _inbound(
+        self,
+        *,
+        from_email="sender@example.org",
+        to_alias="5a",
+        subject="Hallo",
+        raw=None,
+        matched_list="__list__",
+        matched_outbound=None,
+    ) -> InboundMessage:
+        self._uid += 1
+        if matched_list == "__list__":
+            matched_list = self.lst
+        if raw is None:
+            raw = _eml(
+                from_addr=from_email,
+                to_addr=f"{to_alias}@caos.cloud",
+                subject=subject,
+            )
+        return InboundMessage.objects.create(
+            imap_uidvalidity=1,
+            imap_uid=self._uid,
+            message_id=f"in{self._uid}@example.org",
+            from_email=from_email,
+            to_alias=to_alias,
+            to_domain="caos.cloud",
+            subject=subject,
+            raw_eml=raw,
+            received_at=timezone.now(),
+            matched_list=matched_list,
+            matched_outbound=matched_outbound,
+        )
+
+    def test_member_creates_release_token_and_notifies_sender(self):
+        member = _make_user(username="m", email="m@x.org")
+        ListAccess.objects.create(list=self.lst, user=member)
+        inbound = self._inbound(from_email="m@x.org")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        tok = MailReleaseToken.objects.get(inbound=inbound)
+        self.assertEqual(tok.kind, MailReleaseToken.Kind.MEMBER)
+        self.assertTrue(tok.offer_anonymize)
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["m@x.org"])
+        self.assertIn(tok.token, notify.call_args.kwargs["body"])
+
+    def test_permitted_parent_member_forwards_directly(self):
+        parent = List.objects.create(
+            title="Elternbeirat", email_alias="eb", template=self.template
+        )
+        self.lst.parent = parent
+        self.lst.save(update_fields=["parent"])
+        sender = _make_user(username="p", email="p@x.org")
+        ListAccess.objects.create(list=parent, user=sender)
+        recipient = _make_user(username="c", email="c@x.org")
+        ListAccess.objects.create(list=self.lst, user=recipient)
+        inbound = self._inbound(from_email="p@x.org")
+        with patch.object(send_outbound_message, "defer") as fanout:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.FORWARDED)
+        self.assertFalse(MailReleaseToken.objects.filter(inbound=inbound).exists())
+        om = OutboundMessage.objects.get(list=self.lst)
+        self.assertEqual(om.recipient_email, "c@x.org")
+        self.assertEqual(om.from_email, "p@x.org")
+        self.assertFalse(om.anonymized_from)
+        fanout.assert_called_once()
+
+    def test_non_member_routes_to_admin_approval(self):
+        admin = _make_user(username="adm", email="adm@x.org")
+        ListAdmin.objects.create(list=self.lst, user=admin)
+        inbound = self._inbound(from_email="stranger@external.example")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        tok = MailReleaseToken.objects.get(inbound=inbound)
+        self.assertEqual(tok.kind, MailReleaseToken.Kind.ADMIN)
+        self.assertFalse(tok.offer_anonymize)
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["adm@x.org"])
+
+    def test_auto_submitted_list_mail_suppressed(self):
+        raw = _eml(
+            to_addr="5a@caos.cloud",
+            extra_headers={"Auto-Submitted": "auto-replied"},
+        )
+        inbound = self._inbound(raw=raw)
+        with self.captureOnCommitCallbacks(execute=True):
+            process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
+        self.assertFalse(MailReleaseToken.objects.filter(inbound=inbound).exists())
+
+    def test_unknown_alias(self):
+        inbound = self._inbound(to_alias="ghost", matched_list=None)
+        process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.UNKNOWN_ALIAS)
+
+    def test_archived_list_rejected(self):
+        self.lst.archived_at = timezone.now()
+        self.lst.save(update_fields=["archived_at"])
+        inbound = self._inbound()
+        process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.REJECTED)
+
+    def test_idempotent_second_run_is_noop(self):
+        inbound = self._inbound()
+        inbound.decision = InboundMessage.Decision.FORWARDED
+        inbound.save(update_fields=["decision"])
+        with patch.object(send_notification_mail, "defer") as notify:
+            process_inbound.func(inbound_id=inbound.pk)
+        notify.assert_not_called()
+        self.assertEqual(MailReleaseToken.objects.filter(inbound=inbound).count(), 0)
+
+    def test_bounce_correlates_outbound(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="o@x",
+            alias_token="TOKB",
+            from_email="orig@x.org",
+            recipient_email="dead@example.org",
+            status=OutboundMessage.Status.SENT,
+        )
+        inbound = self._inbound(
+            from_email="MAILER-DAEMON@provider.example",
+            to_alias="bounce-tokb",
+            matched_list=None,
+            matched_outbound=om,
+            raw=_dsn_eml("bounce-TOKB@caos.cloud"),
+        )
+        process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        om.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.BOUNCE)
+        self.assertEqual(om.status, OutboundMessage.Status.BOUNCED)
+        self.assertIn("5.1.1", om.last_error)
+
+    def test_reply_to_alias_routes_to_original_sender(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="fwd@x",
+            alias_token="TOKR",
+            from_email="anon-original@x.org",
+            recipient_email="member@x.org",
+            anonymized_from=True,
+            status=OutboundMessage.Status.SENT,
+        )
+        reply = _eml(
+            from_addr="member@x.org",
+            to_addr="alias-TOKR@caos.cloud",
+            subject="Re: Klassenfest",
+            body="Bin dabei!\r\n",
+        )
+        inbound = self._inbound(
+            from_email="member@x.org",
+            to_alias="alias-tokr",
+            matched_list=None,
+            matched_outbound=om,
+            raw=reply,
+        )
+        with patch.object(send_outbound_message, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.FORWARDED)
+        routed = OutboundMessage.objects.exclude(pk=om.pk).get()
+        self.assertEqual(routed.recipient_email, "anon-original@x.org")
+        self.assertEqual(routed.from_email, "member@x.org")
+        self.assertFalse(routed.anonymized_from)
+        defer.assert_called_once()
+        self.assertEqual(defer.call_args.kwargs["outbound_id"], routed.pk)
+
+    def test_auto_reply_to_alias_suppressed(self):
+        om = OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="fwd2@x",
+            alias_token="TOKO",
+            from_email="anon@x.org",
+            recipient_email="member@x.org",
+            anonymized_from=True,
+        )
+        raw = _eml(
+            from_addr="member@x.org",
+            to_addr="alias-TOKO@caos.cloud",
+            extra_headers={"Auto-Submitted": "auto-replied"},
+        )
+        inbound = self._inbound(
+            from_email="member@x.org",
+            to_alias="alias-toko",
+            matched_list=None,
+            matched_outbound=om,
+            raw=raw,
+        )
+        process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
+        # No reply routed.
+        self.assertEqual(OutboundMessage.objects.exclude(pk=om.pk).count(), 0)
+
+
+@override_settings(
+    MAIL_DOMAIN="caos.cloud",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="Fichtelink <noreply@caos.cloud>",
+    RP_ORIGIN="https://fichtelink.caos.cloud",
+)
+class MailReleaseViewTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.recipient = _make_user(username="r", email="r@x.org")
+        ListAccess.objects.create(list=self.lst, user=self.recipient)
+        self.inbound = InboundMessage.objects.create(
+            imap_uidvalidity=1,
+            imap_uid=1,
+            message_id="in@x",
+            from_email="sender@example.org",
+            to_alias="5a",
+            to_domain="caos.cloud",
+            subject="Klassenfest",
+            raw_eml=_eml(subject="Klassenfest", body="Wann?\r\n"),
+            received_at=timezone.now(),
+            decision=InboundMessage.Decision.PENDING_APPROVAL,
+            matched_list=self.lst,
+        )
+        self.token = MailReleaseToken.objects.create(
+            inbound=self.inbound,
+            list=self.lst,
+            kind=MailReleaseToken.Kind.MEMBER,
+            offer_anonymize=True,
+        )
+        self.client = Client()
+
+    def _url(self, token=None):
+        return reverse(
+            "lists:mail_release", kwargs={"token": token or self.token.token}
+        )
+
+    def test_get_is_side_effect_free(self):
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 200)
+        self.token.refresh_from_db()
+        self.inbound.refresh_from_db()
+        self.assertIsNone(self.token.consumed_at)
+        self.assertEqual(
+            self.inbound.decision, InboundMessage.Decision.PENDING_APPROVAL
+        )
+
+    def test_post_approve_forwards_and_consumes(self):
+        with patch.object(send_outbound_message, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                resp = self.client.post(self._url(), data={"action": "approve"})
+        self.assertEqual(resp.status_code, 200)
+        self.token.refresh_from_db()
+        self.inbound.refresh_from_db()
+        self.assertIsNotNone(self.token.consumed_at)
+        self.assertEqual(self.token.resolution, MailReleaseToken.Resolution.FORWARDED)
+        self.assertEqual(self.inbound.decision, InboundMessage.Decision.FORWARDED)
+        om = OutboundMessage.objects.get(list=self.lst)
+        self.assertEqual(om.recipient_email, "r@x.org")
+        self.assertEqual(om.from_email, "sender@example.org")
+        # No anonymize field posted → real address.
+        self.assertFalse(om.anonymized_from)
+
+    def test_post_approve_with_anonymize(self):
+        with patch.object(send_outbound_message, "defer"):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.client.post(
+                    self._url(), data={"action": "approve", "anonymize": "1"}
+                )
+        om = OutboundMessage.objects.get(list=self.lst)
+        self.assertTrue(om.anonymized_from)
+
+    def test_post_reject(self):
+        resp = self.client.post(self._url(), data={"action": "reject"})
+        self.assertEqual(resp.status_code, 200)
+        self.token.refresh_from_db()
+        self.inbound.refresh_from_db()
+        self.assertEqual(self.token.resolution, MailReleaseToken.Resolution.REJECTED)
+        self.assertEqual(self.inbound.decision, InboundMessage.Decision.REJECTED)
+        self.assertEqual(OutboundMessage.objects.count(), 0)
+
+    def test_consumed_token_410(self):
+        self.token.consumed_at = timezone.now()
+        self.token.save(update_fields=["consumed_at"])
+        self.assertEqual(self.client.get(self._url()).status_code, 410)
+
+    def test_expired_token_410(self):
+        self.token.expires_at = timezone.now() - timedelta(days=1)
+        self.token.save(update_fields=["expires_at"])
+        self.assertEqual(self.client.get(self._url()).status_code, 410)
+
+    def test_admin_token_does_not_offer_anonymize(self):
+        self.token.kind = MailReleaseToken.Kind.ADMIN
+        self.token.offer_anonymize = False
+        self.token.save(update_fields=["kind", "offer_anonymize"])
+        resp = self.client.get(self._url())
+        self.assertNotContains(resp, 'name="anonymize"')
+
+
+class PeriodicMaintenanceTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="T")
+        self.lst = List.objects.create(title="L", email_alias="l", template=self.template)
+
+    def _inbound(self, uid, received_at):
+        return InboundMessage.objects.create(
+            imap_uidvalidity=1,
+            imap_uid=uid,
+            from_email="x@x.org",
+            to_alias="l",
+            to_domain="caos.cloud",
+            raw_eml=b"x",
+            received_at=received_at,
+        )
+
+    @override_settings(MAIL_METADATA_RETENTION_DAYS=30)
+    def test_prune_removes_old_metadata(self):
+        old = self._inbound(1, timezone.now() - timedelta(days=40))
+        fresh = self._inbound(2, timezone.now())
+        old_out = OutboundMessage.objects.create(
+            list=self.lst, message_id="o1@x", alias_token="P1",
+            from_email="s@x", recipient_email="r@x",
+        )
+        OutboundMessage.objects.filter(pk=old_out.pk).update(
+            created_at=timezone.now() - timedelta(days=40)
+        )
+        fresh_out = OutboundMessage.objects.create(
+            list=self.lst, message_id="o2@x", alias_token="P2",
+            from_email="s@x", recipient_email="r@x",
+        )
+        prune_mail_metadata.func(timestamp=0)
+        self.assertFalse(InboundMessage.objects.filter(pk=old.pk).exists())
+        self.assertTrue(InboundMessage.objects.filter(pk=fresh.pk).exists())
+        self.assertFalse(OutboundMessage.objects.filter(pk=old_out.pk).exists())
+        self.assertTrue(OutboundMessage.objects.filter(pk=fresh_out.pk).exists())
+
+    def test_prune_cascades_release_tokens(self):
+        old = self._inbound(1, timezone.now() - timedelta(days=200))
+        tok = MailReleaseToken.objects.create(
+            inbound=old, list=self.lst, kind=MailReleaseToken.Kind.MEMBER
+        )
+        prune_mail_metadata.func(timestamp=0)
+        self.assertFalse(MailReleaseToken.objects.filter(pk=tok.pk).exists())
+
+    def test_expire_release_tokens(self):
+        inbound = self._inbound(1, timezone.now())
+        expired = MailReleaseToken.objects.create(
+            inbound=inbound, list=self.lst, kind=MailReleaseToken.Kind.MEMBER
+        )
+        MailReleaseToken.objects.filter(pk=expired.pk).update(
+            expires_at=timezone.now() - timedelta(days=1)
+        )
+        live = MailReleaseToken.objects.create(
+            inbound=inbound, list=self.lst, kind=MailReleaseToken.Kind.MEMBER
+        )
+        expire_release_tokens.func(timestamp=0)
+        self.assertFalse(MailReleaseToken.objects.filter(pk=expired.pk).exists())
+        self.assertTrue(MailReleaseToken.objects.filter(pk=live.pk).exists())
+
+    @override_settings(IMAP_HOST="", IMAP_USER="")
+    def test_imap_expunge_noop_without_config(self):
+        # Must not raise or attempt a connection.
+        imap_expunge_processed.func(timestamp=0)
+
+    @override_settings(
+        IMAP_HOST="imap.example",
+        IMAP_USER="u",
+        IMAP_PASS="p",
+        IMAP_PORT=993,
+        IMAP_USE_SSL=True,
+        IMAP_EXPUNGE_GRACE_DAYS=7,
+    )
+    def test_imap_expunge_marks_and_expunges(self):
+        fake = MagicMock()
+        fake.search.return_value = ("OK", [b"1 2 3"])
+        with patch("imaplib.IMAP4_SSL", return_value=fake):
+            imap_expunge_processed.func(timestamp=0)
+        fake.login.assert_called_once_with("u", "p")
+        fake.select.assert_called_once_with("INBOX")
+        self.assertEqual(fake.store.call_count, 3)
+        fake.expunge.assert_called_once()

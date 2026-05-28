@@ -152,18 +152,19 @@ Outputs (erledigt 2026-05-27):
 
 ## Phase 5b — Inbound Pipeline
 
-- [ ] **Ziel:** End-to-end Forward (Release-Click oder Admin-Approval), Anti-Loop, Bounce-Korrelation, Retention.
+- [x] **Ziel:** End-to-end Forward (Release-Click oder Admin-Approval), Anti-Loop, Bounce-Korrelation, Retention.
 
-Outputs:
-- Suppression-Checks (Auto-Submitted, Return-Path, Precedence, In-Reply-To gegen Outbound)
-- Sender-Identifikation (Set von USERs via `PERSON.email`)
-- Decision-Algorithmus (member → release-link, send-permitted → forward, sonst → admin-approval)
-- Release-Token + Click-Endpoint + Approval-UI
-- Reply-Routing für Anonymization-Aliase
-- DSN-Parser + Korrelation mit Outbound
-- Periodische Tasks: EXPUNGE nach 7d, Metadaten-Pruning 30–90d, Token-Expiry
+Outputs (erledigt 2026-05-28):
+- `lists/inbound_pipeline.py` — reine, testbare Logik: `parse_message`/`extract_subject_and_body`/`referenced_message_ids`; `suppression_reason(msg, check_in_reply_to)` (Auto-Submitted≠no, leerer Return-Path `<>`, Precedence bulk/list/junk, In-Reply-To/References gegen `OutboundMessage.message_id` — letzteres NUR bei Listen-Mail, nicht im Alias-Reply-Pfad, sonst würde jede legitime Antwort unterdrückt); `identify_sender_users` (USER-Set via `Person.email`, case-insensitiv, nur aktive); `resolve_send_permission` (explizit + impliziter Parent-Grant + transitiv über Ancestors, „most-permissive"-Klick-Auflösung); `decide()` → `Outcome ∈ {MEMBER_RELEASE, FORWARD, PERMITTED_RELEASE, ADMIN_APPROVAL}`; `looks_like_dsn`/`parse_dsn` (robust gegen str- *und* list-Payload von `message/delivery-status`).
+- `process_inbound`-Task neu (ersetzt 5a-Stub): idempotent (Top-Guard `decision != PENDING`), Routing nach Alias-Typ ZUERST — `bounce-<token>`→DSN-Korrelation (Outbound→BOUNCED), `alias-<token>`→Reply-Routing an Originalsender (eigene OutboundMessage-Row, reused Retry/Bounce-Infra), dann Suppression, dann `matched_list`-None→UNKNOWN_ALIAS, archiviert→REJECTED, sonst Decision-Algorithmus.
+- `MailReleaseToken`-Model (Migration 0008): `kind ∈ {member, admin}`, `offer_anonymize`, 7-Tage-Default-Expiry, `resolution ∈ {forwarded, rejected}`. Referenziert `InboundMessage` (raw_eml = canonical, beim Klick re-geparst); cascade beim Pruning.
+- `send_notification_mail`-Task (RetryStrategy wie Outbound) — entkoppelt Release-/Approval-Mail vom (retry-nicht-idempotenten) Decision-Task; deferred via `on_commit` nachdem Token+Decision committed sind.
+- Release-View `/lists/mail/release/<token>/` (possession-based, kein Login — Link geht an Sender bzw. Admins): M10-Pattern (GET = Bestätigungsseite ohne Side-Effects, POST = forward/reject), `select_for_update`-Race-Guard gegen Doppel-Freigabe durch zwei Admins. Anonymisierungs-Consent wird beim Klick erfasst (Checkbox, default an, nur bei echten Mitgliedern angeboten) — CLAUDE.md definiert keinen Consent-Speicher, der Release-Klick ist der natürliche Ort. Templates `mail_release_confirm.html`/`mail_release_done.html`.
+- Periodische Tasks: `prune_mail_metadata` (Inbound/Outbound älter als `MAIL_METADATA_RETENTION_DAYS`=90, cascadet Tokens), `expire_release_tokens` (abgelaufene Tokens), `imap_expunge_processed` (stdlib-`imaplib`, sync im Worker getrennt vom async-Daemon: `SEARCH SEEN BEFORE <cutoff>` → `\Deleted` → EXPUNGE, no-op ohne IMAP-Config). Settings `IMAP_EXPUNGE_GRACE_DAYS`=7 + `MAIL_METADATA_RETENTION_DAYS`=90 in `.env.example`.
+- Admin-Registrierung `MailReleaseToken`.
+- Tests: `SuppressionTests`, `SenderIdentificationTests`, `DecisionAlgorithmTests` (member/implicit-parent/explicit-±click/transitiv/non-transitiv/unbekannt), `DsnParseTests`, `ProcessInboundTests` (member-release, permitted-forward, admin-approval, suppress, unknown, archived, idempotent, bounce-correlation, reply-routing, OOO-reply-suppress), `MailReleaseViewTests` (GET side-effect-frei, approve±anonymize, reject, 410-expired/consumed, admin-kein-Checkbox), `PeriodicMaintenanceTests` (prune, cascade, expire, expunge mit gemocktem imaplib).
 
-**Verify:** Mail an Liste → Release → Forward; OOO wird blockiert; Bounce wird korreliert.
+**Verify (manuell auf VM):** `docker compose run --rm web python manage.py migrate` → Tabelle `lists_mailreleasetoken`. Mail von einem Mitglied an `5a@<MAIL_DOMAIN>` → Freigabe-Mail an Absender → Klick → Forward an Benutzergruppe. OOO-Mail (Auto-Submitted) → `decision=suppressed`. Provider-Bounce an `bounce-<token>@…` → korrelierte OutboundMessage auf `bounced`. `SELECT decision, count(*) FROM lists_inboundmessage GROUP BY decision;` zeigt die Verteilung. Periodik via `procrastinate_periodic_defers` prüfen (siehe Memory [[reference-procrastinate-periodic-verify]]).
 
 ## Phase 6 — Schulklassen-Lifecycle
 

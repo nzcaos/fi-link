@@ -26,12 +26,14 @@ from .forms import (
     TestSendForm,
 )
 from .models import (
+    InboundMessage,
     List,
     ListAdmin,
     ListInviteToken,
     ListJoinToken,
     ListRecord,
     ListTemplate,
+    MailReleaseToken,
     RecordManager,
 )
 
@@ -661,4 +663,104 @@ def list_send_test(request, pk: int):
         request,
         "lists/send_test.html",
         {"list_obj": lst, "form": form, "recipients": recipients},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5b: mail release / approval click endpoint
+# ---------------------------------------------------------------------------
+
+
+def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, lst: List, anonymize: bool) -> None:
+    """Commit a forward: fan out the stored message to the list, flip the
+    inbound to FORWARDED, consume the token. Re-locks the token under
+    select_for_update so two concurrent clicks (e.g. two list admins) cannot
+    double-forward — the loser sees a consumed token and no-ops.
+    """
+    from .inbound_pipeline import extract_subject_and_body, parse_message
+
+    msg = parse_message(bytes(inbound.raw_eml))
+    subject, body = extract_subject_and_body(msg)
+    with transaction.atomic():
+        locked = MailReleaseToken.objects.select_for_update().get(pk=rel.pk)
+        if not locked.is_usable:
+            return
+        enqueue_list_fanout(
+            list_obj=lst,
+            from_email=inbound.from_email or settings.DEFAULT_FROM_EMAIL,
+            subject=subject,
+            body=body,
+            anonymize=anonymize,
+        )
+        inbound.decision = InboundMessage.Decision.FORWARDED
+        inbound.reason = f"Über Freigabe-Link weitergeleitet (anonymize={anonymize})."
+        inbound.save(update_fields=["decision", "reason"])
+        locked.consumed_at = timezone.now()
+        locked.resolution = MailReleaseToken.Resolution.FORWARDED
+        locked.save(update_fields=["consumed_at", "resolution"])
+
+
+def _release_reject(rel: MailReleaseToken, inbound: InboundMessage) -> None:
+    with transaction.atomic():
+        locked = MailReleaseToken.objects.select_for_update().get(pk=rel.pk)
+        if not locked.is_usable:
+            return
+        inbound.decision = InboundMessage.Decision.REJECTED
+        inbound.reason = "Über Freigabe-Link abgelehnt."
+        inbound.save(update_fields=["decision", "reason"])
+        locked.consumed_at = timezone.now()
+        locked.resolution = MailReleaseToken.Resolution.REJECTED
+        locked.save(update_fields=["consumed_at", "resolution"])
+
+
+def mail_release(request, token: str):
+    """Click-time handler for a MailReleaseToken (member-release or admin-
+    approval). Possession of the link is the authorisation — it was mailed to
+    the sender (anti-spoofing) or the list admins. No login required.
+
+    M10 pattern: GET renders a confirmation page with no side effects so mail-
+    client link-prefetchers cannot forward or reject; the decision commits only
+    on the CSRF-protected POST.
+    """
+    rel = get_object_or_404(
+        MailReleaseToken.objects.select_related("inbound", "list"), token=token
+    )
+    if rel.is_consumed:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Diese Freigabe wurde bereits bearbeitet."},
+            status=410,
+        )
+    if rel.is_expired:
+        return render(
+            request,
+            "lists/invite_problem.html",
+            {"reason": "Diese Freigabe ist abgelaufen."},
+            status=410,
+        )
+
+    inbound = rel.inbound
+    lst = rel.list
+
+    if request.method == "POST":
+        if request.POST.get("action") == "reject":
+            _release_reject(rel, inbound)
+            return render(
+                request,
+                "lists/mail_release_done.html",
+                {"list_obj": lst, "rel": rel, "action": "rejected"},
+            )
+        anonymize = rel.offer_anonymize and bool(request.POST.get("anonymize"))
+        _release_forward(rel, inbound, lst, anonymize)
+        return render(
+            request,
+            "lists/mail_release_done.html",
+            {"list_obj": lst, "rel": rel, "action": "forwarded", "anonymized": anonymize},
+        )
+
+    return render(
+        request,
+        "lists/mail_release_confirm.html",
+        {"list_obj": lst, "rel": rel, "inbound": inbound},
     )

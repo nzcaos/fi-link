@@ -12,6 +12,7 @@ from .models import (
     ListRecordValue,
     ListSendPermission,
     ListTemplate,
+    MailReleaseToken,
     OutboundMessage,
     PersonRelationship,
     RecordManager,
@@ -213,6 +214,23 @@ class InboundMessageAdmin(admin.ModelAdmin):
         "received_at",
         "created_at",
     )
+
+
+@admin.register(MailReleaseToken)
+class MailReleaseTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        "list",
+        "kind",
+        "offer_anonymize",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+        "resolution",
+    )
+    list_filter = ("kind", "resolution", "offer_anonymize")
+    search_fields = ("token", "list__title", "inbound__from_email")
+    autocomplete_fields = ("list",)
+    readonly_fields = ("token", "inbound", "created_at")
 
 
 @admin.register(ListSendPermission)

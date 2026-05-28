@@ -25,4 +25,5 @@ urlpatterns = [
     path("<int:pk>/records/<int:record_pk>/edit/", views.record_edit, name="record_edit"),
     path("invite/<str:token>/", views.invite_accept, name="invite_accept"),
     path("join/<str:token>/", views.join_via_token, name="join_via_token"),
+    path("mail/release/<str:token>/", views.mail_release, name="mail_release"),
 ]
