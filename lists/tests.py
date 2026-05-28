@@ -2060,10 +2060,16 @@ class OutboundFanoutTests(TestCase):
         self.assertNotIn("adm@example.org", emails)
 
     def test_recipients_dedup_on_shared_family_email(self):
-        # Two Users sharing a PERSON.email (the family-mailbox case).
+        # Two Users sharing a PERSON.email (the family-mailbox case). Distinct
+        # names matter: Person.Meta.ordering would otherwise pull family_name/
+        # given_name into the SELECT DISTINCT set and defeat the dedup.
         shared = "family@example.org"
-        u_father = _make_user(username="father", email=shared)
-        u_mother = _make_user(username="mother", email=shared)
+        u_father = _make_user(
+            username="father", given="Max", family="Vater", email=shared
+        )
+        u_mother = _make_user(
+            username="mother", given="Eva", family="Mutter", email=shared
+        )
         ListAccess.objects.create(list=self.lst, user=u_father)
         ListAccess.objects.create(list=self.lst, user=u_mother)
         emails = list_recipient_emails(self.lst)

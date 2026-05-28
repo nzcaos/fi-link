@@ -68,6 +68,10 @@ def aggregate_recipient_emails(agg: AggregateAlias) -> list[str]:
         )
         .exclude(email__isnull=True)
         .exclude(email__exact="")
+        # Clear Person.Meta.ordering: an ORDER BY pulls family_name/given_name
+        # into the SELECT DISTINCT columns, which would stop two distinct
+        # Persons sharing a family mailbox from collapsing to one address.
+        .order_by()
         .values_list("email", flat=True)
         .distinct()
     )

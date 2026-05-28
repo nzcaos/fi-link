@@ -231,6 +231,10 @@ def list_recipient_emails(list_obj: List) -> list[str]:
         Person.objects.filter(user__member_of_lists__list=list_obj)
         .exclude(email__isnull=True)
         .exclude(email__exact="")
+        # .order_by() clears Person.Meta.ordering — otherwise the ORDER BY
+        # columns join the SELECT DISTINCT set and two Persons sharing a family
+        # mailbox would each yield the address (double-send to that mailbox).
+        .order_by()
         .values_list("email", flat=True)
         .distinct()
     )
@@ -348,6 +352,7 @@ def _list_admin_emails(list_obj: List) -> list[str]:
         Person.objects.filter(user__admin_of_lists__list=list_obj)
         .exclude(email__isnull=True)
         .exclude(email__exact="")
+        .order_by()  # see list_recipient_emails: clear ordering for true DISTINCT
         .values_list("email", flat=True)
         .distinct()
     )
@@ -365,6 +370,7 @@ def _super_admin_emails() -> list[str]:
         Person.objects.filter(user__is_superuser=True, user__is_active=True)
         .exclude(email__isnull=True)
         .exclude(email__exact="")
+        .order_by()  # see list_recipient_emails: clear ordering for true DISTINCT
         .values_list("email", flat=True)
         .distinct()
     )

@@ -118,8 +118,8 @@ class Migration(migrations.Migration):
             model_name="outboundmessage",
             constraint=models.CheckConstraint(
                 condition=(
-                    models.Q(("list__isnull", False), ("aggregate__isnull", True))
-                    | models.Q(("list__isnull", True), ("aggregate__isnull", False))
+                    models.Q(list__isnull=False, aggregate__isnull=True)
+                    | models.Q(list__isnull=True, aggregate__isnull=False)
                 ),
                 name="outbound_exactly_one_source",
             ),
@@ -154,8 +154,8 @@ class Migration(migrations.Migration):
             model_name="mailreleasetoken",
             constraint=models.CheckConstraint(
                 condition=(
-                    models.Q(("list__isnull", False), ("aggregate__isnull", True))
-                    | models.Q(("list__isnull", True), ("aggregate__isnull", False))
+                    models.Q(list__isnull=False, aggregate__isnull=True)
+                    | models.Q(list__isnull=True, aggregate__isnull=False)
                 ),
                 name="release_token_exactly_one_source",
             ),
