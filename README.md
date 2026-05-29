@@ -6,9 +6,9 @@ The product specification (in German) is in [`filink.md`](filink.md). All archit
 
 ## Status
 
-**Pre-implementation.** The repository currently contains the specification, the architecture decisions, this README, and a `.gitignore` for the planned stack. No application code yet — the next step is the Django project scaffold and the domain model from CLAUDE.md.
+**Feature-complete, first deployment.** The full stack is implemented: domain model, passkey auth, list/record UI with per-field visibility, the mail pipeline (outbound, IMAP IDLE consumer, inbound decision + release/approval, bounce correlation, retention), school-class lifecycle (rollover, transfer, admin handover), aggregate aliases, and the forms module. Tests are written phase-parallel and run on the deploy VM.
 
-The commands below describe the intended deployment procedure once the code exists.
+The commands below are the live deployment procedure.
 
 ## Tech stack
 
@@ -98,7 +98,28 @@ docker compose up -d
 - `docker compose logs -f web` — request log
 - `docker compose logs -f worker` — task-queue activity (procrastinate)
 - `docker compose logs -f imap_idle` — incoming-mail consumer
-- `docker compose exec db pg_dump -U fichtelink fichtelink > backup-$(date +%F).sql` — manual DB backup. Automate via host cron and off-host sync (rclone or similar).
+
+### Backups
+
+A ready-made backup script lives at [`scripts/backup.sh`](scripts/backup.sh). It runs `pg_dump` inside the `db` container, writes a timestamped gzip dump, and prunes dumps older than `KEEP_DAYS` (default 14):
+
+```bash
+COMPOSE_DIR=/opt/fi-link BACKUP_DIR=/var/backups/fichtelink ./scripts/backup.sh
+```
+
+Automate it from the **host** crontab (not inside a container) — daily at 03:30:
+
+```cron
+30 3 * * * COMPOSE_DIR=/opt/fi-link BACKUP_DIR=/var/backups/fichtelink /opt/fi-link/scripts/backup.sh >> /var/log/fichtelink-backup.log 2>&1
+```
+
+**A database dump is not a complete backup on its own.** `LIST_RECORD_VALUE` rows are encrypted with `FERNET_KEY` (in `.env`); without that key the dump is unrecoverable ciphertext. Back up `.env` / `FERNET_KEY` **off-host and separately** from the dumps. Sync the dump directory off-host too (rclone, restic, or similar).
+
+Restore a dump onto a fresh stack:
+
+```bash
+gunzip -c fichtelink-2026-05-29T03-30-00.sql.gz | docker compose exec -T db psql -U fichtelink fichtelink
+```
 
 ### Account recovery (super-admin)
 

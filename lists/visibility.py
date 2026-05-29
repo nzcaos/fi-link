@@ -18,6 +18,7 @@ from the authoritative tables rather than via `django-guardian`.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Iterable
 
 from .models import (
@@ -103,15 +104,125 @@ def build_visible_rows(user, lst: List) -> list[dict]:
     see, and ``subject_display`` is the subject's name or a per-render ``?N``
     anonymisation placeholder (M8). Shared by the list-detail page and the
     dynamic list part of a Form so both honour the exact same visibility rules.
+
+    N12: this is the hot path (one render = N records × M attributes). It must
+    not delegate to the per-field/per-name helpers, which each issue several
+    queries — that is O(N×M) DB round-trips. Instead every table the helpers
+    consult is loaded once up front and the same visibility logic is then
+    evaluated in memory. The single-record helpers above keep the readable
+    reference semantics for callers that look at one record (record_edit etc.);
+    this function is their bulk-resolved equivalent and the two must stay in
+    sync.
     """
+    records = list(
+        lst.records.filter(archived_at__isnull=True)
+        .select_related("subject")
+        .prefetch_related("values")
+    )
+    attributes = list(lst.template.attributes.all())
+    if not records:
+        return []
+
+    record_ids = [r.pk for r in records]
+
+    # One query for every (record, attribute|name-sentinel, audience) grant.
+    # attribute_id IS NULL is the subject-name axis (M8). audience_id IS NULL is
+    # the public sentinel.
+    audiences_by_key: dict[tuple[int, int | None], set[int | None]] = defaultdict(set)
+    for rec_id, attr_id, aud_id in ListRecordAccess.objects.filter(
+        record_id__in=record_ids
+    ).values_list("record_id", "attribute_id", "audience_id"):
+        audiences_by_key[(rec_id, attr_id)].add(aud_id)
+
+    authed = bool(getattr(user, "is_authenticated", False))
+    is_super = authed and user.is_superuser
+    person_id = getattr(user, "person_id", None)
+
+    managed_record_ids: set[int] = set()
+    is_list_admin = False
+    visible_audience_ids: set[int] = set()
+    if authed and not is_super:
+        managed_record_ids = set(
+            RecordManager.objects.filter(
+                user=user, record_id__in=record_ids
+            ).values_list("record_id", flat=True)
+        )
+        is_list_admin = ListAdmin.objects.filter(list=lst, user=user).exists()
+
+        referenced_audience_ids = {
+            aid
+            for auds in audiences_by_key.values()
+            for aid in auds
+            if aid is not None
+        }
+        if referenced_audience_ids:
+            public_audiences = set(
+                List.objects.filter(
+                    pk__in=referenced_audience_ids,
+                    visibility__in=(
+                        List.Visibility.PUBLIC_VISIBLE,
+                        List.Visibility.PUBLIC_EDITABLE,
+                    ),
+                ).values_list("pk", flat=True)
+            )
+            accessed = set(
+                ListAccess.objects.filter(
+                    user=user, list_id__in=referenced_audience_ids
+                ).values_list("list_id", flat=True)
+            )
+            admined = set(
+                ListAdmin.objects.filter(
+                    user=user, list_id__in=referenced_audience_ids
+                ).values_list("list_id", flat=True)
+            )
+            visible_audience_ids = public_audiences | accessed | admined
+
+    def _audience_grants(key: tuple[int, int | None]) -> bool:
+        auds = audiences_by_key.get(key)
+        if not auds:
+            return False
+        if None in auds:  # public sentinel
+            return True
+        return bool(auds & visible_audience_ids)
+
+    def _field_visible(record: ListRecord, attribute: ListAttribute) -> bool:
+        if attribute.must_be_public:
+            return True
+        if not authed:
+            return False
+        if is_super:
+            return True
+        if record.subject_id == person_id:
+            return True
+        if record.pk in managed_record_ids:
+            return True
+        if is_list_admin:
+            return True
+        return _audience_grants((record.pk, attribute.pk))
+
+    def _name_visible(record: ListRecord) -> bool:
+        if not authed:
+            # Anonymous viewers see the name only via an explicit public row.
+            return None in audiences_by_key.get((record.pk, None), set())
+        if is_super:
+            return True
+        if record.subject_id == person_id:
+            return True
+        if record.pk in managed_record_ids:
+            return True
+        if is_list_admin:
+            return True
+        return _audience_grants((record.pk, None))
+
     rows: list[dict] = []
     anon_counter = 0
-    records_qs = lst.records.filter(archived_at__isnull=True).select_related("subject")
-    for record in records_qs:
-        attrs = list(visible_attributes_for(user, record))
+    for record in records:
+        fields = []
         values_map = {v.attribute_id: v.value for v in record.values.all()}
-        fields = [(a, values_map.get(a.pk, "")) for a in attrs]
-        if can_user_see_subject_name(user, record):
+        for attribute in attributes:
+            if _field_visible(record, attribute):
+                fields.append((attribute, values_map.get(attribute.pk, "")))
+        if _name_visible(record):
             subject_display = str(record.subject)
         else:
             anon_counter += 1

@@ -107,11 +107,11 @@ Aus dem ersten Review der Phase 3a/3b. Kritische B1/B2/B4/B5 wurden direkt gefix
 
 **Niedrig (Performance + Edge-Cases, Phase 8):**
 
-- **N12 — `list_detail` ist N+1.** 30 Mitglieder × 8 Felder × ~5 Queries/Sicht-Check = ~1000 Queries pro Page-Load. Optimierung mit prefetch + In-Memory-Audience-Resolution.
+- ~~N12 — `list_detail` ist N+1.~~ **Gefixt 2026-05-29 (Phase 8).** `build_visible_rows` delegiert nicht mehr an die Per-Feld-/Per-Name-Helper (die je mehrere Queries machen), sondern lädt alle konsultierten Tabellen einmal vorab (records + `prefetch(values)`, `template.attributes`, `ListRecordAccess` für alle Records, plus `RecordManager`/`ListAdmin`/`ListAccess`/public-`List` nur für die referenzierten Audiences) und wertet dieselbe Sichtbarkeitslogik in-memory aus — konstante Query-Zahl unabhängig von der Record-Zahl. Die Einzel-Record-Helper bleiben als lesbare Referenzsemantik für Single-Record-Caller (record_edit etc.). Tests `BuildVisibleRowsTests`: Parität gegen die Helper + `test_query_count_is_constant_in_record_count` (3 vs. 15 Records → identische Query-Zahl).
 - ~~N13 — Sichtbarkeits-Matrix-Race bei parallelen POSTs.~~ **Gefixt 2026-05-27.** `RecordEditForm.save()` ruft zu Beginn der `@transaction.atomic`-Phase `ListRecord.objects.select_for_update().get(pk=self.record.pk)` auf. Der zweite paralleler POST blockt bis zum Commit des ersten, dann läuft sein delete+insert gegen den committed Zustand — last-writer-wins statt verlorener Reihen. Test `test_n13_save_acquires_row_lock_on_record` verifiziert die `SELECT … FOR UPDATE`-Anweisung via `CaptureQueriesContext`.
-- **N14 — `send_mail` ohne Error-Handling.** SMTPException → 500, Token in DB, Admin weiß nichts. Fix: try/except + Status-Message + ggf. Resend-Knopf.
+- ~~N14 — `send_mail` ohne Error-Handling.~~ **Gefixt 2026-05-29 (Phase 8).** Helper `lists.views._send_mail_safe` fängt `smtplib.SMTPException`/`OSError`, loggt und gibt `False` zurück; die Invite- und Admin-Invite-Views zeigen bei Fehler eine `messages.error` mit dem (bereits committeten) Link, damit der Admin ihn manuell weitergeben kann — kein 500. Der Registrierungs-Pfad (`accounts.views._create_stub_and_send`) ist analog abgesichert: bei Mail-Fehler rendert `register_check_email.html` einen `mail_failed`-Hinweis statt 500, Stub-User+Token bleiben committet (Retry / `reset_passkeys` möglich). Tests `N14MailFailureTests` (SMTP-Fehler → 302 + Fehlermeldung + Token bleibt; Erfolgs-Pfad → Mail versendet).
 - ~~N15 — `register_force` ohne Rate-Limit.~~ **Gefixt 2026-05-27.** Per-IP-Throttle auf `_create_stub_and_send` via Django-Default-Cache (`cache.incr`-Bucket, Fenster 1 h, Limit 10). Beide Pfade — `register_start` (POST) und `register_force` — sind eingehakt; XFF wird respektiert (linker-Hop = throttle key). 429-Response statt 200 bei Überschreitung, kein Person/User/Token wird geschrieben. Caveat: LocMemCache = pro-Worker-Counter (eff. Limit ≈ Workers × 10); Upgrade auf shared Cache wenn Redis später dazukommt. Tests `N15RegisterRateLimitTests` decken Limit, force-Pfad, Per-IP-Trennung und XFF-Key ab.
-- **N16 — Default-Sichtbarkeit „leer" bei neuen Records.** Non-public Felder sind ohne explizite Audience-Wahl für niemanden außer Owner/Admin/Super sichtbar. UX-Frage: sollte „eigene Liste" Default sein? Architektur-Klärung offen.
+- ~~N16 — Default-Sichtbarkeit „leer" bei neuen Records.~~ **Entschieden 2026-05-29 (Phase 8): privacy-by-default beibehalten.** Attribut-Felder bekommen ohne explizite Audience-Wahl keine Sichtbarkeit (außer Owner/Manager/Admin/Super) — der Owner gibt pro Feld bewusst frei. Kein Code-Change im Record-Create-Pfad. Der Subject-Name bleibt davon getrennt und per Default öffentlich (M8 / CLAUDE.md *Subject-name visibility*), weil eine Papier-Klassenliste Namen trägt; einzelne Felder dagegen sind sensibler und werden bewusst freigegeben.
 
 ## Phase 4 — Outbound Mail
 
@@ -198,11 +198,19 @@ Outputs:
 
 - [ ] **Ziel:** Live auf `fichtelink.caos.cloud`, Smoke-Tests grün.
 
-Outputs:
-- Logging-Setup, Error-Pages, leere-Listen-States
-- Backup-Skript (`pg_dump` per Host-Cron, Beispiel im README)
-- README-Update (jeder dokumentierte Command funktioniert)
-- Erstes Deployment auf der echten VM + manueller Smoke-Test (Registrierung, Listen-Anlage, Mail-Versand, Bounce)
+Outputs (Code-seitig erledigt 2026-05-29):
+- ~~Logging-Setup~~ — bereits seit dd6089e konfiguriert (Console-INFO-Floor, Framework-Chatter auf WARNING gedämpft); Memory [[reference-django-default-logging-warning]]. Phase 8 belässt es dabei (kein File-/JSON-Logging nötig auf dieser Skala).
+- ~~Error-Pages~~ — `templates/{400,403,404,500}.html`. 400/403/404 erben `base.html`; 500 ist **standalone** (Djangos `server_error`-Handler rendert mit leerem Context ohne `request`/Context-Processors — Erben von base wäre fragil).
+- ~~leere-Listen-States~~ — waren bereits in `lists/index.html`, `lists/detail.html` (`{% empty %}`/`{% else %}`), `forms/index.html` vorhanden.
+- ~~Backup-Skript~~ — `scripts/backup.sh` (`pg_dump` im `db`-Container → timestamped gzip, Rotation per `KEEP_DAYS`, leere-Dump-Guard). Host-Cron-Beispiel + Restore-Befehl + FERNET_KEY-Off-host-Warnung im README.
+- ~~README-Update~~ — Status-Sektion von „Pre-implementation" auf „Feature-complete, first deployment" aktualisiert; Backups-Sektion ergänzt.
+- N12/N14 gefixt + N16 entschieden (siehe *Bekannte Findings*).
+
+Offen (auf der VM durch den Operator, nicht lokal machbar — Memory [[feedback-no-local-runtime]]):
+- Tests auf der VM laufen lassen: `docker compose run --rm web python manage.py test` (inkl. neuer `BuildVisibleRowsTests`, `N14MailFailureTests`).
+- `docker compose run --rm web python manage.py collectstatic --noinput` (Error-Page-Templates brauchen kein collectstatic, aber Vendored-Assets ja).
+- Erstes Deployment auf der echten VM + manueller Smoke-Test (Registrierung, Listen-Anlage, Mail-Versand, Bounce). Box erst nach grünem Smoke-Test abhaken.
+- Host-Cron für `scripts/backup.sh` einrichten + ersten Dump verifizieren; `FERNET_KEY` off-host sichern.
 
 ---
 

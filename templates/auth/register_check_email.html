@@ -2,12 +2,20 @@
 {% block title %}E-Mail prüfen — Fichtelink{% endblock %}
 {% block content %}
   <h1>E-Mail-Postfach prüfen</h1>
-  <div class="ok">
-    Wir haben einen Aktivierungs-Link an <strong>{{ email }}</strong> geschickt.
-    Klicken Sie den Link, um Ihren Passkey einzurichten.
-  </div>
-  <p style="margin-top:1rem;font-size:0.85rem;color:#555">
-    Der Link ist 7 Tage gültig. Keine Mail bekommen? Spam-Ordner prüfen oder den
-    Vorgang in ein paar Minuten wiederholen.
-  </p>
+  {% if mail_failed %}
+    <div class="error">
+      Ihr Konto wurde angelegt, aber der Aktivierungs-Link konnte gerade nicht
+      per Mail versendet werden (vorübergehender Server-Fehler). Bitte versuchen
+      Sie es in ein paar Minuten erneut — oder wenden Sie sich an die Betreiber.
+    </div>
+  {% else %}
+    <div class="ok">
+      Wir haben einen Aktivierungs-Link an <strong>{{ email }}</strong> geschickt.
+      Klicken Sie den Link, um Ihren Passkey einzurichten.
+    </div>
+    <p style="margin-top:1rem;font-size:0.85rem;color:#555">
+      Der Link ist 7 Tage gültig. Keine Mail bekommen? Spam-Ordner prüfen oder den
+      Vorgang in ein paar Minuten wiederholen.
+    </p>
+  {% endif %}
 {% endblock %}

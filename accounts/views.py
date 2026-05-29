@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import smtplib
 import time
 from datetime import timedelta
 
@@ -185,18 +186,30 @@ def _create_stub_and_send(
     link = request.build_absolute_uri(
         reverse("accounts:activate", args=[token.token])
     )
-    send_mail(
-        subject="Fichtelink — Konto aktivieren",
-        message=(
-            f"Hallo {given_name},\n\n"
-            f"klicken Sie auf den folgenden Link, um Ihr Fichtelink-Konto zu aktivieren "
-            f"und einen Passkey einzurichten:\n\n{link}\n\n"
-            f"Der Link ist {token.expires_at:%d.%m.%Y %H:%M} gültig."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[email],
+    mail_failed = False
+    try:
+        send_mail(
+            subject="Fichtelink — Konto aktivieren",
+            message=(
+                f"Hallo {given_name},\n\n"
+                f"klicken Sie auf den folgenden Link, um Ihr Fichtelink-Konto zu aktivieren "
+                f"und einen Passkey einzurichten:\n\n{link}\n\n"
+                f"Der Link ist {token.expires_at:%d.%m.%Y %H:%M} gültig."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+        )
+    except (smtplib.SMTPException, OSError) as exc:
+        # N14: a mail-server outage must not become a 500. The stub User and
+        # activation token are already committed; the user retries (or an admin
+        # re-issues via reset_passkeys) once mail is back.
+        mail_failed = True
+        log.error("activation mail to %s failed: %s", email, exc)
+    return render(
+        request,
+        "auth/register_check_email.html",
+        {"email": email, "mail_failed": mail_failed},
     )
-    return render(request, "auth/register_check_email.html", {"email": email})
 
 
 @ensure_csrf_cookie

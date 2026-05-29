@@ -5,6 +5,8 @@ Phase 3b: list-detail with record rows, record-add/edit with visibility matrix.
 """
 from __future__ import annotations
 
+import logging
+import smtplib
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -45,6 +47,29 @@ from .models import (
     PersonRelationship,
     RecordManager,
 )
+
+
+log = logging.getLogger(__name__)
+
+
+def _send_mail_safe(*, subject: str, message: str, recipient_list: list[str]) -> bool:
+    """Send a transactional mail without ever letting an SMTP error become a
+    500 (N14). The originating DB row (invite token etc.) is already committed
+    by the time we get here, so on failure we log, return False, and let the
+    caller surface a status message with the link so the admin can relay it
+    out-of-band or resend.
+    """
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=recipient_list,
+        )
+        return True
+    except (smtplib.SMTPException, OSError) as exc:
+        log.error("send_mail to %s failed: %s", recipient_list, exc)
+        return False
 
 
 def _sanitize_header_value(value: str, max_length: int = 200) -> str:
@@ -351,7 +376,7 @@ def list_invite(request, pk: int):
                 reverse("lists:invite_accept", kwargs={"token": token.token})
             )
             safe_title = _sanitize_header_value(lst.title)
-            send_mail(
+            sent = _send_mail_safe(
                 subject=f'Einladung zur Liste „{safe_title}"',
                 message=(
                     f"Hallo,\n\n"
@@ -359,10 +384,17 @@ def list_invite(request, pk: int):
                     f"Klicken Sie hier, um beizutreten:\n{link}\n\n"
                     f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
                 ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[target_email],
             )
-            messages.success(request, f"Einladung an {target_email} versendet.")
+            if sent:
+                messages.success(request, f"Einladung an {target_email} versendet.")
+            else:
+                messages.error(
+                    request,
+                    f"Die Einladung an {target_email} konnte nicht per Mail "
+                    f"versendet werden (Mail-Server-Fehler). Der Link ist "
+                    f"trotzdem gültig — Sie können ihn manuell weitergeben: {link}",
+                )
             return redirect("lists:detail", pk=lst.pk)
     else:
         form = ListInviteForm(list_obj=lst, inviting_user=request.user)
@@ -1100,7 +1132,7 @@ def admin_manage(request, pk: int):
                 reverse("lists:admin_invite_accept", kwargs={"token": token.token})
             )
             safe_title = _sanitize_header_value(lst.title)
-            send_mail(
+            sent = _send_mail_safe(
                 subject=f'Admin-Einladung: Liste „{safe_title}"',
                 message=(
                     f"Hallo,\n\n"
@@ -1109,10 +1141,19 @@ def admin_manage(request, pk: int):
                     f"Admin-Rolle zu übernehmen:\n{link}\n\n"
                     f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
                 ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[token.to_email],
             )
-            messages.success(request, f"Admin-Einladung an {token.to_email} versendet.")
+            if sent:
+                messages.success(
+                    request, f"Admin-Einladung an {token.to_email} versendet."
+                )
+            else:
+                messages.error(
+                    request,
+                    f"Die Admin-Einladung an {token.to_email} konnte nicht per "
+                    f"Mail versendet werden (Mail-Server-Fehler). Der Link ist "
+                    f"trotzdem gültig — Sie können ihn manuell weitergeben: {link}",
+                )
             return redirect("lists:admin_manage", pk=lst.pk)
     else:
         form = AdminInviteForm()

@@ -42,6 +42,7 @@ from .permissions import (
     eligible_parents_for,
 )
 from .visibility import (
+    build_visible_rows,
     can_user_see_field,
     can_user_see_subject_name,
     visible_attributes_for,
@@ -172,6 +173,108 @@ class VisibilityServiceTests(TestCase):
     def test_visible_attributes_orders_by_position_and_filters(self):
         attrs = list(visible_attributes_for(self.outsider, self.record))
         self.assertEqual([a.pk for a in attrs], [self.attr_public.pk])
+
+
+class BuildVisibleRowsTests(TestCase):
+    """N12: build_visible_rows must produce the same per-field/per-name result
+    as the single-record helpers, but in a constant number of queries
+    independent of the record count.
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_name = ListAttribute.objects.create(
+            template=self.template, name="Name", type=ListAttribute.Type.TEXT, position=0
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=1
+        )
+        self.attr_public = ListAttribute.objects.create(
+            template=self.template,
+            name="Klasse",
+            type=ListAttribute.Type.TEXT,
+            must_be_public=True,
+            position=2,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.audience_lst = List.objects.create(
+            title="Elternbeirat",
+            email_alias="eb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.member = _make_user(username="m", given="Berta", family="S")
+        self.outsider = _make_user(username="o", given="Carla", family="X")
+        ListAccess.objects.create(list=self.audience_lst, user=self.member)
+
+    def _add_record(self, idx: int, *, phone_audience=None, name_public=True):
+        person = Person.objects.create(given_name=f"Kind{idx}", family_name="Z")
+        record = ListRecord.objects.create(list=self.lst, subject=person)
+        # ListRecord.save() auto-creates a (record, attribute=NULL, audience=NULL)
+        # public name row (M8 default). Drop it when the test wants the name
+        # anonymised for non-managers.
+        if not name_public:
+            ListRecordAccess.objects.filter(record=record, attribute=None).delete()
+        ListRecordValue.objects.create(
+            record=record, attribute=self.attr_phone, value=f"0170-{idx}"
+        )
+        if phone_audience is not None:
+            ListRecordAccess.objects.create(
+                record=record, attribute=self.attr_phone, audience=phone_audience
+            )
+        return record
+
+    def test_rows_match_single_record_helpers(self):
+        self._add_record(1, phone_audience=self.audience_lst, name_public=True)
+        self._add_record(2, name_public=False)  # name anonymised, phone hidden
+
+        for viewer in (self.member, self.outsider):
+            rows = build_visible_rows(viewer, self.lst)
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                record = row["record"]
+                expected_attrs = [
+                    a for a in self.template.attributes.all()
+                    if can_user_see_field(viewer, record, a)
+                ]
+                self.assertEqual(
+                    [a.pk for a, _ in row["fields"]],
+                    [a.pk for a in expected_attrs],
+                )
+                name_visible = can_user_see_subject_name(viewer, record)
+                if name_visible:
+                    self.assertEqual(row["subject_display"], str(record.subject))
+                else:
+                    self.assertTrue(row["subject_display"].startswith("?"))
+
+    def test_anonymisation_counter_is_sequential(self):
+        self._add_record(1, name_public=False)
+        self._add_record(2, name_public=False)
+        rows = build_visible_rows(self.outsider, self.lst)
+        self.assertEqual([r["subject_display"] for r in rows], ["?1", "?2"])
+
+    def test_query_count_is_constant_in_record_count(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        for i in range(3):
+            self._add_record(i, phone_audience=self.audience_lst)
+        with CaptureQueriesContext(connection) as small:
+            build_visible_rows(self.member, self.lst)
+        small_count = len(small)
+
+        for i in range(3, 15):
+            self._add_record(i, phone_audience=self.audience_lst)
+        with CaptureQueriesContext(connection) as large:
+            build_visible_rows(self.member, self.lst)
+
+        # 3 records vs 15 records → identical query count (no N+1).
+        self.assertEqual(len(large), small_count)
 
 
 class CreationPermissionTests(TestCase):
@@ -1119,6 +1222,59 @@ class HeaderSanitizationTests(TestCase):
         self.assertNotIn("\r", sent.subject)
         # Newline-bearing content collapses to a single line but stays in subject.
         self.assertIn("Bcc: attacker@evil.test", sent.subject)
+
+
+class N14MailFailureTests(TestCase):
+    """N14: an SMTP failure during a transactional invite mail must not become a
+    500. The token row stays valid and the admin gets an error message with the
+    link so they can relay it out-of-band.
+    """
+
+    def setUp(self):
+        import smtplib
+        self.SMTPException = smtplib.SMTPException
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.admin_user = _make_user(username="adminuser", email="admin@example.test")
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+        self.client = Client()
+        self.client.force_login(self.admin_user)
+
+    def test_invite_smtp_failure_does_not_500_and_keeps_token(self):
+        from unittest.mock import patch
+
+        with patch(
+            "lists.views.send_mail",
+            side_effect=self.SMTPException("boom"),
+        ):
+            resp = self.client.post(
+                reverse("lists:invite", kwargs={"pk": self.lst.pk}),
+                data={"target_email": "newbie@example.test", "target_person": "", "mode": ""},
+                follow=True,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "konnte nicht")
+        # Token persisted despite the mail failure.
+        self.assertTrue(
+            ListInviteToken.objects.filter(
+                list=self.lst, target_email="newbie@example.test"
+            ).exists()
+        )
+
+    def test_invite_success_path_sends_and_reports(self):
+        resp = self.client.post(
+            reverse("lists:invite", kwargs={"pk": self.lst.pk}),
+            data={"target_email": "newbie@example.test", "target_person": "", "mode": ""},
+            follow=True,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertContains(resp, "versendet")
 
 
 class InvitePersonScopingTests(TestCase):
