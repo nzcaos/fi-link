@@ -897,6 +897,9 @@ class InviteFlowTests(TestCase):
         # RecordManager with basis=invited is written.
         rm = RecordManager.objects.get(record=record, user=self.existing)
         self.assertEqual(rm.basis, RecordManager.Basis.INVITED)
+        # Accepting the invite joins the Benutzergruppe (see the self-join
+        # paths): required to see a private list and receive its mail.
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=self.existing).exists())
 
     def test_wrong_user_branch_b_refused(self):
         token = self._make_invite(target_person=self.existing.person)
@@ -1137,6 +1140,8 @@ class M11RecordCreateModeCheckTests(TestCase):
         record = ListRecord.objects.get(list=self.lst_self, subject=self.user.person)
         self.assertEqual(record.role, ListRecord.Role.MEMBER)
         self.assertIn(f"/lists/{self.lst_self.pk}/records/{record.pk}/edit/", resp.url)
+        # Self-registration joins the Benutzergruppe (see _join_self_mode).
+        self.assertTrue(ListAccess.objects.filter(list=self.lst_self, user=self.user).exists())
 
     def test_via_associate_mode_refuses(self):
         self.client.force_login(self.user)
@@ -1624,6 +1629,9 @@ class QRJoinClickFlowTests(TestCase):
         self.assertIn(f"/records/{record.pk}/edit/", resp.url)
         rm = RecordManager.objects.get(record=record, user=self.visitor)
         self.assertEqual(rm.basis, RecordManager.Basis.SELF_REGISTERED)
+        # Joining must also add the user to the Benutzergruppe, otherwise they
+        # cannot see the (private) list they just joined and get no list mail.
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=self.visitor).exists())
 
     def test_post_auth_self_mode_idempotent(self):
         """Scanning the QR twice yields the same record, no duplicates."""
@@ -3907,6 +3915,23 @@ class AdminHandoverTests(TestCase):
         )
         self.assertTrue(ListAdmin.objects.filter(list=self.lst, user=c).exists())
         self.assertFalse(ListAdmin.objects.filter(list=self.lst, user=self.admin_a).exists())
+
+    def test_wrong_user_cannot_consume(self):
+        # A logged-in USER whose email differs from to_email must NOT be able to
+        # claim admin by possessing the link (privilege-escalation guard).
+        intruder = _make_user(username="intruder", email="evil@x.de")
+        tok = AdminInviteToken.objects.create(
+            list=self.lst, from_user=self.admin_a, to_email="b@x.de",
+            mode=AdminInviteToken.Mode.ADD,
+        )
+        self.client.force_login(intruder)
+        resp = self.client.post(
+            reverse("lists:admin_invite_accept", kwargs={"token": tok.token})
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(ListAdmin.objects.filter(list=self.lst, user=intruder).exists())
+        tok.refresh_from_db()
+        self.assertIsNone(tok.consumed_at)
 
     def test_unauth_post_does_not_consume(self):
         tok = AdminInviteToken.objects.create(

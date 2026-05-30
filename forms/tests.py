@@ -162,6 +162,9 @@ class FormAssetTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp["Content-Type"], "image/png")
         self.assertEqual(resp.content, b"\x89PNGdata")
+        # Defense-in-depth against stored XSS via an uploaded SVG/HTML asset.
+        self.assertEqual(resp["X-Content-Type-Options"], "nosniff")
+        self.assertIn("sandbox", resp["Content-Security-Policy"])
 
     def test_asset_access_gated(self):
         c = Client()

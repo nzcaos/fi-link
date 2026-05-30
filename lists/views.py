@@ -223,6 +223,10 @@ def record_create_self(request, pk: int):
             user=request.user,
             basis=RecordManager.Basis.SELF_REGISTERED,
         )
+        # Self-registering makes the user a member of the Benutzergruppe —
+        # without this they cannot see the (private) list they just joined,
+        # receive none of its mail, and are not addressable as an audience.
+        ListAccess.objects.get_or_create(list=lst, user=request.user)
     return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
 
 
@@ -266,6 +270,9 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
                 user=request.user,
                 basis=RecordManager.Basis.INVITED,
             )
+        # Accepting the invitation joins the Benutzergruppe — required to see a
+        # private list, receive its mail, and be addressable as an audience.
+        ListAccess.objects.get_or_create(list=invite.list, user=request.user)
         invite.consumed_at = timezone.now()
         invite.save(update_fields=["consumed_at"])
     return redirect("lists:record_edit", pk=invite.list_id, record_pk=record.pk)
@@ -502,6 +509,9 @@ def _join_self_mode(request, lst: List):
             user=request.user,
             basis=RecordManager.Basis.SELF_REGISTERED,
         )
+        # Join the Benutzergruppe (see record_create_self): otherwise the QR
+        # joiner is locked out of a private list and receives no list mail.
+        ListAccess.objects.get_or_create(list=lst, user=request.user)
     return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
 
 
@@ -1223,6 +1233,27 @@ def admin_invite_accept(request, token: str):
                 reverse("accounts:register_start")
                 + "?"
                 + urlencode({"email": inv.to_email})
+            )
+
+        # Identity binding: a click + authentication alone must not confer
+        # admin rights to *anyone* holding the link — the token is addressed to
+        # `to_email`, and only a USER on that address may consume it. Mirrors
+        # the wrong-user rejection on the lower-privileged member invite
+        # (`invite_accept`); without it any logged-in visitor who obtains a
+        # forwarded/leaked admin link could promote themselves.
+        user_email = (getattr(request.user.person, "email", "") or "").strip().lower()
+        if user_email != inv.to_email.strip().lower():
+            return render(
+                request,
+                "lists/invite_problem.html",
+                {
+                    "reason": (
+                        "Diese Admin-Einladung gehört nicht zu Ihrem Konto. "
+                        "Bitte melden Sie sich mit dem eingeladenen Konto an "
+                        "und öffnen Sie den Link erneut."
+                    )
+                },
+                status=403,
             )
 
         with transaction.atomic():

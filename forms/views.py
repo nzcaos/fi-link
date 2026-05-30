@@ -75,4 +75,13 @@ def form_asset(request, form_pk: int, asset_pk: int):
     if not can_user_access_form(request.user, form):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf dieses Formular.")
     asset = get_object_or_404(FormPartAsset, pk=asset_pk, part__form=form)
-    return HttpResponse(bytes(asset.data), content_type=asset.mime_type)
+    resp = HttpResponse(bytes(asset.data), content_type=asset.mime_type)
+    # Defense-in-depth: assets are super-admin-uploaded, but an SVG/HTML blob
+    # served same-origin with a sniffable type would be a stored-XSS vector if
+    # opened in a document context. `nosniff` pins the declared Content-Type
+    # (images keep rendering via <img>); the CSP `sandbox` neutralises any
+    # scripting should the URL be navigated to directly. Neither header breaks
+    # the inline-image embedding via [[asset:<id>]].
+    resp["X-Content-Type-Options"] = "nosniff"
+    resp["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return resp
