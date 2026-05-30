@@ -16,7 +16,7 @@ from django.core import mail
 
 from accounts.models import Person, User
 from . import lifecycle
-from .forms import ListCreateForm, ListInviteForm, RecordEditForm
+from .forms import AssociateWizardForm, ListCreateForm, ListInviteForm, RecordEditForm
 from .models import (
     AdminInviteToken,
     List,
@@ -2022,6 +2022,155 @@ class AssociateWizardTests(TestCase):
         self.assertEqual(Person.objects.filter(family_name="Mueller").count(), 1)  # only the parent
         self.assertFalse(ListRecord.objects.filter(list=self.lst).exists())
         self.assertFalse(PersonRelationship.objects.exists())
+
+
+class AssociateWizardMultiPersonTests(TestCase):
+    """Phase 3: the wizard splits attributes by `applies_to_role`, gives the
+    registering parent their own associate record, and optionally captures a
+    second parent as a separate associate record. See CLAUDE.md /
+    *Family-association model / Multi-person row*."""
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von", "Erziehungsberechtigte von"],
+        )
+        # member-role attribute (stays on the child).
+        self.attr_notes = ListAttribute.objects.create(
+            template=self.template, name="Notizen", type=ListAttribute.Type.TEXT,
+            position=0, applies_to_role=ListAttribute.AppliesTo.MEMBER,
+        )
+        # associate-role attributes (rendered once per parent).
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE,
+            position=1, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.attr_address = ListAttribute.objects.create(
+            template=self.template, name="Adresse", type=ListAttribute.Type.TEXT,
+            position=2, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent = _make_user(
+            username="parent", given="Eva", family="Mueller", email="eva@example.test"
+        )
+        ListAccess.objects.create(list=self.lst, user=self.parent)
+
+    def _post(self, **overrides):
+        data = {
+            "given_name": "Lina",
+            "family_name": "Mueller",
+            "member_email": "",
+            "role": "Mutter von",
+            f"attr_{self.attr_notes.pk}": "mag Mathe",
+            f"p1_attr_{self.attr_phone.pk}": "+49 111",
+            f"p1_attr_{self.attr_address.pk}": "Hauptstr. 1",
+        }
+        data.update(overrides)
+        self.client.force_login(self.parent)
+        return self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            data=data,
+        )
+
+    def test_member_and_associate_attributes_split_across_records(self):
+        resp = self._post()
+        self.assertEqual(resp.status_code, 302)
+        child = Person.objects.get(given_name="Lina", family_name="Mueller")
+        child_rec = ListRecord.objects.get(list=self.lst, subject=child)
+        child_vals = {v.attribute_id: v.value for v in child_rec.values.all()}
+        # Child carries only the member attribute.
+        self.assertEqual(child_vals.get(self.attr_notes.pk), "mag Mathe")
+        self.assertNotIn(self.attr_phone.pk, child_vals)
+        self.assertNotIn(self.attr_address.pk, child_vals)
+
+        # Registering parent has their own associate record with the associate
+        # attributes and a self_registered manager row.
+        p1_rec = ListRecord.objects.get(
+            list=self.lst, subject=self.parent.person, role=ListRecord.Role.ASSOCIATE
+        )
+        p1_vals = {v.attribute_id: v.value for v in p1_rec.values.all()}
+        self.assertEqual(p1_vals.get(self.attr_phone.pk), "+49 111")
+        self.assertEqual(p1_vals.get(self.attr_address.pk), "Hauptstr. 1")
+        self.assertNotIn(self.attr_notes.pk, p1_vals)
+        self.assertTrue(
+            RecordManager.objects.filter(
+                record=p1_rec, user=self.parent,
+                basis=RecordManager.Basis.SELF_REGISTERED,
+            ).exists()
+        )
+
+    def test_second_parent_creates_separate_associate_record(self):
+        resp = self._post(
+            add_second_parent="on",
+            p2_given_name="Olaf",
+            p2_family_name="Mueller",
+            p2_role="Vater von",
+            p2_email="olaf@example.test",
+            **{
+                f"p2_attr_{self.attr_phone.pk}": "+49 222",
+                f"p2_attr_{self.attr_address.pk}": "Hauptstr. 1",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        child = Person.objects.get(given_name="Lina")
+        p2 = Person.objects.get(given_name="Olaf", family_name="Mueller")
+        # Second parent is a PERSON only — no USER, no ListAccess.
+        self.assertFalse(User.objects.filter(person=p2).exists())
+        self.assertFalse(ListAccess.objects.filter(list=self.lst, user__person=p2).exists())
+        # Own associate record with their own phone, managed by the registering
+        # user as proxy creator.
+        p2_rec = ListRecord.objects.get(
+            list=self.lst, subject=p2, role=ListRecord.Role.ASSOCIATE
+        )
+        p2_vals = {v.attribute_id: v.value for v in p2_rec.values.all()}
+        self.assertEqual(p2_vals.get(self.attr_phone.pk), "+49 222")
+        self.assertTrue(
+            RecordManager.objects.filter(
+                record=p2_rec, user=self.parent, basis=RecordManager.Basis.CREATOR
+            ).exists()
+        )
+        # Relationship child ← second parent with the chosen role.
+        self.assertTrue(
+            PersonRelationship.objects.filter(
+                subject_person=child, related_person=p2, role="Vater von"
+            ).exists()
+        )
+
+    def test_second_parent_requires_name_and_role(self):
+        resp = self._post(add_second_parent="on")  # no p2_* fields
+        self.assertEqual(resp.status_code, 200)  # re-rendered with errors
+        self.assertFalse(
+            ListRecord.objects.filter(list=self.lst).exists()
+        )  # atomic: nothing created
+        self.assertFalse(Person.objects.filter(given_name="Lina").exists())
+
+    def test_sibling_reuses_parent_associate_record(self):
+        self._post(given_name="Lina")
+        self._post(given_name="Tom")
+        # Two member (child) records, but a single associate record for the parent.
+        self.assertEqual(
+            ListRecord.objects.filter(list=self.lst, role=ListRecord.Role.MEMBER).count(), 2
+        )
+        self.assertEqual(
+            ListRecord.objects.filter(
+                list=self.lst, subject=self.parent.person, role=ListRecord.Role.ASSOCIATE
+            ).count(),
+            1,
+        )
+
+    def test_form_field_namespaces_present(self):
+        self.client.force_login(self.parent)
+        form = AssociateWizardForm(list_obj=self.lst, user=self.parent)
+        self.assertIn(f"attr_{self.attr_notes.pk}", form.fields)
+        self.assertIn(f"p1_attr_{self.attr_phone.pk}", form.fields)
+        self.assertIn(f"p2_attr_{self.attr_phone.pk}", form.fields)
+        # member attribute does not get parent namespaces.
+        self.assertNotIn(f"p1_attr_{self.attr_notes.pk}", form.fields)
 
 
 class Phase3b2E2ETests(TestCase):

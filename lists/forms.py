@@ -447,6 +447,12 @@ _DEFAULT_ROLES = [
     "Erziehungsberechtigte von",
 ]
 
+# Field-name prefixes for the associate wizard. Member (child) attributes reuse
+# the generic `attr_` prefix; the two parents get their own namespaces so each
+# parent's associate-role attribute values stay separate.
+_P1_ATTR_PREFIX = "p1_attr_"
+_P2_ATTR_PREFIX = "p2_attr_"
+
 
 class TestSendForm(forms.Form):
     """Phase 4 super-admin test-send: triggers a real SMTP fan-out across the
@@ -480,20 +486,38 @@ class TestSendForm(forms.Form):
         return body
 
 
+def _attr_value_str(attribute: ListAttribute, raw) -> str:
+    if attribute.type == ListAttribute.Type.CHECKBOX:
+        return "true" if raw else "false"
+    if raw in (None, ""):
+        return ""
+    return str(raw)
+
+
 class AssociateWizardForm(forms.Form):
     """Single-page onboarding wizard for `via_associate` lists.
 
-    The registering USER declares another PERSON (e.g. their child) as the
-    member of the list and picks their own relationship role (Mutter von,
-    Vater von, …) from the LISTTEMPLATE-configured taxonomy. One POST
-    creates Person + ListRecord (role=member, subject=child) +
-    PersonRelationship (subject=child, related=user.person, role) +
-    RecordManager (basis=guardian) + ListAccess (user joins the Benutzergruppe)
-    + all ListRecordValue rows for the record's attributes.
+    The registering USER declares the member PERSON (e.g. their child) and
+    captures up to two associated persons (the parents/guardians). The member
+    and the parents are *separate* records joined by PersonRelationship — see
+    CLAUDE.md / *Family-association model / Multi-person row*. Attribute values
+    are split by `ListAttribute.applies_to_role`: member-role attributes land on
+    the child record, associate-role attributes on each parent record.
+
+    One POST creates, atomically:
+      - child PERSON + member ListRecord (role=member) + member-role values;
+      - PersonRelationship (child ← registering user) + RecordManager(guardian)
+        on the child + ListAccess (the user joins the Benutzergruppe);
+      - the registering user's own associate ListRecord (role=associate,
+        subject=user.person) + associate-role values + RecordManager
+        (self_registered) — reused if it already exists (sibling in the same
+        class);
+      - optionally a second parent: PERSON + associate ListRecord +
+        PersonRelationship + RecordManager(creator, proxy) + associate values.
 
     Visibility matrix is intentionally not part of this form — the M8 signal
-    sets a sensible default (name visible to public) and the saver can refine
-    it in the regular record-edit form right after.
+    sets the name default (public) and each record's email starts hidden; the
+    saver refines both in the regular record-edit form afterwards.
     """
 
     given_name = forms.CharField(
@@ -517,27 +541,97 @@ class AssociateWizardForm(forms.Form):
         choices=[],
     )
 
+    add_second_parent = forms.BooleanField(
+        label="Zweite Bezugsperson hinzufügen (z. B. zweiter Elternteil)",
+        required=False,
+    )
+    p2_given_name = forms.CharField(
+        label="Vorname der zweiten Bezugsperson", max_length=200, required=False
+    )
+    p2_family_name = forms.CharField(
+        label="Nachname der zweiten Bezugsperson", max_length=200, required=False
+    )
+    p2_email = forms.EmailField(
+        label="E-Mail der zweiten Bezugsperson (optional)",
+        required=False,
+        help_text=(
+            "Optional. Sie können diese Person später per Einladung selbst "
+            "übernehmen lassen — dann setzt sie ihre Freigaben selbst."
+        ),
+    )
+    p2_role = forms.ChoiceField(
+        label="Rolle der zweiten Bezugsperson", choices=[], required=False
+    )
+
     def __init__(self, *args, list_obj: List, user, **kwargs):
         super().__init__(*args, **kwargs)
         self.list_obj = list_obj
         self.user = user
 
         roles = list_obj.template.relationship_roles or _DEFAULT_ROLES
-        self.fields["role"].choices = [(r, r) for r in roles]
+        role_choices = [(r, r) for r in roles]
+        self.fields["role"].choices = role_choices
+        self.fields["p2_role"].choices = [("", "—")] + role_choices
 
-        self._attribute_fields: dict[int, ListAttribute] = {}
+        # Split attributes by applies_to_role: member-role onto the child,
+        # associate-role onto each parent.
+        self._member_attrs: dict[int, ListAttribute] = {}
+        self._associate_attrs: dict[int, ListAttribute] = {}
         for attribute in list_obj.template.attributes.all():
-            key = f"{_ATTR_FIELD_PREFIX}{attribute.pk}"
-            self.fields[key] = _build_field_for_attribute(attribute)
-            self._attribute_fields[attribute.pk] = attribute
+            if attribute.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE:
+                self._associate_attrs[attribute.pk] = attribute
+                # Parent 1 keeps the template's required-ness; parent 2 is
+                # always optional (the whole second-parent block is optional).
+                self.fields[f"{_P1_ATTR_PREFIX}{attribute.pk}"] = _build_field_for_attribute(attribute)
+                p2_field = _build_field_for_attribute(attribute)
+                p2_field.required = False
+                self.fields[f"{_P2_ATTR_PREFIX}{attribute.pk}"] = p2_field
+            else:
+                self._member_attrs[attribute.pk] = attribute
+                self.fields[f"{_ATTR_FIELD_PREFIX}{attribute.pk}"] = _build_field_for_attribute(attribute)
 
     def iter_attribute_rows(self):
-        """Render-helper: yields (attribute, bound_field)."""
-        for attribute in self.list_obj.template.attributes.all():
-            yield attribute, self[f"{_ATTR_FIELD_PREFIX}{attribute.pk}"]
+        """Render-helper: member (child) attribute rows — (attribute, field)."""
+        for pk, attribute in self._member_attrs.items():
+            yield attribute, self[f"{_ATTR_FIELD_PREFIX}{pk}"]
+
+    def iter_p1_attribute_rows(self):
+        """Render-helper: registering parent's associate attribute rows."""
+        for pk, attribute in self._associate_attrs.items():
+            yield attribute, self[f"{_P1_ATTR_PREFIX}{pk}"]
+
+    def iter_p2_attribute_rows(self):
+        """Render-helper: second parent's associate attribute rows."""
+        for pk, attribute in self._associate_attrs.items():
+            yield attribute, self[f"{_P2_ATTR_PREFIX}{pk}"]
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("add_second_parent"):
+            for field, label in (
+                ("p2_given_name", "Vorname"),
+                ("p2_family_name", "Nachname"),
+                ("p2_role", "Rolle"),
+            ):
+                if not cleaned.get(field):
+                    self.add_error(
+                        field,
+                        f"{label} der zweiten Bezugsperson ist erforderlich, "
+                        "wenn Sie eine zweite Bezugsperson hinzufügen.",
+                    )
+        return cleaned
+
+    def _write_values(self, record, attrs: dict, prefix: str) -> None:
+        for pk, attribute in attrs.items():
+            ListRecordValue.objects.create(
+                record=record,
+                attribute=attribute,
+                value=_attr_value_str(attribute, self.cleaned_data.get(f"{prefix}{pk}")),
+            )
 
     @transaction.atomic
     def save(self) -> ListRecord:
+        # 1) Child (member) record + member-role values.
         child = Person.objects.create(
             given_name=self.cleaned_data["given_name"].strip(),
             family_name=self.cleaned_data["family_name"].strip(),
@@ -548,6 +642,11 @@ class AssociateWizardForm(forms.Form):
             subject=child,
             role=ListRecord.Role.MEMBER,
         )
+        self._write_values(record, self._member_attrs, _ATTR_FIELD_PREFIX)
+
+        # 2) Registering user ↔ child relationship + guardian edit-right + the
+        #    user joins the Benutzergruppe. ListAccess is idempotent across
+        #    re-runs (a parent adding a second child to the same list).
         PersonRelationship.objects.create(
             subject_person=child,
             related_person=self.user.person,
@@ -558,26 +657,58 @@ class AssociateWizardForm(forms.Form):
             user=self.user,
             basis=RecordManager.Basis.GUARDIAN,
         )
-        # The associate becomes a Benutzergruppen member so the list shows up
-        # in their index and the visibility matrix can address them as an
-        # audience. Idempotent across re-runs (a parent adding a second child
-        # to the same list).
         ListAccess.objects.get_or_create(list=self.list_obj, user=self.user)
 
-        for pk, attribute in self._attribute_fields.items():
-            raw = self.cleaned_data.get(f"{_ATTR_FIELD_PREFIX}{pk}")
-            if attribute.type == ListAttribute.Type.CHECKBOX:
-                value_str = "true" if raw else "false"
-            elif raw in (None, ""):
-                value_str = ""
-            else:
-                value_str = str(raw)
-            ListRecordValue.objects.create(
-                record=record,
-                attribute=attribute,
-                value=value_str,
+        # 3) The registering user's own associate record (role=associate,
+        #    subject=user.person). Reused for a sibling already onboarded into
+        #    this list (active record per (list, subject) is unique), so we only
+        #    write values / the manager row on first creation. Explicit
+        #    filter-then-create because the active-record condition is a query
+        #    lookup that get_or_create cannot also use in create().
+        p1_record = ListRecord.objects.filter(
+            list=self.list_obj,
+            subject=self.user.person,
+            archived_at__isnull=True,
+        ).first()
+        if p1_record is None:
+            p1_record = ListRecord.objects.create(
+                list=self.list_obj,
+                subject=self.user.person,
+                role=ListRecord.Role.ASSOCIATE,
+            )
+            self._write_values(p1_record, self._associate_attrs, _P1_ATTR_PREFIX)
+            RecordManager.objects.create(
+                record=p1_record,
+                user=self.user,
+                basis=RecordManager.Basis.SELF_REGISTERED,
             )
 
+        # 4) Optional second parent: a new PERSON (not a USER) with their own
+        #    associate record, managed by the registering user as proxy creator.
+        if self.cleaned_data.get("add_second_parent"):
+            p2_person = Person.objects.create(
+                given_name=self.cleaned_data["p2_given_name"].strip(),
+                family_name=self.cleaned_data["p2_family_name"].strip(),
+                email=self.cleaned_data.get("p2_email") or None,
+            )
+            p2_record = ListRecord.objects.create(
+                list=self.list_obj,
+                subject=p2_person,
+                role=ListRecord.Role.ASSOCIATE,
+            )
+            PersonRelationship.objects.create(
+                subject_person=child,
+                related_person=p2_person,
+                role=self.cleaned_data["p2_role"],
+            )
+            RecordManager.objects.create(
+                record=p2_record,
+                user=self.user,
+                basis=RecordManager.Basis.CREATOR,
+            )
+            self._write_values(p2_record, self._associate_attrs, _P2_ATTR_PREFIX)
+
+        # The view lands on the child record's edit form for refinement.
         return record
 
 
