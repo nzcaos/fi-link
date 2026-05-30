@@ -124,6 +124,10 @@ class ListAttribute(models.Model):
         CHECKBOX = "checkbox", "Häkchen"
         USER_RELATIONSHIP = "user_relationship", "Personen-Beziehung"
 
+    class AppliesTo(models.TextChoices):
+        MEMBER = "member", "Mitglied (z. B. Kind)"
+        ASSOCIATE = "associate", "Zugehörige Person (z. B. Elternteil)"
+
     template = models.ForeignKey(
         ListTemplate,
         on_delete=models.CASCADE,
@@ -136,6 +140,17 @@ class ListAttribute(models.Model):
         "muss öffentlich sein",
         default=False,
         help_text="Wenn gesetzt, kann der Eigentümer dieses Feld nicht verbergen.",
+    )
+    applies_to_role = models.CharField(
+        "gilt für",
+        max_length=10,
+        choices=AppliesTo.choices,
+        default=AppliesTo.MEMBER,
+        help_text=(
+            "Ob dieses Attribut zum Mitglied selbst (z. B. Kind) oder zu den "
+            "zugehörigen Personen (z. B. Eltern) gehört. 'Zugehörige Person' "
+            "wird pro verknüpfter Person einmal gerendert."
+        ),
     )
     choices = models.JSONField(
         "Auswahl-Werte",
@@ -393,13 +408,20 @@ class ListRecordAccess(models.Model):
     The audience is a List_ID — "show this field to members of list X". NULL
     audience maps the spec's '0' (= public).
 
-    `attribute` is `NULL` as a sentinel for "the subject's name" (M8). The
-    invariant "at most one row per (record, NULL, audience)" is enforced by
-    the single writer pattern in `RecordEditForm.save()` (delete-then-insert)
-    and the post_save signal on `ListRecord` (`get_or_create`). Postgres
-    treats NULL as distinct in unique constraints, so the unique_together
-    below does not block dup `(record, NULL, NULL)` rows at SQL level.
+    `attribute` is `NULL` for the two *subject-level* sentinels, disambiguated
+    by `sentinel`: `"name"` = the subject's name (M8), `"email"` = the
+    subject PERSON's account email (multi-person row). A real attribute row has
+    `attribute` set and `sentinel=NULL`. The invariant "at most one row per
+    (record, NULL, sentinel, audience)" is enforced by the single writer
+    pattern in `RecordEditForm.save()` (delete-then-insert) and the post_save
+    signal on `ListRecord` (`get_or_create`). Postgres treats NULL as distinct
+    in unique constraints, so the unique_together below does not block dup
+    sentinel rows at SQL level.
     """
+
+    class Sentinel(models.TextChoices):
+        NAME = "name", "Name"
+        EMAIL = "email", "E-Mail"
 
     record = models.ForeignKey(
         ListRecord,
@@ -414,7 +436,18 @@ class ListRecordAccess(models.Model):
         on_delete=models.PROTECT,
         related_name="+",
         verbose_name="Attribut",
-        help_text="Leer = Sichtbarkeit des Subject-Namens (M8).",
+        help_text="Leer = Subject-Sentinel (siehe 'Sentinel').",
+    )
+    sentinel = models.CharField(
+        "Sentinel",
+        max_length=10,
+        null=True,
+        blank=True,
+        choices=Sentinel.choices,
+        help_text=(
+            "Nur wenn 'Attribut' leer ist: 'name' = Sichtbarkeit des "
+            "Subject-Namens (M8), 'email' = Sichtbarkeit der Konto-E-Mail."
+        ),
     )
     audience = models.ForeignKey(
         List,
@@ -433,7 +466,12 @@ class ListRecordAccess(models.Model):
 
     def __str__(self) -> str:
         audience = self.audience.title if self.audience_id else "öffentlich"
-        attribute = self.attribute.name if self.attribute_id else "(Name)"
+        if self.attribute_id:
+            attribute = self.attribute.name
+        elif self.sentinel == self.Sentinel.EMAIL:
+            attribute = "(E-Mail)"
+        else:
+            attribute = "(Name)"
         return f"{self.record} · {attribute} → {audience}"
 
 
@@ -1315,14 +1353,19 @@ from django.dispatch import receiver  # noqa: E402
 
 @receiver(post_save, sender=ListRecord)
 def _ensure_default_name_visibility(sender, instance, created, **kwargs):
-    """M8: every new ListRecord gets a default (attribute=NULL, audience=NULL)
-    ListRecordAccess row — 'subject-name visible to public'. See CLAUDE.md /
-    *Subject-name visibility*. Uses get_or_create for idempotency.
+    """M8: every new ListRecord gets a default (attribute=NULL, sentinel="name",
+    audience=NULL) ListRecordAccess row — 'subject-name visible to public'. See
+    CLAUDE.md / *Subject-name visibility*. Uses get_or_create for idempotency.
+
+    The email sentinel is intentionally *not* defaulted here — parent email
+    starts hidden (opt-in), see CLAUDE.md / *Family-association model /
+    Multi-person row*.
     """
     if not created:
         return
     ListRecordAccess.objects.get_or_create(
         record=instance,
         attribute=None,
+        sentinel=ListRecordAccess.Sentinel.NAME,
         audience=None,
     )

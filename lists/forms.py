@@ -356,16 +356,21 @@ class RecordEditForm(forms.Form):
                     )
 
             # M8: subject-name visibility — same delete-then-insert pattern,
-            # but with attribute=None as the sentinel.
+            # but with attribute=None + sentinel="name". Scoped to the name
+            # sentinel so it never touches the email sentinel rows (which the
+            # multi-person-row matrix writes via its own block).
             picked_name = self.cleaned_data.get(_NAME_VIS_FIELD) or []
             ListRecordAccess.objects.filter(
-                record=self.record, attribute__isnull=True
+                record=self.record,
+                attribute__isnull=True,
+                sentinel=ListRecordAccess.Sentinel.NAME,
             ).delete()
             for key in picked_name:
                 audience_id = _audience_key_to_list_id(key)
                 ListRecordAccess.objects.create(
                     record=self.record,
                     attribute=None,
+                    sentinel=ListRecordAccess.Sentinel.NAME,
                     audience_id=audience_id,
                 )
 

@@ -25,7 +25,15 @@ from .models import (
 class ListAttributeInline(admin.TabularInline):
     model = ListAttribute
     extra = 0
-    fields = ("position", "name", "type", "must_be_public", "choices", "choice_cap")
+    fields = (
+        "position",
+        "name",
+        "type",
+        "applies_to_role",
+        "must_be_public",
+        "choices",
+        "choice_cap",
+    )
 
 
 @admin.register(ListTemplate)
@@ -37,8 +45,8 @@ class ListTemplateAdmin(admin.ModelAdmin):
 
 @admin.register(ListAttribute)
 class ListAttributeAdmin(admin.ModelAdmin):
-    list_display = ("template", "name", "type", "must_be_public", "position")
-    list_filter = ("type", "must_be_public", "template")
+    list_display = ("template", "name", "type", "applies_to_role", "must_be_public", "position")
+    list_filter = ("type", "applies_to_role", "must_be_public", "template")
     search_fields = ("name", "template__name")
 
 
@@ -89,7 +97,7 @@ class ListRecordAccessInline(admin.TabularInline):
     model = ListRecordAccess
     extra = 0
     autocomplete_fields = ("attribute", "audience")
-    fields = ("attribute", "audience")
+    fields = ("attribute", "sentinel", "audience")
 
 
 @admin.register(ListRecord)
@@ -115,7 +123,8 @@ class ListRecordValueAdmin(admin.ModelAdmin):
 
 @admin.register(ListRecordAccess)
 class ListRecordAccessAdmin(admin.ModelAdmin):
-    list_display = ("record", "attribute", "audience")
+    list_display = ("record", "attribute", "sentinel", "audience")
+    list_filter = ("sentinel",)
     autocomplete_fields = ("record", "attribute", "audience")
 
 

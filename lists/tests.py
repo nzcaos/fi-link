@@ -672,11 +672,18 @@ class M8SubjectNameVisibilityTests(TestCase):
 
     def test_default_name_visibility_row_created_by_signal(self):
         """Every newly created ListRecord should have one (NULL, NULL) access
-        row written by the post_save signal — default = public."""
+        row written by the post_save signal — default = public, sentinel=name.
+        No email-sentinel row (parent email is opt-in / starts hidden)."""
         rows = ListRecordAccess.objects.filter(
             record=self.record, attribute__isnull=True, audience__isnull=True
         )
         self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.first().sentinel, ListRecordAccess.Sentinel.NAME)
+        self.assertFalse(
+            ListRecordAccess.objects.filter(
+                record=self.record, sentinel=ListRecordAccess.Sentinel.EMAIL
+            ).exists()
+        )
 
     def test_default_makes_name_visible_to_everyone(self):
         for u in (self.class_member, self.parent_member, self.outsider, self.admin, self.super_):
