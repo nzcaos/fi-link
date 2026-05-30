@@ -1,9 +1,14 @@
 from django.contrib import admin
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import include, path
 
 
 def welcome(request):
+    # Authenticated users skip the landing page and go straight to a list
+    # view (CLAUDE.md / *Post-login landing*); only anonymous visitors see
+    # the public welcome screen.
+    if request.user.is_authenticated:
+        return redirect("lists:home")
     return render(request, "welcome.html")
 
 

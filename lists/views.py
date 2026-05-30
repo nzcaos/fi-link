@@ -14,7 +14,6 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import Q
 from django.http import HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -80,12 +79,14 @@ def _sanitize_header_value(value: str, max_length: int = 200) -> str:
     """
     return " ".join((value or "").split())[:max_length]
 from .permissions import (
+    accessible_lists_for,
     can_user_admin_list,
     can_user_decide_transfer,
     can_user_edit_record,
     can_user_initiate_transfer,
     can_user_see_list,
     is_super_admin,
+    resolve_default_list,
     would_self_removal_leave_no_admin,
 )
 from . import lifecycle
@@ -94,17 +95,22 @@ from .visibility import build_visible_rows
 
 
 @login_required
+def list_home(request):
+    """Post-login landing. Bounce the user straight onto a list view rather
+    than a separate landing page (CLAUDE.md / *Post-login landing*): their
+    last-selected list, else their first accessible one. Users with no lists
+    yet fall through to the index, which explains the empty state.
+    """
+    lst = resolve_default_list(request.user)
+    if lst is not None:
+        return redirect("lists:detail", pk=lst.pk)
+    return redirect("lists:index")
+
+
+@login_required
 def list_index(request):
     user = request.user
-    if user.is_superuser:
-        own_lists = List.objects.filter(archived_at__isnull=True).order_by("title")
-    else:
-        own_lists = (
-            List.objects.filter(archived_at__isnull=True)
-            .filter(Q(admins__user=user) | Q(members__user=user))
-            .distinct()
-            .order_by("title")
-        )
+    own_lists = accessible_lists_for(user)
     public_lists = (
         List.objects.filter(archived_at__isnull=True)
         .filter(
@@ -142,6 +148,13 @@ def list_detail(request, pk: int):
     lst = get_object_or_404(List, pk=pk)
     if not can_user_see_list(request.user, lst):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf diese Liste.")
+
+    # Remember this as the user's most recently opened list, so the next login
+    # lands here (CLAUDE.md / *Post-login landing*). Only write on change.
+    if request.user.last_selected_list_id != lst.pk:
+        request.user.last_selected_list = lst
+        request.user.save(update_fields=["last_selected_list"])
+
     is_admin = can_user_admin_list(request.user, lst)
 
     rows = build_visible_rows(request.user, lst)

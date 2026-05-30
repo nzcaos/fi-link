@@ -191,7 +191,11 @@ MAIL_METADATA_RETENTION_DAYS = int(
 )
 
 LOGIN_URL = "/auth/login/"
-LOGIN_REDIRECT_URL = "/"
+# Land authenticated users straight on a list view, not a separate landing
+# page (CLAUDE.md / *Post-login landing*). `lists:home` resolves which list.
+# Kept as a path string (not a URL name) because login_finish echoes it back
+# to the browser as a JSON redirect target.
+LOGIN_REDIRECT_URL = "/lists/home/"
 LOGOUT_REDIRECT_URL = "/"
 
 # Logging: Django's default root logger is WARNING, which silently drops

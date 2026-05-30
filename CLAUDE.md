@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-The repository is initialized on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). It currently contains the specification (`filink.md`, in German), the architecture decisions captured in this file, the deployment-procedure documentation in `README.md`, and a `.gitignore` for the planned Python/Django stack. There is no application code, build system, dependency manifest, or test suite yet — but the architecture is decided end-to-end (mail layer, application stack, task queue, IMAP IDLE consumer, domain model, authentication, deployment) and implementation is the next concrete step.
+The repository is on branch `main` and pushed to GitHub (`origin = https://github.com/nzcaos/fi-link.git`). The application is **feature-complete** across all planned phases (see `PLAN.md`): the Django project (`fichtelink/`) with its `accounts`, `lists`, and `forms` apps, the passkey auth flow, the full domain model with handwritten migrations, the mail pipeline (IMAP IDLE daemon, inbound/outbound processing, `procrastinate` tasks), school-class lifecycle, aggregate aliases, the forms module, server-rendered HTMX templates, the Docker/compose deployment stack, and a test suite (`*/tests.py`) all exist. The specification lives in `filink.md` (German), the architecture decisions in this file, and deployment/day-2 ops in `README.md`.
+
+**Local vs. VM:** there is no local Python/Django/Docker runtime on the development machine — migrations are handwritten and the test suite, `migrate`, and `collectstatic` run only on the deploy VM (`docker compose run --rm web …`). Code changes require a Docker image rebuild on the VM (the image `COPY`s the source; there is no bind-mount), so `git pull` alone does not update a running container. What remains is the first live deployment + smoke test on `fichtelink.caos.cloud` by the operator.
 
 ## What "Fichtelink" is
 
@@ -451,6 +453,33 @@ With this policy the smallest 5 GB provider tier holds long-term.
 **TypeScript is deferred, not adopted.** Trigger to revisit: hand-written client JS exceeding ~500 lines, or emerging as a cohesive library worth typing (e.g. a typed WebAuthn wrapper plus reusable components). Migration would be a single-binary `esbuild` step in a Docker multi-stage build — non-breaking for everything else.
 
 **Vue (and any other SPA framework) is explicitly out of scope** — it would require a JSON API layer (DRF or django-ninja), a Node build pipeline, and a parallel rendering tree, contradicting the "server-rendered, no SPA" decision. Reconsider only if a specific future surface emerges that genuinely needs reactive component-tree thinking (none does today).
+
+### Post-login landing
+
+There is **no separate landing page** after login. A logged-in user is taken straight to a **list view** (`lists:detail`), because the list is what the application is actually for — a landing page that only shows the user's name and a few links is a wasted click. The browser root (`/`) redirects authenticated visitors the same way; only anonymous visitors see the public welcome screen.
+
+Which list is chosen is resolved by `lists.permissions.resolve_default_list(user)`:
+
+- **(a)** the user's **last-selected list**, if it still exists, is non-archived, and they can still see it;
+- **(b)** otherwise the **first of their accessible lists** (admin or member of, ordered by title);
+- **(c)** otherwise **none** — the user has no lists yet and is sent to the list index, whose empty state explains what to do.
+
+"Accessible" here (`accessible_lists_for(user)`) means lists the user **admins or is a member of** — deliberately narrower than `can_user_see_list`, which also returns every public list. Public lists the user has not joined are excluded from the landing resolution, otherwise everyone would land on an arbitrary public list.
+
+The last-selected list is persisted on **`USER.last_selected_list`** (FK → `LIST`, `on_delete=SET_NULL`). It is written in `lists.views.list_detail` whenever the user opens a list whose id differs from the stored one (one write per actual change, not per page view). `SET_NULL` means deleting a list never cascades into users; a stale pointer (list archived or access revoked) simply fails the (a) check and falls through to (b)/(c).
+
+The redirect target is wired via `LOGIN_REDIRECT_URL = "/lists/home/"` → the `lists:home` view, which calls `resolve_default_list` and bounces. It is kept as a path string rather than a URL name because the passkey `login_finish` echoes it back to the browser as a JSON redirect target.
+
+### Navigation menu
+
+Per-page functions are reached through a **single dropdown menu at the top right**, not a row of buttons/links scattered across the page body. The menu lives in `base.html` and is built on a plain `<details>`/`<summary>` element — no JavaScript, no Alpine dependency, works everywhere. The `<summary>` shows the logged-in user's name.
+
+The menu is ordered **normal-user functions first, admin functions below, visually set off**:
+
+- Pages contribute their own normal-user items via the `{% block menu_user %}` slot (e.g. on a list: "Mein Eintrag bearbeiten" / "Mich eintragen"), rendered above the always-present global links (Alle Listen, Formulare, Passkeys).
+- Pages contribute admin items via the `{% block menu_admin %}` slot, which a page fills **only when the viewer is an admin** (or super-admin) of the relevant object. The admin items are introduced by a separator and an "Administration" label, so the privileged functions are clearly separated from the everyday ones. On a list these are the invite / QR / admins / cohort / transfer functions, plus the super-admin-only test-send and rollover.
+
+The list body itself carries no action buttons — only the records table and status — so the page stays uncluttered regardless of how many functions the viewer's role unlocks.
 
 ### Task queue / scheduler
 

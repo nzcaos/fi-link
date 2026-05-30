@@ -20,27 +20,64 @@
     .ok { color: #064; padding: 0.5rem; background: #d8f5d8; border-radius: 4px; }
     .passkey-row { display: flex; justify-content: space-between; align-items: center;
                    padding: 0.5rem; border-bottom: 1px solid #ddd; }
-    nav { margin-bottom: 1rem; font-size: 0.9rem; }
-    nav a { color: #2a5db0; text-decoration: none; margin-right: 0.75rem; }
+    /* Top bar with a right-aligned dropdown menu (CLAUDE.md / Navigation menu).
+       Built on <details>/<summary> so it needs no JS and no extra dependency. */
+    .topbar { display: flex; justify-content: space-between; align-items: center;
+              margin-bottom: 1.5rem; }
+    .topbar .brand { color: #2a5db0; text-decoration: none; font-weight: 600;
+                     font-size: 1.05rem; }
+    .topbar .auth-links a { color: #2a5db0; text-decoration: none; margin-left: 0.75rem; }
+    details.menu { position: relative; }
+    details.menu > summary { list-style: none; cursor: pointer; user-select: none;
+              padding: 0.4rem 0.8rem; border: 1px solid #ccc; border-radius: 6px;
+              background: #fff; font-size: 0.95rem; max-width: 14rem;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    details.menu > summary::-webkit-details-marker { display: none; }
+    details.menu > summary::after { content: " ▾"; color: #888; }
+    .menu-panel { position: absolute; right: 0; top: calc(100% + 0.3rem); z-index: 20;
+              min-width: 14rem; background: #fff; border: 1px solid #ccc;
+              border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+              padding: 0.4rem; }
+    .menu-panel a, .menu-panel button.menu-item {
+              display: block; width: 100%; box-sizing: border-box; text-align: left;
+              padding: 0.5rem 0.6rem; margin: 0; color: #222; text-decoration: none;
+              border: 0; background: none; font: inherit; cursor: pointer;
+              border-radius: 5px; }
+    .menu-panel a:hover, .menu-panel button.menu-item:hover { background: #eef3fb; }
+    .menu-sep { height: 1px; background: #e4e4e4; margin: 0.4rem 0.2rem; }
+    .menu-label { padding: 0.35rem 0.6rem 0.15rem; font-size: 0.72rem;
+              text-transform: uppercase; letter-spacing: 0.04em; color: #999; }
   </style>
   <script src="{% static 'vendor/simplewebauthn-browser-9.0.1.umd.min.js' %}"></script>
 </head>
 <body>
-  <nav>
-    <a href="/">Fichtelink</a>
+  <header class="topbar">
+    <a href="/" class="brand">Fichtelink</a>
     {% if request.user.is_authenticated %}
-      <a href="{% url 'lists:index' %}">Listen</a>
-      <a href="{% url 'forms:index' %}">Formulare</a>
-      <a href="{% url 'accounts:passkeys' %}">Passkeys</a>
-      <form action="{% url 'accounts:logout' %}" method="post" style="display:inline">
-        {% csrf_token %}
-        <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">Abmelden</button>
-      </form>
+      <details class="menu">
+        <summary>{{ request.user.person.full_name|default:"Menü" }}</summary>
+        <nav class="menu-panel">
+          {# Normal-user functions first: page-specific ones, then the globals. #}
+          {% block menu_user %}{% endblock %}
+          <a href="{% url 'lists:index' %}">Alle Listen</a>
+          <a href="{% url 'forms:index' %}">Formulare</a>
+          <a href="{% url 'accounts:passkeys' %}">Passkeys</a>
+          {# Admin functions, visually set off — pages fill this only for admins. #}
+          {% block menu_admin %}{% endblock %}
+          <div class="menu-sep"></div>
+          <form action="{% url 'accounts:logout' %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="menu-item">Abmelden</button>
+          </form>
+        </nav>
+      </details>
     {% else %}
-      <a href="{% url 'accounts:login' %}">Anmelden</a>
-      <a href="{% url 'accounts:register_start' %}">Registrieren</a>
+      <span class="auth-links">
+        <a href="{% url 'accounts:login' %}">Anmelden</a>
+        <a href="{% url 'accounts:register_start' %}">Registrieren</a>
+      </span>
     {% endif %}
-  </nav>
+  </header>
   {% if messages %}
     {% for m in messages %}<div class="{% if m.tags %}{{ m.tags }}{% endif %}">{{ m }}</div>{% endfor %}
   {% endif %}

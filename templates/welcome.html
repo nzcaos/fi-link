@@ -1,13 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
+  {# Anonymous-only: authenticated visitors are redirected to lists:home. #}
   <h1>Fichtelink</h1>
-  <p>Selbstverwalteter Mailingliste- und Kontaktdienst.</p>
-  {% if request.user.is_authenticated %}
-    <p>Eingeloggt als <strong>{{ request.user.person.full_name }}</strong>.</p>
-  {% else %}
-    <p>
-      <a href="{% url 'accounts:login' %}"><button type="button">Anmelden</button></a>
-      <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Registrieren</button></a>
-    </p>
-  {% endif %}
+  <p>Selbstverwalteter Mailinglisten- und Kontaktdienst.</p>
+  <p>
+    <a href="{% url 'accounts:login' %}"><button type="button">Anmelden</button></a>
+    <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Registrieren</button></a>
+  </p>
 {% endblock %}

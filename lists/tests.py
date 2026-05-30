@@ -34,12 +34,14 @@ from .models import (
     RecordManager,
 )
 from .permissions import (
+    accessible_lists_for,
     can_user_admin_list,
     can_user_create_sublist_under,
     can_user_create_top_level_list,
     can_user_edit_record,
     can_user_see_list,
     eligible_parents_for,
+    resolve_default_list,
 )
 from .visibility import (
     build_visible_rows,
@@ -4307,3 +4309,109 @@ class AggregateModelConstraintTests(AggregateAliasBase):
         )
         a.full_clean()
         self.assertEqual(a.email_alias, "eltern2")
+
+
+class PostLoginLandingTests(TestCase):
+    """The post-login landing resolution (CLAUDE.md / *Post-login landing*):
+    last-selected list, else first accessible, else the index.
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list_a = List.objects.create(
+            title="Aaa-Liste",
+            email_alias="aaa",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.list_b = List.objects.create(
+            title="Bbb-Liste",
+            email_alias="bbb",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.user = _make_user(username="u", given="Uschi", family="User", email="u@example.org")
+        self.client = Client()
+
+    def _join(self, lst):
+        ListAccess.objects.create(list=lst, user=self.user)
+
+    # --- helper ------------------------------------------------------------
+
+    def test_no_lists_resolves_to_none(self):
+        self.assertIsNone(resolve_default_list(self.user))
+
+    def test_single_list_resolves_to_it(self):
+        self._join(self.list_b)
+        self.assertEqual(resolve_default_list(self.user), self.list_b)
+
+    def test_first_accessible_when_no_last_selected(self):
+        self._join(self.list_a)
+        self._join(self.list_b)
+        # Ordered by title → Aaa wins.
+        self.assertEqual(resolve_default_list(self.user), self.list_a)
+
+    def test_last_selected_takes_precedence(self):
+        self._join(self.list_a)
+        self._join(self.list_b)
+        self.user.last_selected_list = self.list_b
+        self.user.save(update_fields=["last_selected_list"])
+        self.assertEqual(resolve_default_list(self.user), self.list_b)
+
+    def test_archived_last_selected_falls_through(self):
+        self._join(self.list_a)
+        self._join(self.list_b)
+        self.list_b.archived_at = timezone.now()
+        self.list_b.save(update_fields=["archived_at"])
+        self.user.last_selected_list = self.list_b
+        self.user.save(update_fields=["last_selected_list"])
+        # Archived → skip (b), fall through to first accessible non-archived (Aaa).
+        self.assertEqual(resolve_default_list(self.user), self.list_a)
+
+    def test_unseeable_last_selected_falls_through(self):
+        # User was a member of B, that became their last_selected, then access
+        # was revoked. Resolution must not return a list they can no longer see.
+        self._join(self.list_a)
+        self.user.last_selected_list = self.list_b
+        self.user.save(update_fields=["last_selected_list"])
+        self.assertEqual(resolve_default_list(self.user), self.list_a)
+
+    def test_accessible_excludes_public_non_membership(self):
+        public = List.objects.create(
+            title="Öffentlich",
+            email_alias="oeff",
+            template=self.template,
+            visibility=List.Visibility.PUBLIC_VISIBLE,
+        )
+        # Not a member of `public` → it must not count as accessible.
+        self.assertNotIn(public, list(accessible_lists_for(self.user)))
+        self.assertIsNone(resolve_default_list(self.user))
+
+    # --- views -------------------------------------------------------------
+
+    def test_home_redirects_to_default_list(self):
+        self._join(self.list_b)
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("lists:home"))
+        self.assertRedirects(
+            resp,
+            reverse("lists:detail", kwargs={"pk": self.list_b.pk}),
+            fetch_redirect_response=False,
+        )
+
+    def test_home_redirects_to_index_when_no_lists(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("lists:home"))
+        self.assertRedirects(resp, reverse("lists:index"), fetch_redirect_response=False)
+
+    def test_detail_records_last_selected(self):
+        self._join(self.list_b)
+        self.client.force_login(self.user)
+        self.client.get(reverse("lists:detail", kwargs={"pk": self.list_b.pk}))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.last_selected_list_id, self.list_b.pk)
+
+    def test_welcome_redirects_authenticated_user(self):
+        self.client.force_login(self.user)
+        resp = self.client.get("/")
+        self.assertRedirects(resp, reverse("lists:home"), fetch_redirect_response=False)

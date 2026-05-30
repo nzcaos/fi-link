@@ -45,6 +45,45 @@ def can_user_see_list(user, lst: List) -> bool:
     return ListAccess.objects.filter(list=lst, user=user).exists()
 
 
+def accessible_lists_for(user) -> QuerySet[List]:
+    """The user's "own" lists — those they admin or are a member of — non-
+    archived, ordered by title. Super-admin sees every non-archived list.
+
+    This is deliberately narrower than `can_user_see_list`: public lists the
+    user is *not* a member of are excluded, since otherwise everyone would
+    "have access to" every public list and the post-login landing resolution
+    below would never pick a meaningful one. The list index reuses this for
+    its "Eigene Listen" section.
+    """
+    base = List.objects.filter(archived_at__isnull=True)
+    if not getattr(user, "is_authenticated", False):
+        return base.none()
+    if user.is_superuser:
+        return base.order_by("title")
+    return (
+        base.filter(Q(admins__user=user) | Q(members__user=user))
+        .distinct()
+        .order_by("title")
+    )
+
+
+def resolve_default_list(user) -> List | None:
+    """The list a user should land on after login or when opening the app root
+    (CLAUDE.md / *Post-login landing*):
+
+    (a) their last-selected list, if it still exists, is non-archived, and they
+        can still see it;
+    (b) otherwise the first of their accessible (admin/member) lists;
+    (c) otherwise None — the caller falls back to the list index.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return None
+    last = user.last_selected_list
+    if last is not None and last.archived_at is None and can_user_see_list(user, last):
+        return last
+    return accessible_lists_for(user).first()
+
+
 def can_user_create_top_level_list(user) -> bool:
     """Only the super-admin creates lists without a parent (Elternbeirat,
     Lehrerkollegium, …). Regular users always pick a parent.

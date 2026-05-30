@@ -6,6 +6,7 @@ app_name = "lists"
 
 urlpatterns = [
     path("", views.list_index, name="index"),
+    path("home/", views.list_home, name="home"),
     path("new/", views.list_create, name="create"),
     path("rollover/", views.rollover_preview, name="rollover_preview"),
     path("rollover/execute/", views.rollover_execute, name="rollover_execute"),

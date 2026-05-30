@@ -102,6 +102,18 @@ class User(AbstractBaseUser, PermissionsMixin):
         help_text="Darf sich am Django-Admin anmelden.",
     )
     date_joined = models.DateTimeField("registriert am", auto_now_add=True)
+    last_selected_list = models.ForeignKey(
+        "lists.List",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name="zuletzt gewählte Liste",
+        help_text=(
+            "Liste, die der Benutzer zuletzt geöffnet hat — steuert, auf "
+            "welcher Listen-Ansicht er nach dem Login landet."
+        ),
+    )
 
     objects = UserManager()
 

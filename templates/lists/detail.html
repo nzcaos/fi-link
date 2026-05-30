@@ -1,5 +1,38 @@
 {% extends "base.html" %}
 {% block title %}{{ list_obj.title }} — Fichtelink{% endblock %}
+
+{# Normal-user functions for this list — shown first in the top-right menu. #}
+{% block menu_user %}
+  {% if list_obj.template.member_subject_mode == 'self' %}
+    {% if own_record %}
+      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">Mein Eintrag bearbeiten</a>
+    {% else %}
+      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">Mich eintragen</a>
+    {% endif %}
+  {% else %}
+    <a href="{% url 'lists:record_create_associate' pk=list_obj.pk %}">Mitglied (z. B. Kind) hinzufügen</a>
+  {% endif %}
+{% endblock %}
+
+{# Admin functions — set off below the normal-user items, only for admins. #}
+{% block menu_admin %}
+  {% if is_admin or request.user.is_superuser %}
+    <div class="menu-sep"></div>
+    <div class="menu-label">Administration</div>
+    {% if is_admin %}
+      <a href="{% url 'lists:invite' pk=list_obj.pk %}">Mitglied einladen</a>
+      <a href="{% url 'lists:join_tokens' pk=list_obj.pk %}">QR-Codes</a>
+      <a href="{% url 'lists:admin_manage' pk=list_obj.pk %}">Admins</a>
+      <a href="{% url 'lists:cohort_edit' pk=list_obj.pk %}">Kohorten-Daten</a>
+      <a href="{% url 'lists:transfers_pending' pk=list_obj.pk %}">Umzugs-Anträge</a>
+    {% endif %}
+    {% if request.user.is_superuser %}
+      <a href="{% url 'lists:send_test' pk=list_obj.pk %}">Test-Mail senden</a>
+      <a href="{% url 'lists:rollover_preview' %}">Schuljahres-Übergang</a>
+    {% endif %}
+  {% endif %}
+{% endblock %}
+
 {% block content %}
   <p><a href="{% url 'lists:index' %}">← Zurück zur Übersicht</a></p>
   <h1>{{ list_obj.title }}</h1>
@@ -12,51 +45,8 @@
     {% if list_obj.archived_at %} · <strong style="color:#b00020">archiviert</strong>{% endif %}
   </p>
 
-  <div style="margin:1rem 0">
-    {% if list_obj.template.member_subject_mode == 'self' %}
-      {% if own_record %}
-        <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">
-          <button type="button">Mein Eintrag bearbeiten</button>
-        </a>
-      {% else %}
-        <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">
-          <button type="button">Mich eintragen</button>
-        </a>
-      {% endif %}
-    {% else %}
-      <a href="{% url 'lists:record_create_associate' pk=list_obj.pk %}">
-        <button type="button">Mitglied (z. B. Kind) hinzufügen</button>
-      </a>
-    {% endif %}
-    {% if is_admin %}
-      <a href="{% url 'lists:invite' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Mitglied einladen</button>
-      </a>
-      <a href="{% url 'lists:join_tokens' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">QR-Codes</button>
-      </a>
-      <a href="{% url 'lists:admin_manage' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Admins</button>
-      </a>
-      <a href="{% url 'lists:cohort_edit' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Kohorten-Daten</button>
-      </a>
-      <a href="{% url 'lists:transfers_pending' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Umzugs-Anträge</button>
-      </a>
-    {% endif %}
-    {% if request.user.is_superuser %}
-      <a href="{% url 'lists:send_test' pk=list_obj.pk %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Test-Mail senden</button>
-      </a>
-      <a href="{% url 'lists:rollover_preview' %}" style="margin-left:0.5rem">
-        <button type="button" class="secondary">Schuljahres-Übergang</button>
-      </a>
-    {% endif %}
-  </div>
-
   {% if is_admin %}
-    <div class="info">Sie sind Admin dieser Liste.</div>
+    <div class="info">Sie sind Admin dieser Liste. Funktionen finden Sie im Menü rechts oben.</div>
   {% endif %}
 
   <h2 style="font-size:1.1rem;margin-top:1.5rem">Einträge</h2>
