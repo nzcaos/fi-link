@@ -69,6 +69,15 @@ Some lists (notably school class lists) have *members* who are not USERs (childr
 
 Siblings in different classes fall out naturally: the parent's USER has one `LIST_RECORD` (role=associate) per class plus one `PERSON_RELATIONSHIP` per child. No special casing.
 
+#### Multi-person row (school-class display)
+
+A school-class list reproduces the paper class list: **one row per child** showing the child's name + child attributes, then for each linked parent that parent's name, address, phone, and email. This is built from the normalized model — parents are their own records joined at render time — **not** by flattening parent fields onto the child record. Flattening would break per-parent consent, the `eltern@` aggregate alias, and the data shape for siblings / separated parents.
+
+- **`LIST_ATTRIBUT.applies_to_role`** (`member` | `associate`, default `member`) tags each attribute as belonging to the member (child) or to the associates (parents). There is **one** "Telefon" / "Adresse" attribute with `applies_to_role=associate`, rendered **once per linked parent** — not separate "Telefon der Mutter" / "Telefon des Vaters" attributes. The column label ("der Mutter" / "des Vaters") is derived from `PERSON_RELATIONSHIP.role`, so separated parents with different addresses, or a single guardian, fall out correctly with no special-casing.
+- Each parent is its **own `associate` `LIST_RECORD`** (role=associate, subject = the parent PERSON), carrying the `applies_to_role=associate` attribute values. The **row composer** gathers the associate records for a member record via `PERSON_RELATIONSHIP`, groups them by role, and renders the wide row. Each parent cell is rendered with **that parent record's own visibility** — consent is per parent, not inherited from the child.
+- **Parent email is consent-gated via a second visibility sentinel.** The displayed email is the parent's `PERSON.email` (no re-capture). `LIST_RECORD_ACCESS` gains a `sentinel` discriminator (`name` | `email`); an `(attribute=NULL, sentinel="email", audience=…)` row grants email visibility to an audience. Unlike the name sentinel, the email sentinel **defaults to hidden** (opt-in) — no default row is written on record creation. See *Subject-name visibility* for how the discriminator coexists with the name sentinel.
+- **Onboarding (one parent captures both):** the registering parent creates the child's member record and an associate record for themselves, and may add a second parent (name + role + associate attributes) as a second associate record in the same step. The registering USER is `RECORD_MANAGER` (basis=guardian) of all of these and — as proxy — sets the second parent's visibility. The second parent can later take over their own associate record via a `LIST_INVITE_TOKEN` with `target_person` (existing-USER branch); self-consent then replaces the first parent's proxy consent.
+
 ### Onboarding modes per LISTTEMPLATE
 
 The LISTTEMPLATE has a field **`member_subject_mode`** with two values, which the onboarding wizard branches on:
@@ -152,6 +161,8 @@ Beyond the spec's two cases (member-sends-with-release-link, non-member-with-adm
 ### List display defaults via LISTTEMPLATE
 
 Which fields are shown when a list is opened, and how they're grouped per row, is part of the LISTTEMPLATE — not hardcoded UI. For a school-class template, the default view should reproduce the information density of the paper class list it replaces: child's name, address, mother's name + phone + email, father's name + phone + email, all visible per row. For other LISTTEMPLATEs the default view is correspondingly different.
+
+The wide school-class row is assembled by the row composer described under *Family-association model / Multi-person row*: child attributes come from the child's `member` record, each parent's columns from that parent's own `associate` record (joined via `PERSON_RELATIONSHIP`), and the per-parent column labels are derived from the relationship role. Which `applies_to_role=associate` attributes appear, and their order, is governed by the LISTTEMPLATE's `display_default` (v1 may start convention-based and wire `display_default` in later).
 
 ### Super-Admin scope
 
@@ -271,7 +282,7 @@ Implementation lives in `RecordEditForm.save()` (server-side gate) and `record_e
 
 The subject's name (the `PERSON.given_name` + `family_name` rendered next to every list row) is a **second sensitive surface** alongside the attributes, and goes through the **same** visibility matrix:
 
-- **Storage**: `LIST_RECORD_ACCESS` rows with `attribute_id = NULL` express "the subject's name is visible to this audience". This is a sentinel value, not a real attribute — same audience semantics as for attribute rows (a `List_ID`, or `NULL` for public).
+- **Storage**: `LIST_RECORD_ACCESS` rows with `attribute_id = NULL` express "the subject's name is visible to this audience". This is a sentinel value, not a real attribute — same audience semantics as for attribute rows (a `List_ID`, or `NULL` for public). With the parent-email feature (see *Family-association model / Multi-person row*) there are **two** `attribute_id = NULL` sentinels, distinguished by a `sentinel` discriminator column (`name` | `email`); name-sentinel rows carry `sentinel="name"`. A backfill migration sets `sentinel="name"` on all pre-existing `attribute=NULL` rows so the two never collide.
 - **Default**: new records receive one `(record, attribute=NULL, audience=NULL)` row, i.e. name visible to the public. Written automatically on `ListRecord.save()` via a `post_save` signal; the migration that introduces the sentinel backfills the same default for every pre-existing record. Rationale: a paper class list has names on it; surprise-anonymising existing data on deploy would break that expectation. Owners who want anonymity opt in explicitly.
 - **Admin override**: `LIST_ADMIN` of the containing list and `SUPER_ADMIN` always see the real name regardless of matrix state. Without this, moderation (mail approval, transfer confirmation, handover) becomes operationally impossible.
 - **Render with anonymisation**: when a viewer is not permitted to see the real name, the list-row renders **`?N`** where `N` is an ad-hoc counter assigned in the order anonymous records appear in the current render. `N` is **not stable** across requests or sortings — it's a display hack, not an identifier. (If two users discuss "the second anonymous person", they may be discussing different people; this is accepted in v1 to avoid the migration + write-path cost of a stable `anon_index`.)
