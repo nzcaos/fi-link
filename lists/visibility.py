@@ -125,14 +125,16 @@ def build_visible_rows(user, lst: List) -> list[dict]:
 
     record_ids = [r.pk for r in records]
 
-    # One query for every (record, attribute|name-sentinel, audience) grant.
-    # attribute_id IS NULL is the subject-name axis (M8). audience_id IS NULL is
-    # the public sentinel.
-    audiences_by_key: dict[tuple[int, int | None], set[int | None]] = defaultdict(set)
-    for rec_id, attr_id, aud_id in ListRecordAccess.objects.filter(
+    # One query for every (record, attribute|sentinel, audience) grant. A real
+    # attribute row has attribute_id set + sentinel NULL; the two subject-level
+    # axes both have attribute_id NULL and are disambiguated by `sentinel`
+    # ("name" / "email"). audience_id IS NULL is the public sentinel. The key
+    # therefore carries the sentinel so the name and email axes don't collapse.
+    audiences_by_key: dict[tuple[int, int | None, str | None], set[int | None]] = defaultdict(set)
+    for rec_id, attr_id, sentinel, aud_id in ListRecordAccess.objects.filter(
         record_id__in=record_ids
-    ).values_list("record_id", "attribute_id", "audience_id"):
-        audiences_by_key[(rec_id, attr_id)].add(aud_id)
+    ).values_list("record_id", "attribute_id", "sentinel", "audience_id"):
+        audiences_by_key[(rec_id, attr_id, sentinel)].add(aud_id)
 
     authed = bool(getattr(user, "is_authenticated", False))
     is_super = authed and user.is_superuser
@@ -177,7 +179,7 @@ def build_visible_rows(user, lst: List) -> list[dict]:
             )
             visible_audience_ids = public_audiences | accessed | admined
 
-    def _audience_grants(key: tuple[int, int | None]) -> bool:
+    def _audience_grants(key: tuple[int, int | None, str | None]) -> bool:
         auds = audiences_by_key.get(key)
         if not auds:
             return False
@@ -198,12 +200,13 @@ def build_visible_rows(user, lst: List) -> list[dict]:
             return True
         if is_list_admin:
             return True
-        return _audience_grants((record.pk, attribute.pk))
+        return _audience_grants((record.pk, attribute.pk, None))
 
     def _name_visible(record: ListRecord) -> bool:
+        key = (record.pk, None, ListRecordAccess.Sentinel.NAME)
         if not authed:
             # Anonymous viewers see the name only via an explicit public row.
-            return None in audiences_by_key.get((record.pk, None), set())
+            return None in audiences_by_key.get(key, set())
         if is_super:
             return True
         if record.subject_id == person_id:
@@ -212,7 +215,25 @@ def build_visible_rows(user, lst: List) -> list[dict]:
             return True
         if is_list_admin:
             return True
-        return _audience_grants((record.pk, None))
+        return _audience_grants(key)
+
+    def _email_visible(record: ListRecord) -> bool:
+        # Multi-person row: visibility of the subject PERSON's account email.
+        # No public default row is ever written (opt-in / starts hidden); the
+        # override hierarchy mirrors the name axis for a consistent moderation
+        # surface. See CLAUDE.md / *Family-association model / Multi-person row*.
+        key = (record.pk, None, ListRecordAccess.Sentinel.EMAIL)
+        if not authed:
+            return None in audiences_by_key.get(key, set())
+        if is_super:
+            return True
+        if record.subject_id == person_id:
+            return True
+        if record.pk in managed_record_ids:
+            return True
+        if is_list_admin:
+            return True
+        return _audience_grants(key)
 
     rows: list[dict] = []
     anon_counter = 0
@@ -227,31 +248,42 @@ def build_visible_rows(user, lst: List) -> list[dict]:
         else:
             anon_counter += 1
             subject_display = f"?{anon_counter}"
+        # subject_email: the PERSON's account email, but only when the email
+        # sentinel grants it to this viewer (else None). The flat list-detail
+        # render ignores it today; the multi-person row composer (Phase 4)
+        # consumes it for the parent columns.
+        subject_email = record.subject.email if _email_visible(record) else None
         rows.append(
             {
                 "record": record,
                 "subject_display": subject_display,
+                "subject_email": subject_email,
                 "fields": fields,
             }
         )
     return rows
 
 
-def can_user_see_subject_name(user, record: ListRecord) -> bool:
-    """M8: subject-name visibility — same audience semantics as
-    `can_user_see_field`, but the matching `LIST_RECORD_ACCESS` rows have
-    `attribute_id IS NULL`.
+def _can_user_see_subject_sentinel(user, record: ListRecord, sentinel: str) -> bool:
+    """Shared logic for the two subject-level sentinels — same audience
+    semantics as `can_user_see_field`, but the matching `LIST_RECORD_ACCESS`
+    rows have `attribute_id IS NULL` and the given `sentinel`.
 
     Admin override: super-admin and list-admin of the containing list always
-    see the real name (moderation needs it). The subject's own User and any
-    RecordManager also always see it (their own data). For everyone else, the
-    matrix is the source of truth. See CLAUDE.md / *Subject-name visibility*.
+    see it (moderation needs it); so do the subject's own User and any
+    RecordManager (their own data). For everyone else the matrix is the source
+    of truth. The name sentinel has a public default row written on record
+    creation; the email sentinel has none (opt-in / starts hidden).
     """
     if not getattr(user, "is_authenticated", False):
-        # Anonymous viewers (public-visibility lists) fall through to the
-        # audience-row check below; only a (record, NULL, audience=NULL)
-        # row can grant them visibility.
-        return _public_subject_name_allowed(record)
+        # Anonymous viewers (public-visibility lists) see it only via an
+        # explicit (record, NULL, sentinel, audience=NULL) public row.
+        return ListRecordAccess.objects.filter(
+            record=record,
+            attribute__isnull=True,
+            sentinel=sentinel,
+            audience__isnull=True,
+        ).exists()
 
     if user.is_superuser:
         return True
@@ -268,7 +300,9 @@ def can_user_see_subject_name(user, record: ListRecord) -> bool:
     if record.archived_at is not None:
         return False
 
-    access_rows = ListRecordAccess.objects.filter(record=record, attribute__isnull=True)
+    access_rows = ListRecordAccess.objects.filter(
+        record=record, attribute__isnull=True, sentinel=sentinel
+    )
 
     if access_rows.filter(audience__isnull=True).exists():
         return True
@@ -285,14 +319,20 @@ def can_user_see_subject_name(user, record: ListRecord) -> bool:
     return False
 
 
-def _public_subject_name_allowed(record: ListRecord) -> bool:
-    """Helper for anonymous viewers: only an explicit (record, NULL,
-    audience=NULL) row grants visibility — list-public visibility on
-    audience lists does not propagate to unauthenticated callers because
-    the per-list `can_user_see_list` check is the outer gate, and at the
-    point this helper is reached, the caller already passed that gate
-    against a publicly visible list. The name still requires its own opt-in.
-    """
-    return ListRecordAccess.objects.filter(
-        record=record, attribute__isnull=True, audience__isnull=True
-    ).exists()
+def can_user_see_subject_name(user, record: ListRecord) -> bool:
+    """M8: visibility of the subject's name. See CLAUDE.md /
+    *Subject-name visibility*."""
+    return _can_user_see_subject_sentinel(
+        user, record, ListRecordAccess.Sentinel.NAME
+    )
+
+
+def can_user_see_subject_email(user, record: ListRecord) -> bool:
+    """Multi-person row: visibility of the subject PERSON's account email
+    (`PERSON.email`). Same audience semantics as the name sentinel, but with
+    `sentinel="email"`, no must-be-public path and no default public row — the
+    email starts hidden and is disclosed per audience opt-in. See CLAUDE.md /
+    *Family-association model / Multi-person row*."""
+    return _can_user_see_subject_sentinel(
+        user, record, ListRecordAccess.Sentinel.EMAIL
+    )

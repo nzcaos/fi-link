@@ -46,6 +46,7 @@ from .permissions import (
 from .visibility import (
     build_visible_rows,
     can_user_see_field,
+    can_user_see_subject_email,
     can_user_see_subject_name,
     visible_attributes_for,
 )
@@ -713,7 +714,10 @@ class M8SubjectNameVisibilityTests(TestCase):
             record=self.record, attribute__isnull=True
         ).delete()
         ListRecordAccess.objects.create(
-            record=self.record, attribute=None, audience=self.parent_lst
+            record=self.record,
+            attribute=None,
+            sentinel=ListRecordAccess.Sentinel.NAME,
+            audience=self.parent_lst,
         )
         # parent_member is in the Elternbeirat list → sees real name.
         self.assertTrue(can_user_see_subject_name(self.parent_member, self.record))
@@ -824,6 +828,163 @@ class M8SubjectNameVisibilityTests(TestCase):
         self.assertContains(resp, "?2")
         # The pair survived the loop with distinct identifiers.
         del other_record  # silence linter; the record's existence is enough.
+
+
+class SubjectEmailVisibilityTests(TestCase):
+    """Multi-person row: the subject PERSON's account email as a second
+    subject-level sentinel (`ListRecordAccess` rows with `attribute_id = NULL`,
+    `sentinel = "email"`). Unlike the name sentinel it starts HIDDEN (opt-in,
+    no default public row); owner/manager/list-admin/super-admin always see it;
+    audience grants disclose it per Benutzergruppe."""
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent_lst = List.objects.create(
+            title="Elternbeirat", email_alias="eb", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.lst.parent = self.parent_lst
+        self.lst.save()
+
+        # owner's PERSON carries an email (the addressable parent).
+        self.owner = _make_user(
+            username="owner", given="Anna", family="Müller", email="anna@example.org"
+        )
+        self.parent_member = _make_user(username="parentmember", given="Paul", family="Beirat")
+        self.class_member = _make_user(username="classmember", given="Berta", family="Schmid")
+        self.outsider = _make_user(username="outsider", given="Carla", family="X")
+        self.admin = _make_user(username="adminuser", given="Dora", family="Y")
+        self.super_ = _make_super()
+
+        ListAccess.objects.create(list=self.parent_lst, user=self.parent_member)
+        ListAccess.objects.create(list=self.lst, user=self.class_member)
+        ListAdmin.objects.create(list=self.lst, user=self.admin)
+
+        self.record = ListRecord.objects.create(list=self.lst, subject=self.owner.person)
+        RecordManager.objects.create(
+            record=self.record, user=self.owner, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+
+    def _grant_email(self, audience):
+        return ListRecordAccess.objects.create(
+            record=self.record,
+            attribute=None,
+            sentinel=ListRecordAccess.Sentinel.EMAIL,
+            audience=audience,
+        )
+
+    def test_no_default_email_row_created(self):
+        self.assertFalse(
+            ListRecordAccess.objects.filter(
+                record=self.record, sentinel=ListRecordAccess.Sentinel.EMAIL
+            ).exists()
+        )
+
+    def test_email_hidden_by_default_for_non_privileged(self):
+        # No email row → only owner/manager/admin/super see it.
+        self.assertTrue(can_user_see_subject_email(self.owner, self.record))
+        self.assertTrue(can_user_see_subject_email(self.admin, self.record))
+        self.assertTrue(can_user_see_subject_email(self.super_, self.record))
+        self.assertFalse(can_user_see_subject_email(self.class_member, self.record))
+        self.assertFalse(can_user_see_subject_email(self.outsider, self.record))
+
+    def test_email_visible_to_granted_audience_only(self):
+        self._grant_email(self.parent_lst)
+        # parent_member is in the Elternbeirat list → sees the email.
+        self.assertTrue(can_user_see_subject_email(self.parent_member, self.record))
+        # class_member is only in the class list → does not.
+        self.assertFalse(can_user_see_subject_email(self.class_member, self.record))
+
+    def test_public_email_visible_to_everyone(self):
+        self._grant_email(None)
+        self.assertTrue(can_user_see_subject_email(self.class_member, self.record))
+        self.assertTrue(can_user_see_subject_email(self.outsider, self.record))
+
+    def test_build_visible_rows_exposes_email_only_when_granted(self):
+        # Without a grant: subject_email is None for a non-privileged viewer.
+        rows = build_visible_rows(self.class_member, self.lst)
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["subject_email"])
+        # After a public grant: the email surfaces.
+        self._grant_email(None)
+        rows = build_visible_rows(self.class_member, self.lst)
+        self.assertEqual(rows[0]["subject_email"], "anna@example.org")
+
+    def test_name_and_email_sentinels_are_independent(self):
+        """Regression: the two attribute=NULL sentinels must not collapse onto
+        one prefetch key. Granting the email publicly while the name stays
+        hidden must show the email but anonymise the name (and vice versa)."""
+        # Drop the default public name row → name hidden; grant email public.
+        ListRecordAccess.objects.filter(
+            record=self.record, attribute__isnull=True
+        ).delete()
+        self._grant_email(None)
+        rows = build_visible_rows(self.class_member, self.lst)
+        self.assertEqual(rows[0]["subject_display"], "?1")  # name anonymised
+        self.assertEqual(rows[0]["subject_email"], "anna@example.org")  # email shown
+        self.assertFalse(can_user_see_subject_name(self.class_member, self.record))
+        self.assertTrue(can_user_see_subject_email(self.class_member, self.record))
+
+    def test_record_edit_form_includes_email_field_when_subject_has_email(self):
+        form = RecordEditForm(record=self.record, user=self.owner)
+        self.assertTrue(form.has_email_vis)
+        self.assertIn("vis_email", form.fields)
+        self.assertEqual(list(form.fields["vis_email"].initial), [])  # hidden by default
+
+    def test_record_edit_form_omits_email_field_when_subject_has_no_email(self):
+        child = Person.objects.create(given_name="Kind", family_name="Müller")  # no email
+        child_record = ListRecord.objects.create(
+            list=self.lst, subject=child, role=ListRecord.Role.MEMBER
+        )
+        form = RecordEditForm(record=child_record, user=self.owner)
+        self.assertFalse(form.has_email_vis)
+        self.assertNotIn("vis_email", form.fields)
+
+    def test_form_save_writes_email_visibility_rows(self):
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123",
+                "vis_name": ["public"],
+                "vis_email": [f"list-{self.parent_lst.pk}"],
+            },
+            record=self.record,
+            user=self.owner,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        rows = list(
+            ListRecordAccess.objects.filter(
+                record=self.record, sentinel=ListRecordAccess.Sentinel.EMAIL
+            )
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].audience_id, self.parent_lst.pk)
+
+    def test_form_save_drops_email_changes_for_pure_admin(self):
+        # B3: a list-admin without RecordManager row cannot set email visibility.
+        form = RecordEditForm(
+            data={
+                f"attr_{self.attr_phone.pk}": "0123",
+                "vis_email": [f"list-{self.parent_lst.pk}"],  # tampered.
+            },
+            record=self.record,
+            user=self.admin,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.assertFalse(
+            ListRecordAccess.objects.filter(
+                record=self.record, sentinel=ListRecordAccess.Sentinel.EMAIL
+            ).exists()
+        )
 
 
 class InviteFlowTests(TestCase):

@@ -183,6 +183,7 @@ class ListInviteForm(forms.Form):
 _ATTR_FIELD_PREFIX = "attr_"
 _AUDIENCE_FIELD_PREFIX = "vis_"
 _NAME_VIS_FIELD = "vis_name"
+_EMAIL_VIS_FIELD = "vis_email"
 
 
 def _build_field_for_attribute(attribute: ListAttribute) -> forms.Field:
@@ -254,11 +255,18 @@ class RecordEditForm(forms.Form):
             for v in ListRecordValue.objects.filter(record=record).select_related("attribute")
         }
         access_rows = ListRecordAccess.objects.filter(record=record)
-        access_by_attr: dict[int | None, set[str]] = {}
+        access_by_attr: dict[int, set[str]] = {}
+        name_audiences: set[str] = set()
+        email_audiences: set[str] = set()
         for row in access_rows:
             key = "public" if row.audience_id is None else f"list-{row.audience_id}"
-            # attribute_id is None for the M8 subject-name sentinel rows.
-            access_by_attr.setdefault(row.attribute_id, set()).add(key)
+            if row.attribute_id is not None:
+                access_by_attr.setdefault(row.attribute_id, set()).add(key)
+            elif row.sentinel == ListRecordAccess.Sentinel.EMAIL:
+                email_audiences.add(key)
+            else:
+                # name sentinel (legacy NULL sentinel rows are treated as name).
+                name_audiences.add(key)
 
         audience_choices = _audience_choices_for(record.list)
 
@@ -269,9 +277,27 @@ class RecordEditForm(forms.Form):
             choices=audience_choices,
             widget=forms.CheckboxSelectMultiple,
             required=False,
-            initial=sorted(access_by_attr.get(None, set())),
+            initial=sorted(name_audiences),
             disabled=not self.user_can_edit_visibility,
         )
+
+        # Multi-person row: subject-email visibility, only offered when the
+        # subject PERSON actually has an account email to disclose. Defaults to
+        # empty (hidden / opt-in) — there is no default public row.
+        self.has_email_vis = bool(getattr(record.subject, "email", None))
+        if self.has_email_vis:
+            self.fields[_EMAIL_VIS_FIELD] = forms.MultipleChoiceField(
+                label="Sichtbar für (E-Mail)",
+                help_text=(
+                    "Konto-E-Mail dieser Person. Standardmäßig verborgen — nur "
+                    "sichtbar für die hier ausgewählten Gruppen."
+                ),
+                choices=audience_choices,
+                widget=forms.CheckboxSelectMultiple,
+                required=False,
+                initial=sorted(email_audiences),
+                disabled=not self.user_can_edit_visibility,
+            )
 
         for attribute in record.list.template.attributes.all():
             value_key = f"{_ATTR_FIELD_PREFIX}{attribute.pk}"
@@ -373,6 +399,24 @@ class RecordEditForm(forms.Form):
                     sentinel=ListRecordAccess.Sentinel.NAME,
                     audience_id=audience_id,
                 )
+
+            # Multi-person row: subject-email visibility — same pattern, scoped
+            # to the email sentinel. Only when the email row was offered.
+            if self.has_email_vis:
+                picked_email = self.cleaned_data.get(_EMAIL_VIS_FIELD) or []
+                ListRecordAccess.objects.filter(
+                    record=self.record,
+                    attribute__isnull=True,
+                    sentinel=ListRecordAccess.Sentinel.EMAIL,
+                ).delete()
+                for key in picked_email:
+                    audience_id = _audience_key_to_list_id(key)
+                    ListRecordAccess.objects.create(
+                        record=self.record,
+                        attribute=None,
+                        sentinel=ListRecordAccess.Sentinel.EMAIL,
+                        audience_id=audience_id,
+                    )
 
         # 3) RecordManager: ensure the saving user is registered as a manager
         # (basis depends on context; default to SELF_REGISTERED if this is the
