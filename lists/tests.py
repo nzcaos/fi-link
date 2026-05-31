@@ -2231,7 +2231,8 @@ class ComposedRowTests(TestCase):
             subject_person=self.child, related_person=self.mom.person, role="Mutter von"
         )
 
-        # Second parent — Vater, a PERSON without a USER.
+        # Second parent — Vater, a PERSON without a USER. The wizard makes the
+        # registering parent the proxy creator/manager of this record.
         self.dad = Person.objects.create(
             given_name="Olaf", family_name="Mueller", email="olaf@example.test"
         )
@@ -2240,6 +2241,9 @@ class ComposedRowTests(TestCase):
         )
         ListRecordValue.objects.create(
             record=self.dad_rec, attribute=self.attr_phone, value="+49 222"
+        )
+        RecordManager.objects.create(
+            record=self.dad_rec, user=self.mom, basis=RecordManager.Basis.CREATOR
         )
         PersonRelationship.objects.create(
             subject_person=self.child, related_person=self.dad, role="Vater von"
@@ -2266,12 +2270,13 @@ class ComposedRowTests(TestCase):
             self.assertEqual(names, ["Telefon"])
 
     def test_manager_sees_parent_emails(self):
-        # mom manages her own record (self) → sees her email; she does NOT manage
-        # dad's record here, and email defaults hidden → dad's email is None.
+        # mom manages both her own record and (as proxy creator) dad's record →
+        # she sees both emails regardless of the opt-in email sentinel. Consent
+        # gating bites only for non-managing viewers (see the viewer-based tests).
         rows = build_composed_rows(self.mom, self.lst)
         by_label = {p["label"]: p for p in rows[0]["parents"]}
         self.assertEqual(by_label["Mutter"]["subject_email"], "eva@example.test")
-        self.assertIsNone(by_label["Vater"]["subject_email"])
+        self.assertEqual(by_label["Vater"]["subject_email"], "olaf@example.test")
 
     def test_parent_email_hidden_by_default_for_audience_member(self):
         rows = build_composed_rows(self.viewer, self.lst)
