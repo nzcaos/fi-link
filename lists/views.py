@@ -247,11 +247,25 @@ def record_create_self(request, pk: int):
 
 
 def _consume_invite_and_redirect(request, invite: ListInviteToken):
-    """Inside an authenticated session, finalize the invitation:
-    - create (or fetch) the LIST_RECORD with subject=target_person,
-    - write RecordManager(basis=invited) for the visitor,
-    - mark the token consumed,
-    - return a redirect into the record-edit form.
+    """Inside an authenticated session, finalize the invitation.
+
+    Two shapes, branched on the invite's mode:
+
+    - ``via_associate``: the invited person is a *guardian*, not the list
+      member. They are routed into the associate wizard, where they declare
+      the child (= member record), their own associate record, and optionally
+      a second parent. Creating a bare associate record with
+      ``subject=target_person`` here would be wrong — it would leave the
+      invitee with list access but no child and no place in the per-child
+      rows. Token consumption is deferred to the wizard's save (see
+      ``record_create_associate``) so an abandoned wizard leaves the invite
+      reusable and writes no phantom records; the session grant marker lets
+      the wizard open before the invitee has ListAccess.
+
+    - ``self``: the invited person *is* the member. Create (or fetch) the
+      LIST_RECORD with subject=target_person, write RecordManager(invited),
+      join the Benutzergruppe, mark the token consumed, and land in the
+      record-edit form.
 
     Caller has already verified that the visitor's USER is bound to
     `invite.target_person`.
@@ -261,11 +275,11 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
         if invite.is_consumed or invite.is_expired:
             return redirect("lists:detail", pk=invite.list_id)
 
-        role = (
-            ListRecord.Role.MEMBER
-            if invite.mode == ListInviteToken.Mode.SELF
-            else ListRecord.Role.ASSOCIATE
-        )
+        if invite.mode == ListInviteToken.Mode.VIA_ASSOCIATE:
+            request.session["wizard_grant_list_id"] = invite.list_id
+            request.session["wizard_invite_token"] = invite.token
+            return redirect("lists:record_create_associate", pk=invite.list_id)
+
         record = (
             ListRecord.objects.filter(
                 list=invite.list,
@@ -278,7 +292,7 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
             record = ListRecord.objects.create(
                 list=invite.list,
                 subject=invite.target_person,
-                role=role,
+                role=ListRecord.Role.MEMBER,
             )
         if not RecordManager.objects.filter(record=record, user=request.user).exists():
             RecordManager.objects.create(
@@ -657,6 +671,16 @@ def record_create_associate(request, pk: int):
             record = form.save()
             # One-shot session marker is now consumed.
             request.session.pop("wizard_grant_list_id", None)
+            # If the wizard was reached via a LIST_INVITE_TOKEN (via_associate
+            # branch of _consume_invite_and_redirect), the token is consumed
+            # only now — on a real save — so an abandoned wizard leaves the
+            # invite reusable. Idempotent: a stale/already-consumed token is a
+            # no-op.
+            invite_token = request.session.pop("wizard_invite_token", None)
+            if invite_token:
+                ListInviteToken.objects.filter(
+                    token=invite_token, consumed_at__isnull=True
+                ).update(consumed_at=timezone.now())
             messages.success(
                 request,
                 f'„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.',

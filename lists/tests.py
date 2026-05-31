@@ -1184,6 +1184,157 @@ class InviteFlowTests(TestCase):
         self.assertIsNone(token.consumed_at)
 
 
+class InviteViaAssociateRoutingTests(TestCase):
+    """A LIST_INVITE_TOKEN on a `via_associate` list must route the accepting
+    USER into the associate wizard (declare child = member, own associate
+    record, optional 2nd parent) — NOT create a bare associate record with
+    subject=invitee. Regression for the 'invitee gets list access but never
+    appears in the per-child rows, and there's no way to add the child or the
+    other parent' bug. Token consumption is deferred to the wizard save, so an
+    abandoned wizard leaves the invite reusable and creates no phantom records.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von"],
+        )
+        self.attr_name = ListAttribute.objects.create(
+            template=self.template,
+            name="Klassen-Name",
+            type=ListAttribute.Type.TEXT,
+            must_be_public=True,
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template,
+            name="Telefon",
+            type=ListAttribute.Type.PHONE,
+            position=1,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a",
+            email_alias="5a",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.admin_user = _make_user(username="admin")
+        ListAdmin.objects.create(list=self.lst, user=self.admin_user)
+        self.parent = _make_user(
+            username="parent", given="Eva", family="Mueller", email="eva@example.test"
+        )
+
+    def _invite(self, *, target_person=None, target_email="eva@example.test"):
+        return ListInviteToken.objects.create(
+            list=self.lst,
+            invited_by=self.admin_user,
+            target_email=target_email,
+            target_person=target_person,
+            mode=ListInviteToken.Mode.VIA_ASSOCIATE,
+        )
+
+    def _wizard_post_data(self, **overrides):
+        data = {
+            "given_name": "Lina",
+            "family_name": "Mueller",
+            "member_email": "",
+            "role": "Mutter von",
+            f"attr_{self.attr_name.pk}": "5a",
+            f"attr_{self.attr_phone.pk}": "+49 123 456",
+        }
+        data.update(overrides)
+        return data
+
+    def test_existing_user_invite_routes_to_wizard_without_consuming(self):
+        token = self._invite(target_person=self.parent.person)
+        self.client.force_login(self.parent)
+        resp = self.client.post(
+            reverse("lists:invite_accept", kwargs={"token": token.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            resp.url,
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+        )
+        # No bare associate record for the invitee — the bug we are fixing.
+        self.assertFalse(
+            ListRecord.objects.filter(
+                list=self.lst, subject=self.parent.person
+            ).exists()
+        )
+        # Token NOT consumed yet; session carries the grant + deferred token.
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
+        self.assertEqual(self.client.session.get("wizard_grant_list_id"), self.lst.pk)
+        self.assertEqual(self.client.session.get("wizard_invite_token"), token.token)
+
+    def test_round_trip_branch_a_via_associate_routes_to_wizard(self):
+        """Blank-target invite (not-yet-USER path, simulated by logging in after
+        the click): binds target_person, then routes to the wizard rather than
+        creating a member record for the parent.
+        """
+        token = self._invite()  # target_person=NULL
+        self.client.force_login(self.parent)
+        resp = self.client.post(
+            reverse("lists:invite_accept", kwargs={"token": token.token})
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            resp.url,
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+        )
+        token.refresh_from_db()
+        self.assertEqual(token.target_person_id, self.parent.person_id)
+        self.assertIsNone(token.consumed_at)
+        self.assertFalse(ListRecord.objects.filter(list=self.lst).exists())
+
+    def test_wizard_save_consumes_invite_and_builds_child_row(self):
+        token = self._invite(target_person=self.parent.person)
+        self.client.force_login(self.parent)
+        # Step 1: accept → routed to wizard, markers set.
+        self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        # Step 2: submit the wizard.
+        resp = self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+            self._wizard_post_data(),
+        )
+        self.assertEqual(resp.status_code, 302)
+        # Child member record now exists with the entered name.
+        child = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        self.assertEqual(child.subject.given_name, "Lina")
+        # The invited parent has their own associate record, linked to the child.
+        self.assertTrue(
+            ListRecord.objects.filter(
+                list=self.lst,
+                subject=self.parent.person,
+                role=ListRecord.Role.ASSOCIATE,
+            ).exists()
+        )
+        self.assertTrue(
+            PersonRelationship.objects.filter(
+                subject_person=child.subject, related_person=self.parent.person
+            ).exists()
+        )
+        # Parent joined the Benutzergruppe and is a manager of the child.
+        self.assertTrue(
+            ListAccess.objects.filter(list=self.lst, user=self.parent).exists()
+        )
+        # Token consumed on save; session markers cleared.
+        token.refresh_from_db()
+        self.assertIsNotNone(token.consumed_at)
+        self.assertNotIn("wizard_grant_list_id", self.client.session)
+        self.assertNotIn("wizard_invite_token", self.client.session)
+
+    def test_abandoned_wizard_leaves_invite_reusable(self):
+        token = self._invite(target_person=self.parent.person)
+        self.client.force_login(self.parent)
+        self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        # The user never submits the wizard → token must stay unconsumed.
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)
+
+
 class CriticalFindingFixesTests(TestCase):
     """Regression tests for the review findings B1, B2, B5."""
 
