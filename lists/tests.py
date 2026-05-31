@@ -2209,9 +2209,14 @@ class ComposedRowTests(TestCase):
             record=self.child_rec, attribute=self.attr_notes, value="mag Mathe"
         )
 
-        # Registering parent (a USER) — Mutter, owns her record.
+        # Registering parent (a USER) — Mutter. As in the wizard she joins the
+        # Benutzergruppe, is guardian of the child and owns her own record.
         self.mom = _make_user(
             username="mom", given="Eva", family="Mueller", email="eva@example.test"
+        )
+        ListAccess.objects.create(list=self.lst, user=self.mom)
+        RecordManager.objects.create(
+            record=self.child_rec, user=self.mom, basis=RecordManager.Basis.GUARDIAN
         )
         self.mom_rec = ListRecord.objects.create(
             list=self.lst, subject=self.mom.person, role=ListRecord.Role.ASSOCIATE
