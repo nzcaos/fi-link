@@ -47,11 +47,11 @@ Outputs:
 
 **Verify:** Echte Registrierung + Login in zwei verschiedenen Browsern über die Live-Domain. Test auf Mobile (iOS Safari + Android Chrome), weil das die Geräte sind, die bei Fi-Planer die CDN-Probleme zeigten — der vendored Bundle muss dort sauber laden.
 
-**Restpunkt (Nachtrag 2026-05-26, in Phase 3b mitgenommen):** Im Registrierungs-Template (`templates/auth/register.html`) ist die E-Mail bereits `required`, aber der Inline-Privacy-Hinweis fehlt noch. Gem. *Architecture decisions (authentication) / Registration and login flow* in CLAUDE.md: kurzer Satz direkt unter dem E-Mail-Feld — *"Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar, wenn Sie sie pro Liste explizit freigeben."*
+**Restpunkt (Nachtrag 2026-05-26, in Phase 3b mitgenommen): ~~erledigt~~.** Der Inline-Privacy-Hinweis steht in `templates/auth/register.html` direkt unter dem E-Mail-Feld (wortgleich mit CLAUDE.md *Architecture decisions (authentication) / Registration and login flow*): *"Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar, wenn Sie sie pro Liste explizit freigeben."*
 
 ## Phase 3a — Listen-Modelle & Admin-Views
 
-- [ ] **Ziel:** LISTTEMPLATE-Pflege (Super-Admin), Listen-CRUD, Sichtbarkeits-Service als zentrale Funktion.
+- [x] **Ziel:** LISTTEMPLATE-Pflege (Super-Admin), Listen-CRUD, Sichtbarkeits-Service als zentrale Funktion.
 
 Outputs:
 - LISTTEMPLATE-CRUD im Django-Admin (bereits in Phase 1 vorbereitet)
@@ -77,7 +77,7 @@ Outputs (erledigt):
   - `target_person_id IS NOT NULL`: Auth-Check als gebundener USER; bei Falschanmeldung 403; sonst One-Click-Join
 - `accounts.views._next_url_after_auth`: nach `register_passkey_finish` und `login_finish` wird ein `pending_invite_token` aus der Session zurück an `lists:invite_accept` umgeleitet
 - Admin-Einladungs-View `/lists/<pk>/invite/` mit Form (E-Mail + optionale Person-Auswahl + Modus), Token-Erzeugung und Mail-Versand
-- Privacy-Hinweis am E-Mail-Feld in `templates/auth/register.html` (Phase-2-Restpunkt)
+- ~~Privacy-Hinweis am E-Mail-Feld in `templates/auth/register.html` (Phase-2-Restpunkt)~~ **erledigt** (Hinweis steht unter dem E-Mail-Feld)
 - `RECORD_MANAGER`-Anlage je nach Pfad (`self_registered` für `record_create_self`, `invited` für Einladungs-Konsum)
 - Tests: `RecordEditFormTests` (Werte + Visibility-Replace) und `InviteFlowTests` (alle 6 Klick-Pfade: expired, consumed, unauth-A, existing-user-B, wrong-user-B, unauth-B, round-trip-A)
 
@@ -182,7 +182,7 @@ Outputs:
 
 ## Phase 7 — Aggregat-Aliase & Forms
 
-- [ ] **Ziel:** `eltern@…`-Aliase funktionieren mit Sendezeit-Resolution; Forms-Modul nutzbar.
+- [x] **Ziel:** `eltern@…`-Aliase funktionieren mit Sendezeit-Resolution; Forms-Modul nutzbar.
 
 Outputs:
 - `AGGREGATE_ALIAS`-Model + Super-Admin-UI
