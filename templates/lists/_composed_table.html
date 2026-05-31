@@ -1,7 +1,9 @@
-{# Wide multi-person table for via_associate lists (school classes).
-   Context: `rows` (from build_composed_rows), and the booleans `show_actions`
-   + `list_obj` (only needed when show_actions). One row per child (member
-   record); each linked parent is its own cell group with its own visibility. #}
+{% comment %}
+Wide multi-person table for via_associate lists (school classes).
+Context: `rows` (from build_composed_rows), and the booleans `show_actions`
++ `list_obj` (only needed when show_actions). One row per child (member
+record); each linked parent is its own cell group with its own visibility.
+{% endcomment %}
 <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
   <thead>
     <tr style="background:#f4f4f4">
