@@ -44,6 +44,7 @@ from .permissions import (
     resolve_default_list,
 )
 from .visibility import (
+    build_composed_rows,
     build_visible_rows,
     can_user_see_field,
     can_user_see_subject_email,
@@ -2171,6 +2172,138 @@ class AssociateWizardMultiPersonTests(TestCase):
         self.assertIn(f"p2_attr_{self.attr_phone.pk}", form.fields)
         # member attribute does not get parent namespaces.
         self.assertNotIn(f"p1_attr_{self.attr_notes.pk}", form.fields)
+
+
+class ComposedRowTests(TestCase):
+    """Phase 4: `build_composed_rows` assembles one wide row per child (member
+    record) with each linked parent as its own cell group, joined via
+    PersonRelationship. Each parent cell honours that parent record's own
+    name/field/email visibility — consent is per parent, not inherited from the
+    child. See CLAUDE.md / *Family-association model / Multi-person row*."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von"],
+        )
+        self.attr_notes = ListAttribute.objects.create(
+            template=self.template, name="Notizen", type=ListAttribute.Type.TEXT,
+            position=0, applies_to_role=ListAttribute.AppliesTo.MEMBER,
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE,
+            position=1, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+        # Child (member) with one member-role value.
+        self.child = Person.objects.create(given_name="Lina", family_name="Mueller")
+        self.child_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.child, role=ListRecord.Role.MEMBER
+        )
+        ListRecordValue.objects.create(
+            record=self.child_rec, attribute=self.attr_notes, value="mag Mathe"
+        )
+
+        # Registering parent (a USER) — Mutter, owns her record.
+        self.mom = _make_user(
+            username="mom", given="Eva", family="Mueller", email="eva@example.test"
+        )
+        self.mom_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.mom.person, role=ListRecord.Role.ASSOCIATE
+        )
+        ListRecordValue.objects.create(
+            record=self.mom_rec, attribute=self.attr_phone, value="+49 111"
+        )
+        RecordManager.objects.create(
+            record=self.mom_rec, user=self.mom, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=self.mom.person, role="Mutter von"
+        )
+
+        # Second parent — Vater, a PERSON without a USER.
+        self.dad = Person.objects.create(
+            given_name="Olaf", family_name="Mueller", email="olaf@example.test"
+        )
+        self.dad_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.dad, role=ListRecord.Role.ASSOCIATE
+        )
+        ListRecordValue.objects.create(
+            record=self.dad_rec, attribute=self.attr_phone, value="+49 222"
+        )
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=self.dad, role="Vater von"
+        )
+
+        # A plain member of the class Benutzergruppe (sees the list, manages
+        # nothing) — the consent probe.
+        self.viewer = _make_user(username="viewer", given="Carla", family="X")
+        ListAccess.objects.create(list=self.lst, user=self.viewer)
+
+    def test_one_row_per_child_with_parents_grouped_by_role(self):
+        rows = build_composed_rows(self.mom, self.lst)
+        # One row (the child), not three flat records.
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["subject_display"], "Lina Mueller")
+        self.assertEqual(dict((a.name, v) for a, v in row["fields"]), {"Notizen": "mag Mathe"})
+
+        labels = [p["label"] for p in row["parents"]]
+        self.assertEqual(labels, ["Mutter", "Vater"])  # role-derived, ordered by role
+        # Each parent carries the associate attribute, not the member one.
+        for parent in row["parents"]:
+            names = [a.name for a, _ in parent["fields"]]
+            self.assertEqual(names, ["Telefon"])
+
+    def test_manager_sees_parent_emails(self):
+        # mom manages her own record (self) → sees her email; she does NOT manage
+        # dad's record here, and email defaults hidden → dad's email is None.
+        rows = build_composed_rows(self.mom, self.lst)
+        by_label = {p["label"]: p for p in rows[0]["parents"]}
+        self.assertEqual(by_label["Mutter"]["subject_email"], "eva@example.test")
+        self.assertIsNone(by_label["Vater"]["subject_email"])
+
+    def test_parent_email_hidden_by_default_for_audience_member(self):
+        rows = build_composed_rows(self.viewer, self.lst)
+        for parent in rows[0]["parents"]:
+            self.assertIsNone(parent["subject_email"])
+
+    def test_parent_email_shown_after_per_parent_grant(self):
+        # Grant only Mutter's email to the class Benutzergruppe.
+        ListRecordAccess.objects.create(
+            record=self.mom_rec, attribute=None,
+            sentinel=ListRecordAccess.Sentinel.EMAIL, audience=self.lst,
+        )
+        rows = build_composed_rows(self.viewer, self.lst)
+        by_label = {p["label"]: p for p in rows[0]["parents"]}
+        self.assertEqual(by_label["Mutter"]["subject_email"], "eva@example.test")
+        self.assertIsNone(by_label["Vater"]["subject_email"])  # not granted
+
+    def test_anonymous_parent_name_falls_back_to_counter(self):
+        # Hide dad's name (drop the default public name row for his record).
+        ListRecordAccess.objects.filter(
+            record=self.dad_rec, attribute__isnull=True,
+            sentinel=ListRecordAccess.Sentinel.NAME,
+        ).delete()
+        rows = build_composed_rows(self.viewer, self.lst)
+        by_label = {p["label"]: p for p in rows[0]["parents"]}
+        self.assertEqual(by_label["Mutter"]["subject_display"], "Eva Mueller")
+        self.assertTrue(by_label["Vater"]["subject_display"].startswith("?"))
+
+    def test_via_associate_detail_page_renders_wide_row(self):
+        client = Client()
+        client.force_login(self.mom)
+        resp = client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Lina Mueller")
+        self.assertContains(resp, "Bezugspersonen")  # composed-table header
+        self.assertContains(resp, "+49 111")
+        self.assertContains(resp, "+49 222")
 
 
 class Phase3b2E2ETests(TestCase):

@@ -28,6 +28,7 @@ from .models import (
     ListAttribute,
     ListRecord,
     ListRecordAccess,
+    PersonRelationship,
     RecordManager,
 )
 
@@ -96,23 +97,135 @@ def visible_attributes_for(user, record: ListRecord) -> Iterable[ListAttribute]:
             yield attribute
 
 
+class _VisibilityContext:
+    """Bulk-resolved, in-memory visibility predicates for one render.
+
+    N12: rendering a list is the hot path (N records × M attributes). The
+    single-record helpers above each issue several queries; calling them per
+    field would be O(N×M) round-trips. Instead every table they consult is
+    loaded once up front and the same logic is evaluated in memory here. The
+    flat (`build_visible_rows`) and wide (`build_composed_rows`) builders both
+    drive off this one context, so the two render paths can never drift in how
+    they decide visibility. The reference helpers above and these predicates
+    must stay in sync.
+    """
+
+    def __init__(self, user, lst: List, records: list[ListRecord]):
+        record_ids = [r.pk for r in records]
+
+        # One query for every (record, attribute|sentinel, audience) grant. A
+        # real attribute row has attribute_id set + sentinel NULL; the two
+        # subject-level axes both have attribute_id NULL and are disambiguated
+        # by `sentinel` ("name" / "email"). audience_id IS NULL is the public
+        # sentinel. The key carries the sentinel so name and email don't collapse.
+        self._audiences_by_key: dict[tuple[int, int | None, str | None], set[int | None]] = defaultdict(set)
+        for rec_id, attr_id, sentinel, aud_id in ListRecordAccess.objects.filter(
+            record_id__in=record_ids
+        ).values_list("record_id", "attribute_id", "sentinel", "audience_id"):
+            self._audiences_by_key[(rec_id, attr_id, sentinel)].add(aud_id)
+
+        self._authed = bool(getattr(user, "is_authenticated", False))
+        self._is_super = self._authed and user.is_superuser
+        self._person_id = getattr(user, "person_id", None)
+
+        self._managed_record_ids: set[int] = set()
+        self._is_list_admin = False
+        self._visible_audience_ids: set[int] = set()
+        if self._authed and not self._is_super:
+            self._managed_record_ids = set(
+                RecordManager.objects.filter(
+                    user=user, record_id__in=record_ids
+                ).values_list("record_id", flat=True)
+            )
+            self._is_list_admin = ListAdmin.objects.filter(list=lst, user=user).exists()
+
+            referenced_audience_ids = {
+                aid
+                for auds in self._audiences_by_key.values()
+                for aid in auds
+                if aid is not None
+            }
+            if referenced_audience_ids:
+                public_audiences = set(
+                    List.objects.filter(
+                        pk__in=referenced_audience_ids,
+                        visibility__in=(
+                            List.Visibility.PUBLIC_VISIBLE,
+                            List.Visibility.PUBLIC_EDITABLE,
+                        ),
+                    ).values_list("pk", flat=True)
+                )
+                accessed = set(
+                    ListAccess.objects.filter(
+                        user=user, list_id__in=referenced_audience_ids
+                    ).values_list("list_id", flat=True)
+                )
+                admined = set(
+                    ListAdmin.objects.filter(
+                        user=user, list_id__in=referenced_audience_ids
+                    ).values_list("list_id", flat=True)
+                )
+                self._visible_audience_ids = public_audiences | accessed | admined
+
+    def _audience_grants(self, key: tuple[int, int | None, str | None]) -> bool:
+        auds = self._audiences_by_key.get(key)
+        if not auds:
+            return False
+        if None in auds:  # public sentinel
+            return True
+        return bool(auds & self._visible_audience_ids)
+
+    def _privileged(self, record: ListRecord) -> bool:
+        # super-admin, the subject's own User, a RecordManager, or a list-admin
+        # all see everything on the record (moderation / ownership).
+        return (
+            self._is_super
+            or record.subject_id == self._person_id
+            or record.pk in self._managed_record_ids
+            or self._is_list_admin
+        )
+
+    def field_visible(self, record: ListRecord, attribute: ListAttribute) -> bool:
+        if attribute.must_be_public:
+            return True
+        if not self._authed:
+            return False
+        if self._privileged(record):
+            return True
+        return self._audience_grants((record.pk, attribute.pk, None))
+
+    def name_visible(self, record: ListRecord) -> bool:
+        key = (record.pk, None, ListRecordAccess.Sentinel.NAME)
+        if not self._authed:
+            # Anonymous viewers see the name only via an explicit public row.
+            return None in self._audiences_by_key.get(key, set())
+        if self._privileged(record):
+            return True
+        return self._audience_grants(key)
+
+    def email_visible(self, record: ListRecord) -> bool:
+        # Multi-person row: visibility of the subject PERSON's account email.
+        # No public default row is ever written (opt-in / starts hidden); the
+        # override hierarchy mirrors the name axis for a consistent moderation
+        # surface. See CLAUDE.md / *Family-association model / Multi-person row*.
+        key = (record.pk, None, ListRecordAccess.Sentinel.EMAIL)
+        if not self._authed:
+            return None in self._audiences_by_key.get(key, set())
+        if self._privileged(record):
+            return True
+        return self._audience_grants(key)
+
+
 def build_visible_rows(user, lst: List) -> list[dict]:
-    """Render-ready rows for `lst`'s active records as seen by `user`.
+    """Render-ready flat rows for `lst`'s active records as seen by `user`.
 
-    Each row is ``{"record", "subject_display", "fields"}`` where ``fields`` is
-    a list of ``(attribute, value)`` pairs limited to the attributes `user` may
-    see, and ``subject_display`` is the subject's name or a per-render ``?N``
-    anonymisation placeholder (M8). Shared by the list-detail page and the
+    Each row is ``{"record", "subject_display", "subject_email", "fields"}``
+    where ``fields`` is a list of ``(attribute, value)`` pairs limited to the
+    attributes `user` may see, and ``subject_display`` is the subject's name or
+    a per-render ``?N`` anonymisation placeholder (M8). One row per record —
+    used by `self`-mode lists. The wide multi-person view for `via_associate`
+    lists is `build_composed_rows`. Shared by the list-detail page and the
     dynamic list part of a Form so both honour the exact same visibility rules.
-
-    N12: this is the hot path (one render = N records × M attributes). It must
-    not delegate to the per-field/per-name helpers, which each issue several
-    queries — that is O(N×M) DB round-trips. Instead every table the helpers
-    consult is loaded once up front and the same visibility logic is then
-    evaluated in memory. The single-record helpers above keep the readable
-    reference semantics for callers that look at one record (record_edit etc.);
-    this function is their bulk-resolved equivalent and the two must stay in
-    sync.
     """
     records = list(
         lst.records.filter(archived_at__isnull=True)
@@ -123,117 +236,7 @@ def build_visible_rows(user, lst: List) -> list[dict]:
     if not records:
         return []
 
-    record_ids = [r.pk for r in records]
-
-    # One query for every (record, attribute|sentinel, audience) grant. A real
-    # attribute row has attribute_id set + sentinel NULL; the two subject-level
-    # axes both have attribute_id NULL and are disambiguated by `sentinel`
-    # ("name" / "email"). audience_id IS NULL is the public sentinel. The key
-    # therefore carries the sentinel so the name and email axes don't collapse.
-    audiences_by_key: dict[tuple[int, int | None, str | None], set[int | None]] = defaultdict(set)
-    for rec_id, attr_id, sentinel, aud_id in ListRecordAccess.objects.filter(
-        record_id__in=record_ids
-    ).values_list("record_id", "attribute_id", "sentinel", "audience_id"):
-        audiences_by_key[(rec_id, attr_id, sentinel)].add(aud_id)
-
-    authed = bool(getattr(user, "is_authenticated", False))
-    is_super = authed and user.is_superuser
-    person_id = getattr(user, "person_id", None)
-
-    managed_record_ids: set[int] = set()
-    is_list_admin = False
-    visible_audience_ids: set[int] = set()
-    if authed and not is_super:
-        managed_record_ids = set(
-            RecordManager.objects.filter(
-                user=user, record_id__in=record_ids
-            ).values_list("record_id", flat=True)
-        )
-        is_list_admin = ListAdmin.objects.filter(list=lst, user=user).exists()
-
-        referenced_audience_ids = {
-            aid
-            for auds in audiences_by_key.values()
-            for aid in auds
-            if aid is not None
-        }
-        if referenced_audience_ids:
-            public_audiences = set(
-                List.objects.filter(
-                    pk__in=referenced_audience_ids,
-                    visibility__in=(
-                        List.Visibility.PUBLIC_VISIBLE,
-                        List.Visibility.PUBLIC_EDITABLE,
-                    ),
-                ).values_list("pk", flat=True)
-            )
-            accessed = set(
-                ListAccess.objects.filter(
-                    user=user, list_id__in=referenced_audience_ids
-                ).values_list("list_id", flat=True)
-            )
-            admined = set(
-                ListAdmin.objects.filter(
-                    user=user, list_id__in=referenced_audience_ids
-                ).values_list("list_id", flat=True)
-            )
-            visible_audience_ids = public_audiences | accessed | admined
-
-    def _audience_grants(key: tuple[int, int | None, str | None]) -> bool:
-        auds = audiences_by_key.get(key)
-        if not auds:
-            return False
-        if None in auds:  # public sentinel
-            return True
-        return bool(auds & visible_audience_ids)
-
-    def _field_visible(record: ListRecord, attribute: ListAttribute) -> bool:
-        if attribute.must_be_public:
-            return True
-        if not authed:
-            return False
-        if is_super:
-            return True
-        if record.subject_id == person_id:
-            return True
-        if record.pk in managed_record_ids:
-            return True
-        if is_list_admin:
-            return True
-        return _audience_grants((record.pk, attribute.pk, None))
-
-    def _name_visible(record: ListRecord) -> bool:
-        key = (record.pk, None, ListRecordAccess.Sentinel.NAME)
-        if not authed:
-            # Anonymous viewers see the name only via an explicit public row.
-            return None in audiences_by_key.get(key, set())
-        if is_super:
-            return True
-        if record.subject_id == person_id:
-            return True
-        if record.pk in managed_record_ids:
-            return True
-        if is_list_admin:
-            return True
-        return _audience_grants(key)
-
-    def _email_visible(record: ListRecord) -> bool:
-        # Multi-person row: visibility of the subject PERSON's account email.
-        # No public default row is ever written (opt-in / starts hidden); the
-        # override hierarchy mirrors the name axis for a consistent moderation
-        # surface. See CLAUDE.md / *Family-association model / Multi-person row*.
-        key = (record.pk, None, ListRecordAccess.Sentinel.EMAIL)
-        if not authed:
-            return None in audiences_by_key.get(key, set())
-        if is_super:
-            return True
-        if record.subject_id == person_id:
-            return True
-        if record.pk in managed_record_ids:
-            return True
-        if is_list_admin:
-            return True
-        return _audience_grants(key)
+    ctx = _VisibilityContext(user, lst, records)
 
     rows: list[dict] = []
     anon_counter = 0
@@ -241,24 +244,144 @@ def build_visible_rows(user, lst: List) -> list[dict]:
         fields = []
         values_map = {v.attribute_id: v.value for v in record.values.all()}
         for attribute in attributes:
-            if _field_visible(record, attribute):
+            if ctx.field_visible(record, attribute):
                 fields.append((attribute, values_map.get(attribute.pk, "")))
-        if _name_visible(record):
+        if ctx.name_visible(record):
             subject_display = str(record.subject)
         else:
             anon_counter += 1
             subject_display = f"?{anon_counter}"
         # subject_email: the PERSON's account email, but only when the email
-        # sentinel grants it to this viewer (else None). The flat list-detail
-        # render ignores it today; the multi-person row composer (Phase 4)
-        # consumes it for the parent columns.
-        subject_email = record.subject.email if _email_visible(record) else None
+        # sentinel grants it to this viewer (else None).
+        subject_email = record.subject.email if ctx.email_visible(record) else None
         rows.append(
             {
                 "record": record,
                 "subject_display": subject_display,
                 "subject_email": subject_email,
                 "fields": fields,
+            }
+        )
+    return rows
+
+
+def _role_label(role: str) -> str:
+    """Derive a short column label for a parent cell from a PersonRelationship
+    role: ``"Mutter von"`` → ``"Mutter"``. Falls back to the full role string
+    when it doesn't end in `" von"`. A future per-role `display_label`
+    (CLAUDE.md / *Multi-person row*) can override this convention later.
+    """
+    role = (role or "").strip()
+    suffix = " von"
+    if role.endswith(suffix):
+        return role[: -len(suffix)].strip() or role
+    return role
+
+
+def build_composed_rows(user, lst: List) -> list[dict]:
+    """Wide multi-person rows for `via_associate` lists — the school-class view
+    that reproduces the paper list: one row per `member` record (the child)
+    carrying the child's name + member-role attributes, followed by one cell
+    group per linked associate (parent). See CLAUDE.md / *Family-association
+    model / Multi-person row*.
+
+    Parents are their own `associate` records, gathered via `PersonRelationship`
+    and grouped by relationship role — **not** flattened onto the child. Each
+    parent cell is rendered with **that parent record's own** name / field /
+    email visibility (consent is per parent), so separated parents, a single
+    guardian, and siblings all fall out without special-casing.
+
+    Each row is::
+
+        {"record", "subject_display", "fields", "parents": [
+            {"role", "label", "record", "subject_display",
+             "subject_email", "fields"}, ...]}
+    """
+    records = list(
+        lst.records.filter(archived_at__isnull=True)
+        .select_related("subject")
+        .prefetch_related("values")
+    )
+    if not records:
+        return []
+
+    attributes = list(lst.template.attributes.all())
+    member_attrs = [
+        a for a in attributes if a.applies_to_role == ListAttribute.AppliesTo.MEMBER
+    ]
+    associate_attrs = [
+        a for a in attributes if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
+    ]
+
+    ctx = _VisibilityContext(user, lst, records)
+
+    member_records = [r for r in records if r.role == ListRecord.Role.MEMBER]
+    associate_by_person: dict[int, ListRecord] = {
+        r.subject_id: r for r in records if r.role == ListRecord.Role.ASSOCIATE
+    }
+
+    # child PERSON → ordered [(role, parent_person_id)] via PersonRelationship,
+    # restricted to associates that have a record in THIS list. One query.
+    rels_by_child: dict[int, list[tuple[str, int]]] = defaultdict(list)
+    if member_records and associate_by_person:
+        rel_rows = (
+            PersonRelationship.objects.filter(
+                subject_person_id__in=[r.subject_id for r in member_records],
+                related_person_id__in=list(associate_by_person.keys()),
+            )
+            .order_by("role", "id")
+            .values_list("subject_person_id", "related_person_id", "role")
+        )
+        for child_id, parent_id, role in rel_rows:
+            rels_by_child[child_id].append((role, parent_id))
+
+    anon_counter = 0
+
+    def _cell(record: ListRecord, attrs: list[ListAttribute]):
+        """Resolve one person's (child or parent) display name + visible
+        attribute fields. Mutates the shared `?N` counter so anonymous people
+        are numbered in render order across the whole table (M8: not stable)."""
+        nonlocal anon_counter
+        values_map = {v.attribute_id: v.value for v in record.values.all()}
+        fields = [
+            (attribute, values_map.get(attribute.pk, ""))
+            for attribute in attrs
+            if ctx.field_visible(record, attribute)
+        ]
+        if ctx.name_visible(record):
+            subject_display = str(record.subject)
+        else:
+            anon_counter += 1
+            subject_display = f"?{anon_counter}"
+        return subject_display, fields
+
+    rows: list[dict] = []
+    for child in member_records:
+        subject_display, fields = _cell(child, member_attrs)
+        parents = []
+        for role, parent_id in rels_by_child.get(child.subject_id, []):
+            prec = associate_by_person.get(parent_id)
+            if prec is None:
+                continue
+            p_display, p_fields = _cell(prec, associate_attrs)
+            parents.append(
+                {
+                    "role": role,
+                    "label": _role_label(role),
+                    "record": prec,
+                    "subject_display": p_display,
+                    # parent email = PERSON.email, gated by the parent record's
+                    # own email sentinel (opt-in, defaults hidden).
+                    "subject_email": prec.subject.email if ctx.email_visible(prec) else None,
+                    "fields": p_fields,
+                }
+            )
+        rows.append(
+            {
+                "record": child,
+                "subject_display": subject_display,
+                "fields": fields,
+                "parents": parents,
             }
         )
     return rows

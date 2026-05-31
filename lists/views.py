@@ -91,7 +91,7 @@ from .permissions import (
 )
 from . import lifecycle
 from .tasks import enqueue_aggregate_fanout, enqueue_list_fanout, list_recipient_emails
-from .visibility import build_visible_rows
+from .visibility import build_composed_rows, build_visible_rows
 
 
 @login_required
@@ -157,9 +157,24 @@ def list_detail(request, pk: int):
 
     is_admin = can_user_admin_list(request.user, lst)
 
-    rows = build_visible_rows(request.user, lst)
-    for row in rows:
-        row["can_edit"] = can_user_edit_record(request.user, row["record"])
+    # via_associate lists (school classes) render the wide multi-person row
+    # (child + linked parents); every other template stays one row per record.
+    composed = (
+        lst.template.member_subject_mode
+        == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+    )
+    if composed:
+        rows = build_composed_rows(request.user, lst)
+        for row in rows:
+            row["can_edit"] = can_user_edit_record(request.user, row["record"])
+            for parent in row["parents"]:
+                parent["can_edit"] = can_user_edit_record(
+                    request.user, parent["record"]
+                )
+    else:
+        rows = build_visible_rows(request.user, lst)
+        for row in rows:
+            row["can_edit"] = can_user_edit_record(request.user, row["record"])
 
     own_record = None
     if request.user.is_authenticated and request.user.person_id:
@@ -174,6 +189,7 @@ def list_detail(request, pk: int):
             "list_obj": lst,
             "is_admin": is_admin,
             "rows": rows,
+            "composed": composed,
             "own_record": own_record,
         },
     )

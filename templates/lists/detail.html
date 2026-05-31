@@ -51,6 +51,9 @@
 
   <h2 style="font-size:1.1rem;margin-top:1.5rem">Einträge</h2>
   {% if rows %}
+    {% if composed %}
+      {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj %}
+    {% else %}
     <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
       <thead>
         <tr style="background:#f4f4f4">
@@ -93,6 +96,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
   {% else %}
     <p style="color:#666">Noch keine Einträge in dieser Liste.</p>
   {% endif %}

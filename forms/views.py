@@ -14,7 +14,8 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from lists.visibility import build_visible_rows
+from lists.models import ListTemplate
+from lists.visibility import build_composed_rows, build_visible_rows
 
 from .models import Form, FormPartAsset
 from .permissions import can_user_access_form
@@ -57,13 +58,27 @@ def form_detail(request, pk: int):
 
     parts = []
     for part in form.parts.select_related("list", "list__template").all():
+        # Dynamic list part: rendered with the viewer's own per-field /
+        # subject-name visibility (same helpers as the list-detail page).
+        # via_associate lists use the wide multi-person row composer.
+        rows = None
+        composed = False
+        if part.list_id:
+            composed = (
+                part.list.template.member_subject_mode
+                == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+            )
+            rows = (
+                build_composed_rows(request.user, part.list)
+                if composed
+                else build_visible_rows(request.user, part.list)
+            )
         parts.append(
             {
                 "part": part,
                 "body": _render_body(part.body, form.pk) if part.body else "",
-                # Dynamic list part: rendered with the viewer's own per-field /
-                # subject-name visibility (same helper as the list-detail page).
-                "rows": build_visible_rows(request.user, part.list) if part.list_id else None,
+                "rows": rows,
+                "composed": composed,
             }
         )
     return render(request, "forms/detail.html", {"form_obj": form, "parts": parts})
