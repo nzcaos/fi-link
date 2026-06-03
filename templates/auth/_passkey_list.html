@@ -8,13 +8,25 @@
           {% if pk.last_used_at %} · zuletzt {{ pk.last_used_at|date:"d.m.Y H:i" }}{% endif %}
         </span>
       </div>
-      <form method="post" action="{% url 'accounts:passkey_delete' pk.pk %}"
-            onsubmit="return confirm('Diesen Passkey wirklich löschen?');">
-        {% csrf_token %}
-        <button type="submit" class="secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem">
+      {% if passkeys|length == 1 %}
+        {% comment %}
+          Last passkey: deleting it is refused server-side anyway, so don't even
+          offer the confirm flow — explain directly in a dialog, no round trip,
+          no red banner. The server guard in passkey_delete stays as a safety net.
+        {% endcomment %}
+        <button type="button" class="secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem"
+                onclick="alert('Das ist Ihr letzter Passkey und kann nicht gelöscht werden — Sie würden sich aussperren. Legen Sie zuerst einen weiteren Passkey an (auf einem anderen Gerät oder mit einem Sicherheitsschlüssel).');">
           Löschen
         </button>
-      </form>
+      {% else %}
+        <form method="post" action="{% url 'accounts:passkey_delete' pk.pk %}"
+              onsubmit="return confirm('Diesen Passkey wirklich löschen?');">
+          {% csrf_token %}
+          <button type="submit" class="secondary" style="padding:0.3rem 0.6rem;font-size:0.85rem">
+            Löschen
+          </button>
+        </form>
+      {% endif %}
     </div>
   {% endfor %}
 {% else %}
