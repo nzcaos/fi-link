@@ -417,17 +417,10 @@ def passkey_delete(request: HttpRequest, pk: int) -> HttpResponse:
             "Das ist Ihr letzter Passkey — Sie würden sich aussperren. "
             "Bitte richten Sie zuerst einen weiteren ein.",
         )
-        return _passkey_list_response(request)
+        return redirect("accounts:passkeys")
     passkey.delete()
-    return _passkey_list_response(request)
-
-
-def _passkey_list_response(request: HttpRequest) -> HttpResponse:
-    return render(
-        request,
-        "auth/_passkey_list.html",
-        {"passkeys": request.user.passkeys.order_by("-created_at")},
-    )
+    messages.success(request, "Passkey gelöscht.")
+    return redirect("accounts:passkeys")
 
 
 # ---------------------------------------------------------------------------
