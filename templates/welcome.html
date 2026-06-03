@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
   {# Anonymous-only: authenticated visitors are redirected to lists:home. #}
-  <h1>Fichtelink</h1>
-  <p>Selbstverwalteter Mailinglisten- und Kontaktdienst.</p>
-  <p>
-    <a href="{% url 'accounts:login' %}"><button type="button">Anmelden</button></a>
-    <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Registrieren</button></a>
+  <h1>Willkommen bei Fichtelink</h1>
+  <p style="font-size:1.05rem;color:var(--text-soft)">
+    Der selbstverwaltete Mailinglisten- und Kontaktdienst für Eltern­gruppen,
+    Fördervereine und Kurse. Sie verwalten Ihre Daten selbst und entscheiden
+    pro Liste, wer was sieht.
+  </p>
+  <p style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.25rem">
+    <a href="{% url 'accounts:login' %}" class="btn">Anmelden</a>
+    <a href="{% url 'accounts:register_start' %}" class="btn secondary">Registrieren</a>
   </p>
 {% endblock %}

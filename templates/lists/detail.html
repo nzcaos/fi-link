@@ -46,46 +46,47 @@
     <div class="info">Sie sind Admin dieser Liste. Funktionen finden Sie im Menü rechts oben.</div>
   {% endif %}
 
-  <h2 style="font-size:1.1rem;margin-top:1.5rem">Einträge</h2>
+  <h2>Einträge</h2>
   {% if rows %}
     {% if composed %}
       {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj %}
     {% else %}
-    <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+    <div class="table-wrap">
+    <table class="data-table">
       <thead>
-        <tr style="background:#f4f4f4">
-          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Person</th>
-          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Felder</th>
-          <th style="border-bottom:1px solid #ddd"></th>
+        <tr>
+          <th>Person</th>
+          <th>Felder</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
-            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+            <td>
               {{ row.subject_display }}
               {% if row.record.role == 'associate' %}
-                <span style="color:#888">(zugeordnet)</span>
+                <span class="field-label">(zugeordnet)</span>
               {% endif %}
             </td>
-            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top">
+            <td>
               {% for attr, value in row.fields %}
                 <div>
-                  <span style="color:#666">{{ attr.name }}:</span>
+                  <span class="field-label">{{ attr.name }}:</span>
                   {{ value|default:"—" }}
                 </div>
               {% empty %}
-                <span style="color:#888">keine sichtbaren Felder</span>
+                <span class="field-label">keine sichtbaren Felder</span>
               {% endfor %}
             </td>
-            <td style="padding:0.4rem;border-bottom:1px solid #eee;vertical-align:top;text-align:right;white-space:nowrap">
+            <td class="actions">
               {% if row.can_edit %}
                 <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
                 <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}" style="margin-left:0.4rem">umziehen</a>
                 <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline;margin-left:0.4rem"
                       onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
                   {% csrf_token %}
-                  <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
+                  <button type="submit" class="secondary" style="padding:0.25rem 0.6rem;font-size:0.8rem">entfernen</button>
                 </form>
               {% endif %}
             </td>
@@ -93,6 +94,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
   {% else %}
     <p style="color:#666">Noch keine Einträge in dieser Liste.</p>
@@ -104,9 +106,7 @@
   {% endcomment %}
   {% if list_obj.template.member_subject_mode == 'self' and not own_record %}
     <p style="margin-top:1.5rem">
-      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}"
-         style="display:inline-block;padding:0.6rem 1rem;font-size:1rem;border-radius:4px;
-                background:#2a5db0;color:#fff;text-decoration:none">Mich eintragen</a>
+      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}" class="btn">Mich eintragen</a>
     </p>
   {% endif %}
 {% endblock %}
