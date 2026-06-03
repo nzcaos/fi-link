@@ -41,7 +41,7 @@
            -webkit-font-smoothing: antialiased; }
     .page { max-width: 720px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
     /* Data-heavy pages (the class list) opt out of the narrow column on desktop
-       and use the window width — see {% block page_class %} / lists/detail.html. */
+       and use the window width via the page_class block (lists/detail.html). */
     @media (min-width: 960px) {
       .page.page-wide { max-width: min(96vw, 1500px); }
     }
