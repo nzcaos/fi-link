@@ -98,8 +98,10 @@
     <p style="color:#666">Noch keine Einträge in dieser Liste.</p>
   {% endif %}
 
-  {# Prominent self-enroll call to action — replaces the easily-missed menu entry.
-     Only for self-mode lists where the viewer has no own record yet. #}
+  {% comment %}
+    Prominent self-enroll call to action — replaces the easily-missed menu entry.
+    Only for self-mode lists where the viewer has no own record yet.
+  {% endcomment %}
   {% if list_obj.template.member_subject_mode == 'self' and not own_record %}
     <p style="margin-top:1.5rem">
       <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}"
