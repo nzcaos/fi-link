@@ -2462,7 +2462,9 @@ class ComposedRowTests(TestCase):
         resp = client.get(reverse("lists:detail", kwargs={"pk": self.lst.pk}))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Lina Mueller")
-        self.assertContains(resp, "Bezugspersonen")  # composed-table header
+        self.assertContains(resp, "Bezugsperson")  # composed-table column header
+        self.assertContains(resp, "class-list")  # wide one-row-per-parent table
+        self.assertContains(resp, "Mutter")  # per-parent role label
         self.assertContains(resp, "+49 111")
         self.assertContains(resp, "+49 222")
 
