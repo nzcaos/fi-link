@@ -6,6 +6,12 @@
     Sie können mehrere Passkeys hinterlegen — z.B. einen für jedes Gerät, das
     Sie regelmäßig nutzen. Das ist die wichtigste Absicherung gegen Geräteverlust.
   </p>
+  <p style="color:#666">
+    Ein zusätzliches Passkey gehört auf ein <strong>anderes</strong> Gerät, einen
+    Sicherheitsschlüssel oder einen anderen Passwortmanager. Auf demselben Gerät
+    bzw. im selben iCloud-Schlüsselbund gibt es systembedingt nur eins — es synct
+    bei Apple automatisch auf alle Ihre Geräte.
+  </p>
 
   <div id="passkey-list">
     {% include "auth/_passkey_list.html" %}
@@ -66,7 +72,20 @@
           });
           if (refresh.ok) listEl.innerHTML = await refresh.text();
         } catch (err) {
-          setStatus('Fehler: ' + err.message, 'error');
+          // InvalidStateError: the authenticator (e.g. the iCloud Keychain)
+          // already holds a passkey for this account and refuses a second one.
+          // This is expected — excludeCredentials prevents a useless duplicate.
+          // Explain it instead of leaking the raw English library message.
+          if (err && err.name === 'InvalidStateError') {
+            setStatus('Dieses Gerät bzw. dieser Passwortmanager hat bereits ein '
+              + 'Passkey für Ihr Konto (bei Apple synct der iCloud-Schlüsselbund es '
+              + 'automatisch auf alle Ihre Geräte). Ein weiteres Passkey lohnt sich '
+              + 'nur auf einem anderen Gerät, einem Sicherheitsschlüssel oder einem '
+              + 'anderen Passwortmanager — öffnen Sie diese Seite dort und legen Sie '
+              + 'es an.', 'info');
+          } else {
+            setStatus('Fehler: ' + err.message, 'error');
+          }
         } finally {
           btn.disabled = false;
         }
