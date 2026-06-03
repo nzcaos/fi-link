@@ -136,11 +136,21 @@ def begin_registration(
     additional passkey to an existing user. `exclude_credential_ids` lists
     credentials the authenticator should refuse to re-register over."""
 
+    # The platform passkey picker (notably iCloud Keychain on Apple, also
+    # Android/Chrome) labels each credential primarily by `user.name`, not
+    # `displayName`. Passing the opaque internal handle ("u-…") there is what
+    # makes the picker show a cryptic ID. Use a human-readable label instead:
+    # the person's name when known, else their email (always present per the
+    # onboarding email requirement), else the handle as a last resort. This is
+    # only a display label — credential identity hangs off `user_id`, not name.
+    person = getattr(user, "person", None)
+    user_label = (display_name or "").strip() or (person and person.email) or user.username
+
     opts = generate_registration_options(
         rp_id=settings.RP_ID,
         rp_name=settings.RP_NAME,
         user_id=_user_handle(user),
-        user_name=user.username,
+        user_name=user_label,
         user_display_name=display_name,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.REQUIRED,
