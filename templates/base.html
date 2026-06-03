@@ -40,6 +40,11 @@
            background: linear-gradient(180deg, #e6efeb 0%, var(--bg) 240px) no-repeat, var(--bg);
            -webkit-font-smoothing: antialiased; }
     .page { max-width: 720px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+    /* Data-heavy pages (the class list) opt out of the narrow column on desktop
+       and use the window width — see {% block page_class %} / lists/detail.html. */
+    @media (min-width: 960px) {
+      .page.page-wide { max-width: min(96vw, 1500px); }
+    }
     .card { background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--radius); box-shadow: var(--shadow);
             padding: 1.75rem 1.75rem 2rem; }
@@ -112,6 +117,21 @@
     .data-table .actions { text-align: right; white-space: nowrap; }
     .field-label { color: var(--muted); }
 
+    /* Wide class-list variant: one row per parent, child cell spans them and is
+       vertically centred + emphasised (CLAUDE.md / Multi-person row). */
+    .class-list td, .class-list th { vertical-align: middle; }
+    .class-list .child-cell { vertical-align: middle; background: var(--surface-2);
+             border-right: 1px solid var(--border); min-width: 11rem; }
+    .class-list .child-name { font-size: 1.15rem; font-weight: 650;
+             letter-spacing: -0.01em; line-height: 1.25; }
+    .class-list .child-attr { font-size: .85rem; color: var(--text-soft); margin-top: .2rem; }
+    .class-list .child-actions { margin-top: .5rem; display: flex; flex-wrap: wrap;
+             gap: .5rem; align-items: center; font-size: .85rem; }
+    .class-list .parent-name { font-weight: 600; }
+    .class-list .parent-role { display: block; font-size: .76rem; color: var(--muted);
+             text-transform: uppercase; letter-spacing: .03em; }
+    .class-list .muted-cell { color: var(--muted); }
+
     .passkey-row { display: flex; justify-content: space-between; align-items: center;
                    gap: .75rem; padding: 0.7rem 0.25rem; border-bottom: 1px solid var(--border); }
     .passkey-row:last-child { border-bottom: 0; }
@@ -169,7 +189,7 @@
   <script src="{% static 'vendor/simplewebauthn-browser-9.0.1.umd.min.js' %}"></script>
 </head>
 <body>
-  <div class="page">
+  <div class="page {% block page_class %}{% endblock %}">
     <header class="topbar">
       <a href="/" class="brand"><span class="mark">F</span>Fichtelink</a>
       {% if request.user.is_authenticated %}

@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ list_obj.title }} — Fichtelink{% endblock %}
 
+{# The wide class-list table uses the full window width on desktop. #}
+{% block page_class %}{% if composed %}page-wide{% endif %}{% endblock %}
+
 {# Normal-user functions for this list — shown first in the top-right menu. #}
 {% block menu_user %}
   {% if list_obj.template.member_subject_mode == 'self' %}
@@ -49,7 +52,7 @@
   <h2>Einträge</h2>
   {% if rows %}
     {% if composed %}
-      {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj %}
+      {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj associate_attrs=associate_attrs %}
     {% else %}
     <div class="table-wrap">
     <table class="data-table">

@@ -38,6 +38,7 @@ from .models import (
     ListAdmin,
     ListInviteToken,
     ListJoinToken,
+    ListAttribute,
     ListRecord,
     ListRecordValue,
     ListTemplate,
@@ -163,6 +164,9 @@ def list_detail(request, pk: int):
         lst.template.member_subject_mode
         == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
     )
+    # Associate-role attributes become the shared column headers of the wide
+    # class-list table (one column per attribute, lined up across all parents).
+    associate_attrs = []
     if composed:
         rows = build_composed_rows(request.user, lst)
         for row in rows:
@@ -171,6 +175,11 @@ def list_detail(request, pk: int):
                 parent["can_edit"] = can_user_edit_record(
                     request.user, parent["record"]
                 )
+        associate_attrs = [
+            a
+            for a in lst.template.attributes.all()
+            if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
+        ]
     else:
         rows = build_visible_rows(request.user, lst)
         for row in rows:
@@ -190,6 +199,7 @@ def list_detail(request, pk: int):
             "is_admin": is_admin,
             "rows": rows,
             "composed": composed,
+            "associate_attrs": associate_attrs,
             "own_record": own_record,
         },
     )

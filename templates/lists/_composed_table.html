@@ -1,60 +1,83 @@
 {% comment %}
-Wide multi-person table for via_associate lists (school classes).
-Context: `rows` (from build_composed_rows), and the booleans `show_actions`
-+ `list_obj` (only needed when show_actions). One row per child (member
-record); each linked parent is its own cell group with its own visibility.
+Wide multi-person class-list table for via_associate lists (school classes).
+Context: `rows` (from build_composed_rows), `associate_attrs` (the shared column
+headers), and — only when actions are wanted — `show_actions` + `list_obj`.
+
+One <tr> per linked parent; the child cell spans its parents via rowspan, is
+vertically centred and emphasised (CLAUDE.md / Multi-person row). The attribute
+columns line up across all parents because `parent.cells` is positional over
+`associate_attrs` (None where that parent hid the field → rendered as "—").
 {% endcomment %}
 <div class="table-wrap">
-<table class="data-table">
+<table class="data-table class-list">
   <thead>
     <tr>
       <th>Mitglied</th>
-      <th>Bezugspersonen</th>
-      {% if show_actions %}<th></th>{% endif %}
+      <th>Bezugsperson</th>
+      {% for attr in associate_attrs %}<th>{{ attr.name }}</th>{% endfor %}
+      <th>E-Mail</th>
     </tr>
   </thead>
   <tbody>
     {% for row in rows %}
-      <tr>
-        <td>
-          <strong>{{ row.subject_display }}</strong>
-          {% for attr, value in row.fields %}
-            <div><span class="field-label">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
-          {% endfor %}
-        </td>
-        <td>
-          {% for parent in row.parents %}
-            <div style="margin-bottom:0.5rem">
-              <span class="field-label">{{ parent.label }}:</span>
-              <strong>{{ parent.subject_display }}</strong>
-              {% for attr, value in parent.fields %}
-                <div><span class="field-label">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
-              {% endfor %}
-              {% if parent.subject_email %}
-                <div><span class="field-label">E-Mail:</span> {{ parent.subject_email }}</div>
-              {% endif %}
+      {% if row.parents %}
+        {% for parent in row.parents %}
+          <tr>
+            {% if forloop.first %}
+              <td class="child-cell" rowspan="{{ row.parents|length }}">
+                <div class="child-name">{{ row.subject_display }}</div>
+                {% for attr, value in row.fields %}
+                  <div class="child-attr"><span class="field-label">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
+                {% endfor %}
+                {% if show_actions and row.can_edit %}
+                  <div class="child-actions">
+                    <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
+                    <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}">umziehen</a>
+                    <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
+                          onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
+                      {% csrf_token %}
+                      <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
+                    </form>
+                  </div>
+                {% endif %}
+              </td>
+            {% endif %}
+            <td>
+              <span class="parent-role">{{ parent.label }}</span>
+              <span class="parent-name">{{ parent.subject_display }}</span>
               {% if show_actions and parent.can_edit %}
-                <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=parent.record.pk %}" style="font-size:0.85rem">bearbeiten</a>
+                <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=parent.record.pk %}"
+                   style="display:block;font-size:.8rem;margin-top:.15rem">bearbeiten</a>
               {% endif %}
-            </div>
-          {% empty %}
-            <span class="field-label">keine Bezugspersonen</span>
-          {% endfor %}
-        </td>
-        {% if show_actions %}
-          <td class="actions">
-            {% if row.can_edit %}
-              <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
-              <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}" style="margin-left:0.4rem">umziehen</a>
-              <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline;margin-left:0.4rem"
-                    onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
-                {% csrf_token %}
-                <button type="submit" class="secondary" style="padding:0.25rem 0.6rem;font-size:0.8rem">entfernen</button>
-              </form>
+            </td>
+            {% for cell in parent.cells %}
+              <td>{% if cell %}{{ cell }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            {% endfor %}
+            <td>{% if parent.subject_email %}{{ parent.subject_email }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td class="child-cell">
+            <div class="child-name">{{ row.subject_display }}</div>
+            {% for attr, value in row.fields %}
+              <div class="child-attr"><span class="field-label">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
+            {% endfor %}
+            {% if show_actions and row.can_edit %}
+              <div class="child-actions">
+                <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
+                <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}">umziehen</a>
+                <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
+                      onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
+                  {% csrf_token %}
+                  <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
+                </form>
+              </div>
             {% endif %}
           </td>
-        {% endif %}
-      </tr>
+          <td colspan="{{ associate_attrs|length|add:'2' }}" class="muted-cell">keine Bezugspersonen</td>
+        </tr>
+      {% endif %}
     {% endfor %}
   </tbody>
 </table>

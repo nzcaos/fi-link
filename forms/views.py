@@ -14,7 +14,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from lists.models import ListTemplate
+from lists.models import ListAttribute, ListTemplate
 from lists.visibility import build_composed_rows, build_visible_rows
 
 from .models import Form, FormPartAsset
@@ -63,22 +63,30 @@ def form_detail(request, pk: int):
         # via_associate lists use the wide multi-person row composer.
         rows = None
         composed = False
+        associate_attrs = []
         if part.list_id:
             composed = (
                 part.list.template.member_subject_mode
                 == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
             )
-            rows = (
-                build_composed_rows(request.user, part.list)
-                if composed
-                else build_visible_rows(request.user, part.list)
-            )
+            if composed:
+                rows = build_composed_rows(request.user, part.list)
+                # Shared column headers for the wide class-list table — must be
+                # passed so header count matches each parent's positional cells.
+                associate_attrs = [
+                    a
+                    for a in part.list.template.attributes.all()
+                    if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
+                ]
+            else:
+                rows = build_visible_rows(request.user, part.list)
         parts.append(
             {
                 "part": part,
                 "body": _render_body(part.body, form.pk) if part.body else "",
                 "rows": rows,
                 "composed": composed,
+                "associate_attrs": associate_attrs,
             }
         )
     return render(request, "forms/detail.html", {"form_obj": form, "parts": parts})

@@ -340,30 +340,41 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     def _cell(record: ListRecord, attrs: list[ListAttribute]):
         """Resolve one person's (child or parent) display name + visible
         attribute fields. Mutates the shared `?N` counter so anonymous people
-        are numbered in render order across the whole table (M8: not stable)."""
+        are numbered in render order across the whole table (M8: not stable).
+
+        Returns `(subject_display, fields, cells)`:
+        - `fields` — only the visible (attribute, value) pairs (stacked layout).
+        - `cells` — one entry per attribute in `attrs` order, `None` where the
+          field is hidden. Positional, so several people's cells line up under
+          shared column headers in the wide class-list table.
+        """
         nonlocal anon_counter
         values_map = {v.attribute_id: v.value for v in record.values.all()}
-        fields = [
-            (attribute, values_map.get(attribute.pk, ""))
-            for attribute in attrs
-            if ctx.field_visible(record, attribute)
-        ]
+        fields = []
+        cells = []
+        for attribute in attrs:
+            if ctx.field_visible(record, attribute):
+                value = values_map.get(attribute.pk, "")
+                fields.append((attribute, value))
+                cells.append(value)
+            else:
+                cells.append(None)
         if ctx.name_visible(record):
             subject_display = str(record.subject)
         else:
             anon_counter += 1
             subject_display = f"?{anon_counter}"
-        return subject_display, fields
+        return subject_display, fields, cells
 
     rows: list[dict] = []
     for child in member_records:
-        subject_display, fields = _cell(child, member_attrs)
+        subject_display, fields, _ = _cell(child, member_attrs)
         parents = []
         for role, parent_id in rels_by_child.get(child.subject_id, []):
             prec = associate_by_person.get(parent_id)
             if prec is None:
                 continue
-            p_display, p_fields = _cell(prec, associate_attrs)
+            p_display, p_fields, p_cells = _cell(prec, associate_attrs)
             parents.append(
                 {
                     "role": role,
@@ -374,6 +385,9 @@ def build_composed_rows(user, lst: List) -> list[dict]:
                     # own email sentinel (opt-in, defaults hidden).
                     "subject_email": prec.subject.email if ctx.email_visible(prec) else None,
                     "fields": p_fields,
+                    # positional cells aligned to `associate_attrs` for the wide
+                    # class-list table (one column per associate attribute).
+                    "cells": p_cells,
                 }
             )
         rows.append(
