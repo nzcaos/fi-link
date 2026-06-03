@@ -6,8 +6,6 @@
   {% if list_obj.template.member_subject_mode == 'self' %}
     {% if own_record %}
       <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=own_record.pk %}">Mein Eintrag bearbeiten</a>
-    {% else %}
-      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}">Mich eintragen</a>
     {% endif %}
   {% else %}
     <a href="{% url 'lists:record_create_associate' pk=list_obj.pk %}">Mitglied (z. B. Kind) hinzufügen</a>
@@ -98,5 +96,15 @@
     {% endif %}
   {% else %}
     <p style="color:#666">Noch keine Einträge in dieser Liste.</p>
+  {% endif %}
+
+  {# Prominent self-enroll call to action — replaces the easily-missed menu entry.
+     Only for self-mode lists where the viewer has no own record yet. #}
+  {% if list_obj.template.member_subject_mode == 'self' and not own_record %}
+    <p style="margin-top:1.5rem">
+      <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}"
+         style="display:inline-block;padding:0.6rem 1rem;font-size:1rem;border-radius:4px;
+                background:#2a5db0;color:#fff;text-decoration:none">Mich eintragen</a>
+    </p>
   {% endif %}
 {% endblock %}
