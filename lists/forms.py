@@ -515,9 +515,13 @@ class AssociateWizardForm(forms.Form):
       - optionally a second parent: PERSON + associate ListRecord +
         PersonRelationship + RecordManager(creator, proxy) + associate values.
 
-    Visibility matrix is intentionally not part of this form — the M8 signal
-    sets the name default (public) and each record's email starts hidden; the
-    saver refines both in the regular record-edit form afterwards.
+    Visibility matrix is intentionally not part of this form, but sensible
+    defaults are written so the class list reproduces the paper class list
+    (CLAUDE.md / *List display defaults*): the M8 signal sets the name default
+    (public), every non-`must_be_public` attribute (address, phone, …) is
+    granted to the list's own Benutzergruppe, and each record's email stays
+    hidden (opt-in). The saver refines all of these in the regular record-edit
+    form afterwards.
     """
 
     given_name = forms.CharField(
@@ -628,6 +632,21 @@ class AssociateWizardForm(forms.Form):
                 attribute=attribute,
                 value=_attr_value_str(attribute, self.cleaned_data.get(f"{prefix}{pk}")),
             )
+            # School-class density: a via_associate list reproduces the paper
+            # class list, where address/phone are visible to the class (see
+            # CLAUDE.md / *List display defaults*). The matrix is not part of
+            # this wizard, so without a default grant these fields would stay
+            # hidden to every non-privileged member. Grant each non-public
+            # attribute to the list's own Benutzergruppe (audience = the list).
+            # `must_be_public` attrs are always visible (no row needed); the
+            # name sentinel is defaulted public by the post_save signal and the
+            # email sentinel stays opt-in — neither is touched here.
+            if not attribute.must_be_public:
+                ListRecordAccess.objects.get_or_create(
+                    record=record,
+                    attribute=attribute,
+                    audience=self.list_obj,
+                )
 
     @transaction.atomic
     def save(self) -> ListRecord:

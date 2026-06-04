@@ -2256,6 +2256,24 @@ class AssociateWizardMultiPersonTests(TestCase):
             ).exists()
         )
 
+    def test_associate_attributes_visible_to_plain_member_after_wizard(self):
+        # Regression: the wizard wrote associate values but no visibility grant,
+        # so a plain Benutzergruppe member (not a manager) saw none of the
+        # parents' phone/address — the class list looked empty. The wizard now
+        # grants every non-public attribute to the list's own audience so the
+        # class list reproduces the paper list. See CLAUDE.md / *List display
+        # defaults*.
+        self._post()
+        viewer = _make_user(username="other-parent", given="Carla", family="X")
+        ListAccess.objects.create(list=self.lst, user=viewer)  # member, not manager
+        rows = build_composed_rows(viewer, self.lst)
+        self.assertEqual(len(rows), 1)
+        parents = rows[0]["parents"]
+        self.assertEqual(len(parents), 1)
+        seen = dict((a.name, v) for a, v in parents[0]["fields"])
+        self.assertEqual(seen.get("Telefon"), "+49 111")
+        self.assertEqual(seen.get("Adresse"), "Hauptstr. 1")
+
     def test_second_parent_creates_separate_associate_record(self):
         resp = self._post(
             add_second_parent="on",
