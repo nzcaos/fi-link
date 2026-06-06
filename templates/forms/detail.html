@@ -3,6 +3,9 @@
 {% block content %}
   <p><a href="{% url 'forms:index' %}">← Zurück zu den Formularen</a></p>
   <h1>{{ form_obj.title }}</h1>
+  {% if not form_obj.is_open %}
+    <p class="field-label" style="color:#b00020">Die Eintragung für dieses Formular ist geschlossen.</p>
+  {% endif %}
 
   {% for entry in parts %}
     <section style="margin:1.5rem 0">
@@ -10,52 +13,17 @@
         <h2 style="font-size:1.15rem">{{ entry.part.title }}</h2>
       {% endif %}
 
-      {% if entry.body %}
-        <div class="form-part-body">{{ entry.body }}</div>
-      {% endif %}
-
-      {% if entry.rows is not None %}
-        <p class="field-label" style="margin:.5rem 0">
-          Liste: <strong>{{ entry.part.list.title }}</strong>
-          {% if entry.part.list.archived_at %} · <span style="color:#b00020">archiviert</span>{% endif %}
-        </p>
-        {% if entry.rows %}
-          {% if entry.composed %}
-            {% include "lists/_composed_table.html" with rows=entry.rows show_actions=False associate_attrs=entry.associate_attrs member_header=entry.member_header member_col_count=entry.member_col_count %}
-          {% else %}
-          <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Person</th>
-                <th>Felder</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for row in entry.rows %}
-                <tr>
-                  <td>
-                    {{ row.subject_display }}
-                    {% if row.record.role == 'associate' %}
-                      <span class="field-label">(zugeordnet)</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% for attr, value in row.fields %}
-                      <div><span class="field-label">{{ attr.name }}:</span> {{ value|default:"—" }}</div>
-                    {% empty %}
-                      <span class="field-label">keine sichtbaren Felder</span>
-                    {% endfor %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-          </div>
-          {% endif %}
-        {% else %}
-          <p class="field-label">Keine Einträge in dieser Liste.</p>
+      {% if entry.part.kind == 'html' %}
+        {% if entry.body %}
+          <div class="form-part-body">{{ entry.body }}</div>
         {% endif %}
+      {% else %}
+        {% comment %}
+          Slot- und Beitrags-Teile werden in Phase 2/3 vollständig gerendert.
+        {% endcomment %}
+        <p class="field-label" style="color:#666">
+          Dieser Teil („{{ entry.part.get_kind_display }}“) wird in Kürze ergänzt.
+        </p>
       {% endif %}
     </section>
   {% empty %}

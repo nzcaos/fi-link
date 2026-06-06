@@ -1,8 +1,9 @@
 """Form viewing: an access-gated page that renders a Form's ordered parts —
-static HTML blocks and dynamic embedded lists — plus an asset-serving endpoint.
+static HTML blocks plus (from Phase 2) slot/contribution signup parts — and an
+asset-serving endpoint.
 
-Forms are authored/managed by super-admins in the Django Admin (Phase 7b ships
-no self-service form builder). These views are the read surface.
+Forms are authored/managed by super-admins in the Django Admin (no self-service
+form builder). These views are the read/signup surface.
 """
 from __future__ import annotations
 
@@ -14,14 +15,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
-from lists.models import ListAttribute, ListTemplate
-from lists.visibility import (
-    build_composed_rows,
-    build_visible_rows,
-    member_grid_header,
-)
-
-from .models import Form, FormPartAsset
+from .models import Form, FormPart, FormPartAsset
 from .permissions import can_user_access_form
 
 _ASSET_RE = re.compile(r"\[\[asset:(\d+)\]\]")
@@ -61,43 +55,16 @@ def form_detail(request, pk: int):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf dieses Formular.")
 
     parts = []
-    for part in form.parts.select_related("list", "list__template").all():
-        # Dynamic list part: rendered with the viewer's own per-field /
-        # subject-name visibility (same helpers as the list-detail page).
-        # via_associate lists use the wide multi-person row composer.
-        rows = None
-        composed = False
-        associate_attrs = []
-        member_header = []
-        member_col_count = 0
-        if part.list_id:
-            composed = (
-                part.list.template.member_subject_mode
-                == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
-            )
-            if composed:
-                rows = build_composed_rows(request.user, part.list)
-                # Shared column headers for the wide class-list table — must be
-                # passed so header count matches each parent's positional cells.
-                associate_attrs = [
-                    a
-                    for a in part.list.template.attributes.all()
-                    if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
-                ]
-                member_header, member_col_count = member_grid_header(
-                    part.list.template
-                )
-            else:
-                rows = build_visible_rows(request.user, part.list)
+    for part in form.parts.all():
+        # Phase 1: only HTML parts render fully; slot/contribution rendering and
+        # the signup actions arrive in Phase 2/3. Until then those parts show a
+        # placeholder so authored forms remain inspectable without errors.
         parts.append(
             {
                 "part": part,
-                "body": _render_body(part.body, form.pk) if part.body else "",
-                "rows": rows,
-                "composed": composed,
-                "associate_attrs": associate_attrs,
-                "member_header": member_header,
-                "member_col_count": member_col_count,
+                "body": _render_body(part.body, form.pk)
+                if part.kind == FormPart.Kind.HTML and part.body
+                else "",
             }
         )
     return render(request, "forms/detail.html", {"form_obj": form, "parts": parts})

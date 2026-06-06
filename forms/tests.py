@@ -1,25 +1,28 @@
-"""Phase 7b tests — composable forms: access control, ordered part rendering,
-dynamic list part honouring per-field/subject-name visibility, asset serving
-+ access gate, and [[asset:ID]] substitution.
+"""Forms tests — access control, part rendering (HTML), signup-model
+constraints, asset serving + access gate, and [[asset:ID]] substitution.
+
+Phase 1 of the signup rework: the dynamic-list embedding is gone; slot/
+contribution *rendering* and the signup *actions* arrive in later phases. These
+tests cover the schema, HTML rendering, and the model-level invariants.
 
 Run on the deploy VM (`docker compose run --rm web python manage.py test forms`).
 """
 from __future__ import annotations
 
+from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
 
 from accounts.models import Person, User
-from lists.models import (
-    List,
-    ListAttribute,
-    ListRecord,
-    ListRecordAccess,
-    ListRecordValue,
-    ListTemplate,
-)
 
-from .models import Form, FormAccess, FormPart, FormPartAsset
+from .models import (
+    Form,
+    FormAccess,
+    FormPart,
+    FormPartAsset,
+    FormSignup,
+    FormSlot,
+)
 from .permissions import can_user_access_form
 
 
@@ -75,40 +78,18 @@ class FormAccessControlTests(TestCase):
         self.assertContains(resp, "Geheim")
 
 
-class FormRenderTests(TestCase):
+class FormPartRenderTests(TestCase):
     def setUp(self):
         self.creator = _user("root", superuser=True)
-        self.viewer = _user("viewer")  # has form access, NOT a list member
-
-        # A list with one public and one private attribute.
-        self.template = ListTemplate.objects.create(name="Klasse")
-        self.attr_pub = ListAttribute.objects.create(
-            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
-        )
-        self.attr_priv = ListAttribute.objects.create(
-            template=self.template, name="Adresse", type=ListAttribute.Type.TEXT, position=1
-        )
-        self.lst = List.objects.create(
-            title="Klasse 5a", email_alias="5a", template=self.template,
-            visibility=List.Visibility.PRIVATE,
-        )
-        subj = Person.objects.create(given_name="Kind", family_name="Eins")
-        self.record = ListRecord.objects.create(
-            list=self.lst, subject=subj, role=ListRecord.Role.MEMBER
-        )
-        ListRecordValue.objects.create(record=self.record, attribute=self.attr_pub, value="PUBVAL")
-        ListRecordValue.objects.create(record=self.record, attribute=self.attr_priv, value="PRIVVAL")
-        # attr_pub is public; attr_priv has no access row. (Subject-name default
-        # public row is written by the ListRecord post_save signal.)
-        ListRecordAccess.objects.create(record=self.record, attribute=self.attr_pub, audience=None)
-
+        self.viewer = _user("viewer")
         self.form = Form.objects.create(title="Aushang", created_by=self.creator)
         FormAccess.objects.create(form=self.form, user=self.viewer)
-        self.static_part = FormPart.objects.create(
-            form=self.form, order=0, title="Kopf", body="HEADER_HTML"
+        self.html_part = FormPart.objects.create(
+            form=self.form, order=0, kind=FormPart.Kind.HTML,
+            title="Kopf", body="HEADER_HTML",
         )
-        self.list_part = FormPart.objects.create(
-            form=self.form, order=1, title="Klassenliste", list=self.lst
+        self.slots_part = FormPart.objects.create(
+            form=self.form, order=1, kind=FormPart.Kind.SLOTS, title="Helfer",
         )
 
     def _get(self):
@@ -116,29 +97,76 @@ class FormRenderTests(TestCase):
         c.force_login(self.viewer)
         return c.get(reverse("forms:detail", kwargs={"pk": self.form.pk}))
 
-    def test_static_and_dynamic_parts_render(self):
+    def test_html_part_renders(self):
         resp = self._get()
         self.assertContains(resp, "HEADER_HTML")
-        self.assertContains(resp, "Kind Eins")  # subject name public by default
-
-    def test_dynamic_part_respects_field_visibility(self):
-        resp = self._get()
-        self.assertContains(resp, "PUBVAL")     # public field visible
-        self.assertNotContains(resp, "PRIVVAL")  # private field hidden
 
     def test_part_order_respected(self):
-        resp = self._get()
-        body = resp.content.decode()
-        self.assertLess(body.index("Kopf"), body.index("Klassenliste"))
+        body = self._get().content.decode()
+        self.assertLess(body.index("Kopf"), body.index("Helfer"))
 
-    def test_anonymised_name_when_not_visible(self):
-        # Drop the default public name row → viewer (no list access) sees ?N.
-        ListRecordAccess.objects.filter(
-            record=self.record, attribute__isnull=True
-        ).delete()
+    def test_non_html_part_shows_placeholder(self):
+        # Phase 1: slot/contribution parts are not yet rendered.
         resp = self._get()
-        self.assertNotContains(resp, "Kind Eins")
-        self.assertContains(resp, "?1")
+        self.assertContains(resp, "in Kürze ergänzt")
+
+    def test_closed_form_shows_hint(self):
+        self.form.is_open = False
+        self.form.save(update_fields=["is_open"])
+        self.assertContains(self._get(), "geschlossen")
+
+
+class FormSignupModelTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.alice = _user("alice")
+        self.bob = _user("bob")
+        self.form = Form.objects.create(title="Sommerfest", created_by=self.creator)
+        self.slots_part = FormPart.objects.create(
+            form=self.form, order=0, kind=FormPart.Kind.SLOTS
+        )
+        self.slot_a = FormSlot.objects.create(
+            part=self.slots_part, order=0, label="Aufbau", capacity=2
+        )
+        self.slot_b = FormSlot.objects.create(
+            part=self.slots_part, order=1, label="Abbau", capacity=2
+        )
+        self.contrib_part = FormPart.objects.create(
+            form=self.form, order=1, kind=FormPart.Kind.CONTRIBUTIONS
+        )
+
+    def test_visibility_defaults(self):
+        s = FormSignup.objects.create(
+            part=self.slots_part, slot=self.slot_a, user=self.alice
+        )
+        self.assertTrue(s.name_visible)
+        self.assertFalse(s.email_visible)
+
+    def test_no_double_signup_same_slot(self):
+        FormSignup.objects.create(part=self.slots_part, slot=self.slot_a, user=self.alice)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            FormSignup.objects.create(
+                part=self.slots_part, slot=self.slot_a, user=self.alice
+            )
+
+    def test_same_user_different_slots_allowed(self):
+        FormSignup.objects.create(part=self.slots_part, slot=self.slot_a, user=self.alice)
+        FormSignup.objects.create(part=self.slots_part, slot=self.slot_b, user=self.alice)
+        self.assertEqual(FormSignup.objects.filter(user=self.alice).count(), 2)
+
+    def test_different_users_same_slot_allowed(self):
+        FormSignup.objects.create(part=self.slots_part, slot=self.slot_a, user=self.alice)
+        FormSignup.objects.create(part=self.slots_part, slot=self.slot_a, user=self.bob)
+        self.assertEqual(self.slot_a.signups.count(), 2)
+
+    def test_one_contribution_per_part_user(self):
+        FormSignup.objects.create(
+            part=self.contrib_part, user=self.alice, contribution_text="Apfelkuchen"
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            FormSignup.objects.create(
+                part=self.contrib_part, user=self.alice, contribution_text="Brezeln"
+            )
 
 
 class FormAssetTests(TestCase):
@@ -148,7 +176,9 @@ class FormAssetTests(TestCase):
         self.ungranted = _user("nope")
         self.form = Form.objects.create(title="Mit Bild", created_by=self.creator)
         FormAccess.objects.create(form=self.form, user=self.viewer)
-        self.part = FormPart.objects.create(form=self.form, order=0, body="")
+        self.part = FormPart.objects.create(
+            form=self.form, order=0, kind=FormPart.Kind.HTML, body=""
+        )
         self.asset = FormPartAsset.objects.create(
             part=self.part, title="Logo", mime_type="image/png", data=b"\x89PNGdata"
         )
