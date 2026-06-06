@@ -20,7 +20,15 @@ from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_POST
 
 from .forms import ContributionForm
-from .models import Form, FormAccess, FormPart, FormPartAsset, FormSignup, FormSlot
+from .models import (
+    Form,
+    FormAccess,
+    FormPart,
+    FormPartAsset,
+    FormSignup,
+    FormSlot,
+    _gen_share_token,
+)
 from .permissions import (
     _is_own,
     can_user_access_form,
@@ -155,6 +163,23 @@ def form_detail(request, pk: int):
     return render(request, "forms/detail.html", _render_form(request, form))
 
 
+def shared(request, token: str):
+    """Broadcast-link view: open to anyone holding the form's share token (no
+    login required to *view*). Signing up still needs auth — handled by the
+    per-button login handoff in `shared_signin`; authenticated visitors get the
+    real signup forms, authorised by the token via `_can_user_signup`."""
+    form = get_object_or_404(Form, share_token=token)
+    return render(request, "forms/shared.html", _render_form(request, form, share_token=token))
+
+
+def shared_signin(request, token: str):
+    """Anonymous-visitor handoff: stash the token and bounce to login. After a
+    successful login/registration `_next_url_after_auth` returns to this form."""
+    form = get_object_or_404(Form, share_token=token)
+    request.session["pending_form_token"] = form.share_token
+    return redirect("accounts:login")
+
+
 def _can_user_signup(user, form: Form, token: str) -> bool:
     """A user may sign up if the form is open AND either they already have access
     OR they present the form's valid broadcast token (Phase 4). Signing up then
@@ -267,6 +292,24 @@ def signup_remove(request, pk: int, signup_pk: int):
     signup.delete()
     messages.success(request, "Eintrag entfernt.")
     return _signup_redirect(form, token)
+
+
+@login_required
+@require_POST
+def share_link(request, pk: int):
+    """Form-admin action: ensure the form has a share token and surface the
+    full broadcast URL (to be mailed to recipients)."""
+    form = get_object_or_404(Form, pk=pk)
+    if not can_user_admin_form(request.user, form):
+        return HttpResponseForbidden("Keine Berechtigung.")
+    if not form.share_token:
+        form.share_token = _gen_share_token()
+        form.save(update_fields=["share_token"])
+    url = request.build_absolute_uri(
+        reverse("forms:shared", kwargs={"token": form.share_token})
+    )
+    messages.success(request, f"Freigabe-Link: {url}")
+    return redirect("forms:detail", pk=form.pk)
 
 
 @login_required

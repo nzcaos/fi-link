@@ -404,6 +404,69 @@ class FormSignupActionTests(TestCase):
         self.assertFalse(FormSignup.objects.filter(user=self.alice).exists())
 
 
+class FormBroadcastTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.alice = _user("alice")  # no FormAccess
+        self.form = Form.objects.create(
+            title="Sommerfest", created_by=self.creator, share_token="TOK"
+        )
+        self.part = FormPart.objects.create(form=self.form, kind=FormPart.Kind.SLOTS)
+        self.slot = FormSlot.objects.create(part=self.part, label="Aufbau", capacity=2)
+
+    def test_shared_anonymous_view(self):
+        resp = Client().get(reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Sommerfest")
+        self.assertContains(resp, "Anmelden")  # login handoff for anonymous
+
+    def test_shared_invalid_token_404(self):
+        resp = Client().get(reverse("forms:shared", kwargs={"token": "NOPE"}))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_shared_signin_sets_session_and_redirects(self):
+        c = Client()
+        resp = c.get(reverse("forms:shared_signin", kwargs={"token": "TOK"}))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(reverse("accounts:login"), resp.url)
+        self.assertEqual(c.session["pending_form_token"], "TOK")
+
+    def test_authenticated_view_carries_token(self):
+        c = Client()
+        c.force_login(self.alice)
+        resp = c.get(reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertContains(resp, 'value="TOK"')  # hidden token in signup form
+        self.assertContains(resp, "Eintragen")
+
+    def test_token_signup_succeeds_without_prior_access(self):
+        c = Client()
+        c.force_login(self.alice)
+        url = reverse(
+            "forms:slot_signup", kwargs={"pk": self.form.pk, "slot_pk": self.slot.pk}
+        )
+        resp = c.post(url, {"token": "TOK", "name_visible": "on"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertTrue(FormSignup.objects.filter(slot=self.slot, user=self.alice).exists())
+        self.assertTrue(FormAccess.objects.filter(form=self.form, user=self.alice).exists())
+
+    def test_share_link_generates_token_admin_only(self):
+        fresh = Form.objects.create(title="Neu", created_by=self.creator)
+        self.assertIsNone(fresh.share_token)
+        c = Client()
+        c.force_login(self.creator)
+        resp = c.post(reverse("forms:share_link", kwargs={"pk": fresh.pk}))
+        self.assertEqual(resp.status_code, 302)
+        fresh.refresh_from_db()
+        self.assertTrue(fresh.share_token)
+        # Non-admin is forbidden.
+        other = _user("other")
+        c2 = Client()
+        c2.force_login(other)
+        resp = c2.post(reverse("forms:share_link", kwargs={"pk": self.form.pk}))
+        self.assertEqual(resp.status_code, 403)
+
+
 class FormAssetTests(TestCase):
     def setUp(self):
         self.creator = _user("root", superuser=True)

@@ -1,29 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ form_obj.title }} — Fichtelink{% endblock %}
+
+{% block menu_admin %}
+  {% if is_form_admin %}
+    <div class="menu-sep"></div>
+    <div class="menu-label">Administration</div>
+    <form method="post" action="{% url 'forms:share_link' pk=form_obj.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="menu-item">Freigabe-Link erzeugen / anzeigen</button>
+    </form>
+  {% endif %}
+{% endblock %}
+
 {% block content %}
   <p><a href="{% url 'forms:index' %}">← Zurück zu den Formularen</a></p>
   <h1>{{ form_obj.title }}</h1>
-  {% if not form_obj.is_open %}
-    <p class="field-label" style="color:#b00020">Die Eintragung für dieses Formular ist geschlossen.</p>
-  {% endif %}
-
-  {% for entry in parts %}
-    <section style="margin:1.5rem 0">
-      {% if entry.part.title %}
-        <h2 style="font-size:1.15rem">{{ entry.part.title }}</h2>
-      {% endif %}
-
-      {% if entry.kind == 'html' %}
-        {% if entry.body %}
-          <div class="form-part-body">{{ entry.body }}</div>
-        {% endif %}
-      {% elif entry.kind == 'slots' %}
-        {% include "forms/_part_slots.html" with entry=entry %}
-      {% elif entry.kind == 'contributions' %}
-        {% include "forms/_part_contributions.html" with entry=entry %}
-      {% endif %}
-    </section>
-  {% empty %}
-    <p style="color:#666">Dieses Formular hat noch keine Inhalte.</p>
-  {% endfor %}
+  {% include "forms/_form_body.html" %}
 {% endblock %}

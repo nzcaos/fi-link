@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ form_obj.title }} — Fichtelink{% endblock %}
+{% block content %}
+  <h1>{{ form_obj.title }}</h1>
+
+  {% if not request.user.is_authenticated %}
+    <p class="field-label" style="margin:.5rem 0">
+      Zum Eintragen bitte anmelden oder registrieren:
+      <a href="{% url 'forms:shared_signin' token=share_token %}">Anmelden / Registrieren</a>
+    </p>
+  {% endif %}
+
+  {% include "forms/_form_body.html" %}
+{% endblock %}

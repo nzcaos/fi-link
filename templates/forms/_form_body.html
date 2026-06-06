@@ -1,0 +1,29 @@
+{% comment %}
+  Gemeinsamer Formular-Body, von detail.html (zugriffsgated) und shared.html
+  (Broadcast-Link) eingebunden. Erwartet Kontext: form_obj, parts, can_signup,
+  share_token. Buttons in den Part-Partials erscheinen nur für angemeldete
+  Nutzer; anonyme Besucher leitet shared.html über den Anmelde-Handoff.
+{% endcomment %}
+{% if not form_obj.is_open %}
+  <p class="field-label" style="color:#b00020">Die Eintragung für dieses Formular ist geschlossen.</p>
+{% endif %}
+
+{% for entry in parts %}
+  <section style="margin:1.5rem 0">
+    {% if entry.part.title %}
+      <h2 style="font-size:1.15rem">{{ entry.part.title }}</h2>
+    {% endif %}
+
+    {% if entry.kind == 'html' %}
+      {% if entry.body %}
+        <div class="form-part-body">{{ entry.body }}</div>
+      {% endif %}
+    {% elif entry.kind == 'slots' %}
+      {% include "forms/_part_slots.html" with entry=entry %}
+    {% elif entry.kind == 'contributions' %}
+      {% include "forms/_part_contributions.html" with entry=entry %}
+    {% endif %}
+  </section>
+{% empty %}
+  <p style="color:#666">Dieses Formular hat noch keine Inhalte.</p>
+{% endfor %}

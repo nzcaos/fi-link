@@ -457,6 +457,9 @@ def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
     pending_admin = request.session.pop("pending_admin_invite_token", None)
     if pending_admin:
         return reverse("lists:admin_invite_accept", kwargs={"token": pending_admin})
+    pending_form = request.session.pop("pending_form_token", None)
+    if pending_form:
+        return reverse("forms:shared", kwargs={"token": pending_form})
     return default
 
 
