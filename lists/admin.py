@@ -27,6 +27,7 @@ class ListAttributeInline(admin.TabularInline):
     extra = 0
     fields = (
         "position",
+        "display_row",
         "name",
         "type",
         "applies_to_role",
@@ -45,7 +46,7 @@ class ListTemplateAdmin(admin.ModelAdmin):
 
 @admin.register(ListAttribute)
 class ListAttributeAdmin(admin.ModelAdmin):
-    list_display = ("template", "name", "type", "applies_to_role", "must_be_public", "position")
+    list_display = ("template", "name", "type", "applies_to_role", "must_be_public", "position", "display_row")
     list_filter = ("type", "applies_to_role", "must_be_public", "template")
     search_fields = ("name", "template__name")
 

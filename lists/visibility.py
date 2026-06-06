@@ -291,9 +291,17 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     email visibility (consent is per parent), so separated parents, a single
     guardian, and siblings all fall out without special-casing.
 
+    The child's member attributes are laid out as a grid beside the name —
+    columns side by side, distributed over one or more rows by each attribute's
+    `display_row` (configurable in the LISTTEMPLATE). `member_grid` is that
+    grid: one entry per display-row, each a list of ``{"attr", "value"}`` cells
+    (``value`` is ``None`` where the field is hidden → rendered as "—"), so the
+    label is shown once above each column instead of inline per value.
+
     Each row is::
 
-        {"record", "subject_display", "fields", "parents": [
+        {"record", "subject_display", "fields", "member_grid": [
+            [{"attr", "value"}, ...], ...], "parents": [
             {"role", "label", "record", "subject_display",
              "subject_email", "fields"}, ...]}
     """
@@ -312,6 +320,14 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     associate_attrs = [
         a for a in attributes if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
     ]
+
+    # Member attributes grouped into display-rows. `member_attrs` is already
+    # ordered by (position, id), so columns within a row keep that order; the
+    # rows themselves are ordered by `display_row` number (gaps collapse).
+    _member_rows_map: dict[int, list[ListAttribute]] = defaultdict(list)
+    for a in member_attrs:
+        _member_rows_map[a.display_row].append(a)
+    member_display_rows = [_member_rows_map[k] for k in sorted(_member_rows_map)]
 
     ctx = _VisibilityContext(user, lst, records)
 
@@ -368,7 +384,14 @@ def build_composed_rows(user, lst: List) -> list[dict]:
 
     rows: list[dict] = []
     for child in member_records:
-        subject_display, fields, _ = _cell(child, member_attrs)
+        subject_display, fields, member_cells = _cell(child, member_attrs)
+        # Map each member attribute to its (possibly hidden → None) value, then
+        # shape the configured display-rows grid for the template.
+        value_by_attr = dict(zip(member_attrs, member_cells))
+        member_grid = [
+            [{"attr": a, "value": value_by_attr[a]} for a in grp]
+            for grp in member_display_rows
+        ]
         parents = []
         for role, parent_id in rels_by_child.get(child.subject_id, []):
             prec = associate_by_person.get(parent_id)
@@ -395,6 +418,7 @@ def build_composed_rows(user, lst: List) -> list[dict]:
                 "record": child,
                 "subject_display": subject_display,
                 "fields": fields,
+                "member_grid": member_grid,
                 "parents": parents,
             }
         )

@@ -165,6 +165,16 @@ class ListAttribute(models.Model):
         help_text="Nur für Typ 'Auswahl': Maximale Belegung pro Wert.",
     )
     position = models.PositiveIntegerField("Position", default=0)
+    display_row = models.PositiveSmallIntegerField(
+        "Anzeige-Zeile",
+        default=1,
+        help_text=(
+            "Nur für die Schulklassen-Ansicht (Mitglied-Attribute): In welcher "
+            "Zeile des Mitglied-Blocks dieses Attribut nebeneinander angeordnet "
+            "wird (1 = erste Zeile, 2 = zweite Zeile, …). Innerhalb einer Zeile "
+            "entscheidet 'Position' über die Spaltenreihenfolge."
+        ),
+    )
 
     class Meta:
         verbose_name = "Listen-Attribut"

@@ -2438,6 +2438,31 @@ class ComposedRowTests(TestCase):
             names = [a.name for a, _ in parent["fields"]]
             self.assertEqual(names, ["Telefon"])
 
+    def test_member_grid_groups_attributes_by_display_row(self):
+        # Member attributes are laid out beside the name as a grid, grouped into
+        # the display_row configured per attribute (default 1). Notizen stays on
+        # row 1; Adresse + Geburtstag are placed on row 2.
+        addr = ListAttribute.objects.create(
+            template=self.template, name="Adresse", type=ListAttribute.Type.TEXT,
+            position=2, applies_to_role=ListAttribute.AppliesTo.MEMBER, display_row=2,
+        )
+        ListAttribute.objects.create(
+            template=self.template, name="Geburtstag", type=ListAttribute.Type.TEXT,
+            position=3, applies_to_role=ListAttribute.AppliesTo.MEMBER, display_row=2,
+        )
+        ListRecordValue.objects.create(
+            record=self.child_rec, attribute=addr, value="Hauptstr. 1"
+        )
+        # mom manages the child record → sees every member field.
+        grid = build_composed_rows(self.mom, self.lst)[0]["member_grid"]
+        self.assertEqual(
+            [[c["attr"].name for c in r] for r in grid],
+            [["Notizen"], ["Adresse", "Geburtstag"]],
+        )
+        row2 = {c["attr"].name: c["value"] for c in grid[1]}
+        self.assertEqual(row2["Adresse"], "Hauptstr. 1")
+        self.assertIsNone(row2["Geburtstag"])  # no value → None → "—" in the UI
+
     def test_manager_sees_parent_emails(self):
         # mom manages both her own record and (as proxy creator) dad's record →
         # she sees both emails regardless of the opt-in email sentinel. Consent
