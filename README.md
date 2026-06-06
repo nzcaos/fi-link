@@ -6,7 +6,7 @@ The product specification (in German) is in [`filink.md`](filink.md). All archit
 
 ## Status
 
-**Feature-complete, first deployment.** The full stack is implemented: domain model, passkey auth, list/record UI with per-field visibility, the mail pipeline (outbound, IMAP IDLE consumer, inbound decision + release/approval, bounce correlation, retention), school-class lifecycle (rollover, transfer, admin handover), aggregate aliases, and the forms module. Tests are written phase-parallel and run on the deploy VM.
+**Feature-complete, deployed live.** The full stack is implemented and verified on `fichtelink.caos.cloud`: domain model, passkey auth, list/record UI with per-field visibility, the mail pipeline (outbound, IMAP IDLE consumer, inbound decision + release/approval, bounce correlation, retention), school-class lifecycle (rollover, transfer, admin handover), aggregate aliases, and the **forms module** (self-service event signups — see [Forms](#forms-event-signups) below). Tests are written phase-parallel and run on the deploy VM.
 
 The commands below are the live deployment procedure.
 
@@ -130,6 +130,39 @@ docker compose exec web python manage.py reset_passkeys --email <user-email>
 ```
 
 The command deletes the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
+
+## Forms (event signups)
+
+The forms module lets people sign **themselves** up for activities — the recurring
+school events these groups run (summer parties, cake sales, helper rosters). A form
+is an ordered set of parts, each of one kind:
+
+- **HTML** — an authored description block (with optional image assets).
+- **Slots** — fixed positions with a capacity, e.g. *"Aufbau Freitag 14:00–15:00"*
+  for two people. Participants claim a free slot; a full slot shows *"vergeben"*.
+- **Contributions** — an open free-text signup, e.g. cake donations where everyone
+  enters what they bring (*"Apfelkuchen"*, *"Brezeln"*).
+
+Each signup carries two visibility switches — **name visible** (default on) and
+**email visible** (default off) — chosen at signup and editable afterward; hidden
+entries render as *"vergeben"* / *"anonym"*. Form admins and super-admins always see
+real names/emails for moderation.
+
+**Authoring is super-admin only, in the Django Admin** — there is no self-service
+form builder. The HTML body of any part doubles as the description shown above its
+signup list.
+
+**Sharing**: every form has a single reusable broadcast link, shown read-only at the
+top of the form page for its admin (the token is created lazily on first admin view —
+no separate "generate" step). Mail that link to recipients. Viewing needs no login;
+**signing up** does — a new participant is taken through passkey registration and then
+straight back to the form. Signing up grants the form access so it stays findable
+under `/forms/`.
+
+**Re-using a form next year**: in the Django Admin form list, select a form and run
+the **"Als Vorlage klonen (ohne Eintragungen)"** action. It deep-copies the parts,
+slots, asset images, and texts but drops all signups, access grants, and the share
+token, and reopens signups — last year's form stays intact for reference.
 
 ## Development
 
