@@ -284,6 +284,10 @@ class FormContributionRenderTests(TestCase):
         self.assertContains(resp, "anonym")
         self.assertNotContains(resp, "A Bob")
 
+    def test_add_button_shown(self):
+        # Viewer has not contributed → last-row button offers to add one.
+        self.assertContains(self._get(), "Beitrag eintragen")
+
 
 class FormSignupActionTests(TestCase):
     def setUp(self):
@@ -345,6 +349,23 @@ class FormSignupActionTests(TestCase):
         c = self._client(self.alice)
         c.post(self._slot_url(), {"name_visible": "on"})
         c.post(self._slot_url(), {"name_visible": "on"})
+        self.assertEqual(
+            FormSignup.objects.filter(slot=self.slot, user=self.alice).count(), 1
+        )
+
+    def test_slot_signup_get_renders_form(self):
+        resp = self._client(self.alice).get(self._slot_url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Name sichtbar")
+
+    def test_slot_visibility_editable_after_signup(self):
+        c = self._client(self.alice)
+        c.post(self._slot_url(), {"name_visible": "on"})  # create, email hidden
+        s = FormSignup.objects.get(slot=self.slot, user=self.alice)
+        self.assertFalse(s.email_visible)
+        c.post(self._slot_url(), {"name_visible": "on", "email_visible": "on"})  # edit
+        s.refresh_from_db()
+        self.assertTrue(s.email_visible)
         self.assertEqual(
             FormSignup.objects.filter(slot=self.slot, user=self.alice).count(), 1
         )

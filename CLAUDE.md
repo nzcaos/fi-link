@@ -22,7 +22,7 @@ The data model in the spec uses these entities — keep these names and relation
 - **LISTTEMPLATE** + **LIST_ATTRIBUT** + **LIST_ATTRIBUT_VALUE** — templates define fields (text, email, phone, number, choice with optional usage cap, checkbox, user-relationship). Templates are super-admin only. `Must_be_public` on an attribute means a user cannot hide that field.
 - **LIST_RECORD** + **LIST_RECORD_VALUE** — one record per user per list (each user can have at most one entry per list). A record is owned by its creator; only the owner edits it.
 - **LIST_RECORD_ACCESS** — per-value visibility, scoped by audience (another `List_ID`, with `0` meaning public). Each owner controls visibility per field per user group.
-- **FORM** / **FORM_PART** / **FORM_PART_ASSET** / **FORM_ACCESS** — composable forms (static HTML parts + a dynamic list part) with assets (images) and per-user access.
+- **FORM** / **FORM_PART** / **FORM_PART_ASSET** / **FORM_ACCESS** — composable forms with assets (images) and per-user access. Each FORM_PART has a `kind` (static HTML / slot-signup / free-text contribution). **The spec's "dynamic list part" embedding a LIST is no longer used** — forms have their own signup structure (FORM_SLOT / FORM_SIGNUP), decoupled from the lists module. See *Architecture decisions / Forms module (self-service signup)*.
 
 ### Important access-control / hierarchy rules
 
@@ -300,6 +300,23 @@ Code surface: `visibility.can_user_see_subject_name(user, record)` (returns bool
 Trade-off: SQL `WHERE` / `ORDER BY` / `LIKE` on encrypted columns is no longer available. Acceptable for Fichtelink — the UI shows lists row-by-row, and full-text search across PII was never a feature. Key rotation is supported via the library's multi-key mechanism (old + new active simultaneously, re-encrypt over time).
 
 `PERSON.email` remains plaintext — it is the addressable identifier used for activation links, SMTP routing of forwarded mail, In-Reply-To correlation, bounce addressing, and as From/To in mail headers we send out. Disk-level encryption (e.g. LUKS on the VPS) is orthogonal and a deployment concern.
+
+### Forms module (self-service signup)
+
+The forms module is for **people signing themselves up for activities** (e.g. an Elternbeirat organising a school party): helper rosters and donation lists. It originally embedded a LIST as a "dynamic part", but the lists model (Benutzergruppe, audience matrix, onboarding wizard, school-class lifecycle) is the wrong shape for ad-hoc signup. **Forms therefore have their own signup structure, fully decoupled from the lists module.**
+
+- **`FORM`** — `title`, `created_by` (the form admin), a nullable `share_token` (broadcast link), `is_open` (close signups while keeping the view).
+- **`FORM_PART.kind`** discriminates three part types: `html` (static authored HTML + `FORM_PART_ASSET` images, rendered trusted — super-admin authored), `slots` (a set of positions with capacity), `contributions` (an open free-text signup). Parts compose freely in `order`.
+- **`FORM_SLOT`** — a position within a `slots` part: `label`, `capacity` (people needed). Example: "Aufbau Freitag 14:00–15:00", capacity 2.
+- **`FORM_SIGNUP`** — one person's signup. `slot` set → a claimed position; `slot` NULL → a free-text contribution (`contribution_text`, e.g. "Apfelkuchen"). Name/email are read from `user.person` (no re-capture). Two **visibility switches** `name_visible` (default on) / `email_visible` (default off) — deliberately **not** the lists' audience matrix (a form has no Benutzergruppe): they mean "shown to everyone who can see the form, or not". A hidden slot signup renders as **"vergeben"**, a hidden contribution as **"anonym"**; the contribution text is always shown. Constraints: one signup per (slot, user), one contribution per (part, user) — both editable. Visibility is chosen **at signup time** and stays editable afterward (not pre-shown per slot).
+
+**Permissions / visibility** live in `forms/permissions.py` (`can_user_access_form`, `can_user_admin_form`, `can_user_see_signup_name/email`). Form admins (`created_by`) and super-admins always see real names/emails (moderation) and may remove any signup; a user always sees and manages their own signup. Capacity is enforced at signup in a `select_for_update` transaction; a successful signup auto-grants `FORM_ACCESS`.
+
+**Authoring is Django-Admin / super-admin only** (no self-service builder) — same as before. The end-user surface is the signup flow.
+
+**Onboarding is much simpler than for lists**: one **broadcast link** (`/forms/s/<share_token>/`, the `shared` view) is mailed to many recipients. Viewing needs no login; signing up does. An anonymous visitor's signup button hands off via `shared_signin` (stashes `pending_form_token`, bounces to login/registration); after passkey login/enrolment `accounts.views._next_url_after_auth` returns them to the form. The token authorises signup even without a prior `FORM_ACCESS` (see `_can_user_signup`). There is **no per-recipient invite token** (unlike `LIST_INVITE_TOKEN`) — the share link is reusable.
+
+**Frontend**: forms render on the wide page layout (`page-wide`); the shared body is `templates/forms/_form_body.html`, included by both `detail.html` and `shared.html`.
 
 ## Architecture decisions (authentication)
 

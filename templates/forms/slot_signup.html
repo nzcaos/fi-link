@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Eintragen — {{ form_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'forms:detail' pk=form_obj.pk %}">← Zurück zum Formular</a></p>
+  <h1>{{ form_obj.title }}</h1>
+  <h2 style="font-size:1.15rem">
+    {% if existing %}Sichtbarkeit ändern{% else %}Eintragen{% endif %}: {{ slot.label }}
+  </h2>
+
+  <form method="post" action="{% url 'forms:slot_signup' pk=form_obj.pk slot_pk=slot.pk %}">
+    {% csrf_token %}
+    {% if token %}<input type="hidden" name="token" value="{{ token }}">{% endif %}
+
+    <p><label>{{ sform.name_visible }} {{ sform.name_visible.label }}</label></p>
+    <p><label>{{ sform.email_visible }} {{ sform.email_visible.label }}</label></p>
+    <p class="field-label">
+      Ihre Sichtbarkeit gilt für alle, die dieses Formular sehen. Form-Verwalter
+      sehen Ihren Namen immer. Diese Einstellung können Sie später jederzeit ändern.
+    </p>
+
+    <button type="submit">{% if existing %}Speichern{% else %}Eintragen{% endif %}</button>
+  </form>
+{% endblock %}

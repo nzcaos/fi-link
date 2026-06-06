@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_POST
 
-from .forms import ContributionForm
+from .forms import ContributionForm, SlotSignupForm
 from .models import (
     Form,
     FormAccess,
@@ -200,31 +200,53 @@ def _signup_redirect(form: Form, token: str):
 
 
 @login_required
-@require_POST
 def slot_signup(request, pk: int, slot_pk: int):
+    """Sign up for a slot, choosing name/email visibility at this step; the same
+    page edits the visibility of an existing signup afterward."""
     slot = get_object_or_404(FormSlot, pk=slot_pk, part__form_id=pk)
     form = slot.part.form
-    token = request.POST.get("token", "")
+    token = request.GET.get("token", "") or request.POST.get("token", "")
     if not _can_user_signup(request.user, form, token):
         return HttpResponseForbidden("Eintragen ist hier nicht möglich.")
 
-    with transaction.atomic():
-        locked = FormSlot.objects.select_for_update().get(pk=slot.pk)
-        if FormSignup.objects.filter(slot=locked, user=request.user).exists():
-            messages.info(request, "Sie sind hier bereits eingetragen.")
-        elif FormSignup.objects.filter(slot=locked).count() >= locked.capacity:
-            messages.error(request, "Diese Position ist bereits voll belegt.")
-        else:
-            FormSignup.objects.create(
-                part=locked.part,
-                slot=locked,
-                user=request.user,
-                name_visible="name_visible" in request.POST,
-                email_visible="email_visible" in request.POST,
-            )
-            FormAccess.objects.get_or_create(form=form, user=request.user)
-            messages.success(request, f"Eingetragen: {locked.label}.")
-    return _signup_redirect(form, token)
+    existing = FormSignup.objects.filter(slot=slot, user=request.user).first()
+
+    if request.method == "POST":
+        sform = SlotSignupForm(request.POST)
+        if sform.is_valid():
+            nv = sform.cleaned_data["name_visible"]
+            ev = sform.cleaned_data["email_visible"]
+            if existing:
+                existing.name_visible = nv
+                existing.email_visible = ev
+                existing.save(update_fields=["name_visible", "email_visible"])
+                messages.success(request, "Sichtbarkeit aktualisiert.")
+                return _signup_redirect(form, token)
+            with transaction.atomic():
+                locked = FormSlot.objects.select_for_update().get(pk=slot.pk)
+                if FormSignup.objects.filter(slot=locked).count() >= locked.capacity:
+                    messages.error(request, "Diese Position ist bereits voll belegt.")
+                else:
+                    FormSignup.objects.create(
+                        part=locked.part, slot=locked, user=request.user,
+                        name_visible=nv, email_visible=ev,
+                    )
+                    FormAccess.objects.get_or_create(form=form, user=request.user)
+                    messages.success(request, f"Eingetragen: {locked.label}.")
+            return _signup_redirect(form, token)
+    else:
+        initial = (
+            {"name_visible": existing.name_visible, "email_visible": existing.email_visible}
+            if existing
+            else None
+        )
+        sform = SlotSignupForm(initial=initial)
+
+    return render(
+        request,
+        "forms/slot_signup.html",
+        {"form_obj": form, "slot": slot, "sform": sform, "token": token, "existing": existing},
+    )
 
 
 @login_required

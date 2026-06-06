@@ -37,17 +37,20 @@
 
             {% if can_signup and request.user.is_authenticated %}
               {% if s.mine %}
-                <form method="post" action="{% url 'forms:signup_remove' pk=form_obj.pk signup_pk=s.mine.id %}" style="margin-top:.4rem">
-                  {% csrf_token %}
-                  {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
-                  <button type="submit">Austragen</button>
-                </form>
+                <div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap">
+                  <form method="get" action="{% url 'forms:slot_signup' pk=form_obj.pk slot_pk=s.slot.id %}">
+                    {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
+                    <button type="submit">Sichtbarkeit ändern</button>
+                  </form>
+                  <form method="post" action="{% url 'forms:signup_remove' pk=form_obj.pk signup_pk=s.mine.id %}">
+                    {% csrf_token %}
+                    {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
+                    <button type="submit">Austragen</button>
+                  </form>
+                </div>
               {% elif s.free %}
-                <form method="post" action="{% url 'forms:slot_signup' pk=form_obj.pk slot_pk=s.slot.id %}" style="margin-top:.4rem">
-                  {% csrf_token %}
+                <form method="get" action="{% url 'forms:slot_signup' pk=form_obj.pk slot_pk=s.slot.id %}" style="margin-top:.4rem">
                   {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
-                  <label style="display:block"><input type="checkbox" name="name_visible" checked> Name sichtbar</label>
-                  <label style="display:block"><input type="checkbox" name="email_visible"> E-Mail sichtbar</label>
                   <button type="submit">Eintragen</button>
                 </form>
               {% endif %}

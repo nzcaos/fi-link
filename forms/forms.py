@@ -1,8 +1,8 @@
 """Forms for the signup surface.
 
-Slot signups read their two visibility switches straight from POST (rendered as
-inline checkboxes per free slot), so they need no Form class. Contributions get
-a small Form because they carry a free-text field whose `required` flag depends
+Both slot signups and contributions choose name/email visibility at the moment
+of signing up (a dedicated small page), and both stay editable afterward.
+Contributions additionally carry a free-text field whose `required` flag depends
 on the part's `contribution_required`.
 """
 from __future__ import annotations
@@ -10,6 +10,11 @@ from __future__ import annotations
 from django import forms
 
 from .models import FormPart
+
+
+class SlotSignupForm(forms.Form):
+    name_visible = forms.BooleanField(label="Name sichtbar", required=False, initial=True)
+    email_visible = forms.BooleanField(label="E-Mail sichtbar", required=False, initial=False)
 
 
 class ContributionForm(forms.Form):
