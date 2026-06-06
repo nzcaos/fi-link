@@ -138,11 +138,23 @@
              text-transform: uppercase; letter-spacing: .03em; line-height: 1.25; }
     .class-list .mgrid-v { font-size: .9rem; color: var(--text-soft); line-height: 1.3; }
     .class-list .child-actions { margin-top: .4rem; display: flex; flex-wrap: wrap;
-             gap: .5rem; align-items: center; font-size: .85rem; white-space: normal; }
+             gap: .35rem; align-items: center; white-space: normal; }
     .class-list .parent-name { font-weight: 600; }
     .class-list .parent-role { display: block; font-size: .76rem; color: var(--muted);
              text-transform: uppercase; letter-spacing: .03em; }
     .class-list .muted-cell { color: var(--muted); }
+
+    /* Compact icon button (used for row actions: edit / move / remove). Works
+       as both <a> and <button>; the SVG inherits colour via currentColor. */
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+             width: 1.85rem; height: 1.85rem; padding: 0; border: 1px solid var(--border-strong);
+             border-radius: var(--radius-sm); background: #fff; color: var(--text-soft);
+             cursor: pointer; text-decoration: none; line-height: 0; }
+    .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+    .icon-btn.danger:hover { color: #b00020; border-color: #b00020; }
+    .icon-actions { display: inline-flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+    .icon { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 2;
+             stroke-linecap: round; stroke-linejoin: round; }
 
     .passkey-row { display: flex; justify-content: space-between; align-items: center;
                    gap: .75rem; padding: 0.7rem 0.25rem; border-bottom: 1px solid var(--border); }
@@ -201,6 +213,23 @@
   <script src="{% static 'vendor/simplewebauthn-browser-9.0.1.umd.min.js' %}"></script>
 </head>
 <body>
+  {% comment %}
+    Inline SVG icon sprite — referenced via <use href="#icon-…">. No CDN, no
+    icon font; defined once here, styled with currentColor (see .icon).
+  {% endcomment %}
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="icon-edit" viewBox="0 0 24 24">
+      <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+    </symbol>
+    <symbol id="icon-move" viewBox="0 0 24 24">
+      <path d="M4 12h14"/><path d="M13 6l6 6-6 6"/>
+    </symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24">
+      <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6"/><path d="M14 11v6"/>
+    </symbol>
+  </svg>
   <div class="page {% block page_class %}{% endblock %}">
     <header class="topbar">
       <a href="/" class="brand"><span class="mark">F</span>Fichtelink</a>

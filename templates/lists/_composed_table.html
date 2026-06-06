@@ -43,8 +43,11 @@ parent hid the field → "—").
               <span class="parent-role">{{ parent.label }}</span>
               <span class="parent-name">{{ parent.subject_display }}</span>
               {% if show_actions and parent.can_edit %}
-                <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=parent.record.pk %}"
-                   style="display:block;font-size:.8rem;margin-top:.15rem">bearbeiten</a>
+                <a class="icon-btn" style="margin-left:.4rem;vertical-align:middle"
+                   href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=parent.record.pk %}"
+                   title="Bearbeiten" aria-label="Bearbeiten">
+                  <svg class="icon"><use href="#icon-edit"/></svg>
+                </a>
               {% endif %}
             </td>
             {% for cell in parent.cells %}

@@ -17,13 +17,19 @@ Context: `row`, `show_actions`, `list_obj`, `member_col_count`.
 <td class="col-name" rowspan="{{ row.parents|length|default:1 }}">
   <div class="child-name">{{ row.subject_display }}</div>
   {% if show_actions and row.can_edit %}
-    <div class="child-actions">
-      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
-      <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}">umziehen</a>
+    <div class="child-actions icon-actions">
+      <a class="icon-btn" href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}" title="Bearbeiten" aria-label="Bearbeiten">
+        <svg class="icon"><use href="#icon-edit"/></svg>
+      </a>
+      <a class="icon-btn" href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}" title="In andere Klasse umziehen" aria-label="Umziehen">
+        <svg class="icon"><use href="#icon-move"/></svg>
+      </a>
       <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
             onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
         {% csrf_token %}
-        <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
+        <button type="submit" class="icon-btn danger" title="Entfernen" aria-label="Entfernen">
+          <svg class="icon"><use href="#icon-trash"/></svg>
+        </button>
       </form>
     </div>
   {% endif %}
