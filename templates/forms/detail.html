@@ -2,19 +2,18 @@
 {% block title %}{{ form_obj.title }} — Fichtelink{% endblock %}
 {% block page_class %}page-wide{% endblock %}
 
-{% block menu_admin %}
-  {% if is_form_admin %}
-    <div class="menu-sep"></div>
-    <div class="menu-label">Administration</div>
-    <form method="post" action="{% url 'forms:share_link' pk=form_obj.pk %}">
-      {% csrf_token %}
-      <button type="submit" class="menu-item">Freigabe-Link erzeugen / anzeigen</button>
-    </form>
-  {% endif %}
-{% endblock %}
-
 {% block content %}
   <p><a href="{% url 'forms:index' %}">← Zurück zu den Formularen</a></p>
   <h1>{{ form_obj.title }}</h1>
+
+  {% if share_url %}
+    <div style="margin:.5rem 0 1rem;padding:.6rem .8rem;background:var(--surface-soft,#f3f4f6);border-radius:8px">
+      <div class="field-label">Freigabe-Link (per Mail an die Empfänger verteilen):</div>
+      <input type="text" readonly value="{{ share_url }}"
+             onclick="this.select()"
+             style="width:100%;box-sizing:border-box;margin-top:.3rem;font-family:monospace">
+    </div>
+  {% endif %}
+
   {% include "forms/_form_body.html" %}
 {% endblock %}

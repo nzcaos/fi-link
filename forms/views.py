@@ -161,7 +161,17 @@ def form_detail(request, pk: int):
     form = get_object_or_404(Form, pk=pk)
     if not can_user_access_form(request.user, form):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf dieses Formular.")
-    return render(request, "forms/detail.html", _render_form(request, form))
+    ctx = _render_form(request, form)
+    # Form admins get the broadcast link shown at the top; the (single) token is
+    # created lazily on first admin view — no explicit "generate link" action.
+    if ctx["is_form_admin"]:
+        if not form.share_token:
+            form.share_token = _gen_share_token()
+            form.save(update_fields=["share_token"])
+        ctx["share_url"] = request.build_absolute_uri(
+            reverse("forms:shared", kwargs={"token": form.share_token})
+        )
+    return render(request, "forms/detail.html", ctx)
 
 
 def shared(request, token: str):
@@ -315,24 +325,6 @@ def signup_remove(request, pk: int, signup_pk: int):
     signup.delete()
     messages.success(request, "Eintrag entfernt.")
     return _signup_redirect(form, token)
-
-
-@login_required
-@require_POST
-def share_link(request, pk: int):
-    """Form-admin action: ensure the form has a share token and surface the
-    full broadcast URL (to be mailed to recipients)."""
-    form = get_object_or_404(Form, pk=pk)
-    if not can_user_admin_form(request.user, form):
-        return HttpResponseForbidden("Keine Berechtigung.")
-    if not form.share_token:
-        form.share_token = _gen_share_token()
-        form.save(update_fields=["share_token"])
-    url = request.build_absolute_uri(
-        reverse("forms:shared", kwargs={"token": form.share_token})
-    )
-    messages.success(request, f"Freigabe-Link: {url}")
-    return redirect("forms:detail", pk=form.pk)
 
 
 @login_required

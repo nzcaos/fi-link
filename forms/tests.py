@@ -477,21 +477,29 @@ class FormBroadcastTests(TestCase):
         self.assertTrue(FormSignup.objects.filter(slot=self.slot, user=self.alice).exists())
         self.assertTrue(FormAccess.objects.filter(form=self.form, user=self.alice).exists())
 
-    def test_share_link_generates_token_admin_only(self):
+    def test_detail_auto_generates_and_shows_link_for_admin(self):
         fresh = Form.objects.create(title="Neu", created_by=self.creator)
         self.assertIsNone(fresh.share_token)
         c = Client()
         c.force_login(self.creator)
-        resp = c.post(reverse("forms:share_link", kwargs={"pk": fresh.pk}))
-        self.assertEqual(resp.status_code, 302)
+        resp = c.get(reverse("forms:detail", kwargs={"pk": fresh.pk}))
+        self.assertEqual(resp.status_code, 200)
         fresh.refresh_from_db()
-        self.assertTrue(fresh.share_token)
-        # Non-admin is forbidden.
-        other = _user("other")
-        c2 = Client()
-        c2.force_login(other)
-        resp = c2.post(reverse("forms:share_link", kwargs={"pk": self.form.pk}))
-        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(fresh.share_token)  # created lazily on admin view
+        self.assertContains(resp, fresh.share_token)  # link shown at top
+        self.assertContains(resp, "Freigabe-Link")
+
+    def test_detail_no_link_for_non_admin(self):
+        fresh = Form.objects.create(title="Neu2", created_by=self.creator)
+        member = _user("member")
+        FormAccess.objects.create(form=fresh, user=member)
+        c = Client()
+        c.force_login(member)
+        resp = c.get(reverse("forms:detail", kwargs={"pk": fresh.pk}))
+        self.assertEqual(resp.status_code, 200)
+        fresh.refresh_from_db()
+        self.assertIsNone(fresh.share_token)  # not generated for non-admins
+        self.assertNotContains(resp, "Freigabe-Link")
 
 
 class FormAssetTests(TestCase):
