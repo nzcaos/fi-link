@@ -93,9 +93,10 @@ class FormPart(models.Model):
         "HTML-Inhalt",
         blank=True,
         help_text=(
-            "Nur für Art „HTML-Inhalt“: HTML-Vorlage für diesen Teil. Assets "
-            "dieses Teils per [[asset:<ID>]] einbinden (wird beim Rendern durch "
-            "die Asset-URL ersetzt)."
+            "HTML-Beschreibung dieses Teils. Bei Helfer- und Beitrags-Teilen "
+            "wird sie über der Eintragungs-Liste angezeigt. Assets dieses Teils "
+            "per [[asset:<ID>]] einbinden (wird beim Rendern durch die Asset-URL "
+            "ersetzt)."
         ),
     )
     contribution_label = models.CharField(

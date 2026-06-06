@@ -115,6 +115,12 @@ class FormPartRenderTests(TestCase):
         self.form.save(update_fields=["is_open"])
         self.assertContains(self._get(), "geschlossen")
 
+    def test_body_renders_for_non_html_parts(self):
+        # The authored HTML description must also show on slot/contribution parts.
+        self.slots_part.body = "SLOT_DESC_HTML"
+        self.slots_part.save(update_fields=["body"])
+        self.assertContains(self._get(), "SLOT_DESC_HTML")
+
 
 class FormSignupModelTests(TestCase):
     def setUp(self):

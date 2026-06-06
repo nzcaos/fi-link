@@ -77,14 +77,15 @@ def _build_part(viewer, form: Form, part: FormPart) -> dict:
     entry = {
         "part": part,
         "kind": part.kind,
-        "body": "",
+        # The authored HTML body is a description shown for every kind (above the
+        # signup list for slots/contributions, and the sole content for html).
+        "body": _render_body(part.body, form.pk) if part.body else "",
         "slots": [],
         "contributions": [],
         "contribution_label": part.contribution_label,
         "my_contribution": None,
     }
     if part.kind == FormPart.Kind.HTML:
-        entry["body"] = _render_body(part.body, form.pk) if part.body else ""
         return entry
 
     signups = list(part.signups.all())

@@ -14,11 +14,10 @@
       <h2 style="font-size:1.15rem">{{ entry.part.title }}</h2>
     {% endif %}
 
-    {% if entry.kind == 'html' %}
-      {% if entry.body %}
-        <div class="form-part-body">{{ entry.body }}</div>
-      {% endif %}
-    {% elif entry.kind == 'slots' %}
+    {% if entry.body %}
+      <div class="form-part-body">{{ entry.body }}</div>
+    {% endif %}
+    {% if entry.kind == 'slots' %}
       {% include "forms/_part_slots.html" with entry=entry %}
     {% elif entry.kind == 'contributions' %}
       {% include "forms/_part_contributions.html" with entry=entry %}
