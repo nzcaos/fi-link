@@ -1,20 +1,31 @@
 {% comment %}
 Wide multi-person class-list table for via_associate lists (school classes).
-Context: `rows` (from build_composed_rows), `associate_attrs` (the shared column
-headers), and — only when actions are wanted — `show_actions` + `list_obj`.
+Context: `rows` (from build_composed_rows), `associate_attrs` + `member_header`
++ `member_col_count` (the shared column headers), and — only when actions are
+wanted — `show_actions` + `list_obj`.
 
-One <tr> per linked parent; the child cell (lists/_child_cell.html) spans its
-parents via rowspan, with the name vertically centred on the left and the
-member attributes as a grid beside it (CLAUDE.md / Multi-person row). The parent
-attribute columns line up across all parents because `parent.cells` is
-positional over `associate_attrs` (None where that parent hid the field →
-rendered as "—").
+One <tr> per linked parent. The child's name + member-attribute grid
+(lists/_child_cell.html) span the parents via rowspan: the name column
+auto-sizes to the longest name, the member grid has a fixed column count so its
+values line up under the `member_header` columns and across every child
+(CLAUDE.md / *List display defaults*). The parent attribute columns line up
+because `parent.cells` is positional over `associate_attrs` (None where that
+parent hid the field → "—").
 {% endcomment %}
 <div class="table-wrap">
 <table class="data-table class-list">
   <thead>
     <tr>
-      <th>Mitglied</th>
+      <th class="col-name">Schulkind</th>
+      {% if member_col_count %}
+        <th class="col-member">
+          <div class="mgrid" style="--mcols:{{ member_col_count }}">
+            {% for hrow in member_header %}{% for attr in hrow %}
+              <div class="mgrid-h">{% if attr %}{{ attr.name }}{% endif %}</div>
+            {% endfor %}{% endfor %}
+          </div>
+        </th>
+      {% endif %}
       <th>Bezugsperson</th>
       {% for attr in associate_attrs %}<th>{{ attr.name }}</th>{% endfor %}
       <th>E-Mail</th>
@@ -26,7 +37,7 @@ rendered as "—").
         {% for parent in row.parents %}
           <tr>
             {% if forloop.first %}
-              {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj %}
+              {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj member_col_count=member_col_count %}
             {% endif %}
             <td>
               <span class="parent-role">{{ parent.label }}</span>
@@ -44,7 +55,7 @@ rendered as "—").
         {% endfor %}
       {% else %}
         <tr>
-          {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj %}
+          {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj member_col_count=member_col_count %}
           <td colspan="{{ associate_attrs|length|add:'2' }}" class="muted-cell">keine Bezugspersonen</td>
         </tr>
       {% endif %}

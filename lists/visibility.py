@@ -265,6 +265,43 @@ def build_visible_rows(user, lst: List) -> list[dict]:
     return rows
 
 
+def _group_member_display_rows(member_attrs):
+    """Group member (child) attributes into the wide class-list grid rows.
+
+    Returns ``(rows, col_count)`` where ``rows`` is a list of lists of
+    ListAttribute — one inner list per ``display_row`` (ordered by the row
+    number, gaps collapsed), columns within a row keeping the attributes'
+    ``position`` order — and ``col_count`` is the widest row, i.e. the number
+    of grid columns the header and every child's value grid must span.
+    """
+    grouped: dict[int, list] = defaultdict(list)
+    for a in member_attrs:
+        grouped[a.display_row].append(a)
+    rows = [grouped[k] for k in sorted(grouped)]
+    col_count = max((len(r) for r in rows), default=0)
+    return rows, col_count
+
+
+def member_grid_header(template):
+    """Header for the wide class-list member grid: ``(header_rows, col_count)``.
+
+    ``header_rows`` mirrors the per-child value grid — one row per
+    ``display_row``, each padded with ``None`` to ``col_count`` so the header
+    columns line up with the values below them. Computed in the view (the
+    header is list-wide); the per-child value grids are built by
+    `build_composed_rows`, both off `_group_member_display_rows`, so they can
+    never drift.
+    """
+    member_attrs = [
+        a
+        for a in template.attributes.all()
+        if a.applies_to_role == ListAttribute.AppliesTo.MEMBER
+    ]
+    rows, col_count = _group_member_display_rows(member_attrs)
+    header_rows = [r + [None] * (col_count - len(r)) for r in rows]
+    return header_rows, col_count
+
+
 def _role_label(role: str) -> str:
     """Derive a short column label for a parent cell from a PersonRelationship
     role: ``"Mutter von"`` → ``"Mutter"``. Falls back to the full role string
@@ -321,13 +358,9 @@ def build_composed_rows(user, lst: List) -> list[dict]:
         a for a in attributes if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
     ]
 
-    # Member attributes grouped into display-rows. `member_attrs` is already
-    # ordered by (position, id), so columns within a row keep that order; the
-    # rows themselves are ordered by `display_row` number (gaps collapse).
-    _member_rows_map: dict[int, list[ListAttribute]] = defaultdict(list)
-    for a in member_attrs:
-        _member_rows_map[a.display_row].append(a)
-    member_display_rows = [_member_rows_map[k] for k in sorted(_member_rows_map)]
+    # Member attributes grouped into display-rows + the grid column count. The
+    # view builds the matching header off the same helper (member_grid_header).
+    member_display_rows, member_col_count = _group_member_display_rows(member_attrs)
 
     ctx = _VisibilityContext(user, lst, records)
 
@@ -386,12 +419,15 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     for child in member_records:
         subject_display, fields, member_cells = _cell(child, member_attrs)
         # Map each member attribute to its (possibly hidden → None) value, then
-        # shape the configured display-rows grid for the template.
+        # shape the configured display-rows grid, padding each row to the grid
+        # column count with None so the CSS-grid columns stay aligned with the
+        # header and across every child even when rows have different lengths.
         value_by_attr = dict(zip(member_attrs, member_cells))
-        member_grid = [
-            [{"attr": a, "value": value_by_attr[a]} for a in grp]
-            for grp in member_display_rows
-        ]
+        member_grid = []
+        for grp in member_display_rows:
+            cells = [{"attr": a, "value": value_by_attr[a]} for a in grp]
+            cells += [None] * (member_col_count - len(cells))
+            member_grid.append(cells)
         parents = []
         for role, parent_id in rels_by_child.get(child.subject_id, []):
             prec = associate_by_person.get(parent_id)

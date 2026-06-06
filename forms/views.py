@@ -15,7 +15,11 @@ from django.urls import reverse
 from django.utils.safestring import mark_safe
 
 from lists.models import ListAttribute, ListTemplate
-from lists.visibility import build_composed_rows, build_visible_rows
+from lists.visibility import (
+    build_composed_rows,
+    build_visible_rows,
+    member_grid_header,
+)
 
 from .models import Form, FormPartAsset
 from .permissions import can_user_access_form
@@ -64,6 +68,8 @@ def form_detail(request, pk: int):
         rows = None
         composed = False
         associate_attrs = []
+        member_header = []
+        member_col_count = 0
         if part.list_id:
             composed = (
                 part.list.template.member_subject_mode
@@ -78,6 +84,9 @@ def form_detail(request, pk: int):
                     for a in part.list.template.attributes.all()
                     if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
                 ]
+                member_header, member_col_count = member_grid_header(
+                    part.list.template
+                )
             else:
                 rows = build_visible_rows(request.user, part.list)
         parts.append(
@@ -87,6 +96,8 @@ def form_detail(request, pk: int):
                 "rows": rows,
                 "composed": composed,
                 "associate_attrs": associate_attrs,
+                "member_header": member_header,
+                "member_col_count": member_col_count,
             }
         )
     return render(request, "forms/detail.html", {"form_obj": form, "parts": parts})

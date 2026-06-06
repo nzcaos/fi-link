@@ -21,7 +21,7 @@
         </p>
         {% if entry.rows %}
           {% if entry.composed %}
-            {% include "lists/_composed_table.html" with rows=entry.rows show_actions=False associate_attrs=entry.associate_attrs %}
+            {% include "lists/_composed_table.html" with rows=entry.rows show_actions=False associate_attrs=entry.associate_attrs member_header=entry.member_header member_col_count=entry.member_col_count %}
           {% else %}
           <div class="table-wrap">
           <table class="data-table">

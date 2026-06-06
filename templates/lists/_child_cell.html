@@ -1,36 +1,39 @@
 {% comment %}
-The left "Mitglied" cell of the wide class-list row: the child's name kept
-vertically centred on the far left, then the child's member attributes as a
-grid beside it — columns side by side, the label once above each column,
-distributed over one or more rows by each attribute's `display_row`
-(CLAUDE.md / *List display defaults*). Spans the child's parent rows via
-rowspan. Context: `row`, `show_actions`, `list_obj`.
+The child's two leftmost cells of the wide class-list row, both spanning the
+child's parent rows via rowspan (CLAUDE.md / *List display defaults*):
+
+  1. col-name — the child's name, vertically centred; the column auto-sizes to
+     the longest name in the list (white-space:nowrap). Carries the child
+     actions below the name when `show_actions`.
+  2. col-member — the child's member attributes as a CSS grid with a fixed
+     column count (`member_col_count`), so the values line up under the
+     `member_header` columns in the thead and across every child. One grid line
+     per `display_row`; `cell` is None for padding slots, and a real cell's
+     value is None when hidden (→ "—"). Omitted entirely when there are no
+     member attributes.
+
+Context: `row`, `show_actions`, `list_obj`, `member_col_count`.
 {% endcomment %}
-<td class="child-cell" rowspan="{{ row.parents|length|default:1 }}">
-  <div class="child-block">
-    <div class="child-name">{{ row.subject_display }}</div>
-    <div class="child-body">
-      {% for grid_row in row.member_grid %}
-        <div class="child-grid-row">
-          {% for cell in grid_row %}
-            <div class="child-grid-col">
-              <div class="child-grid-label">{{ cell.attr.name }}</div>
-              <div class="child-grid-val">{% if cell.value %}{{ cell.value }}{% else %}<span class="muted-cell">—</span>{% endif %}</div>
-            </div>
-          {% endfor %}
-        </div>
-      {% endfor %}
-      {% if show_actions and row.can_edit %}
-        <div class="child-actions">
-          <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
-          <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}">umziehen</a>
-          <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
-                onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
-            {% csrf_token %}
-            <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
-          </form>
-        </div>
-      {% endif %}
+<td class="col-name" rowspan="{{ row.parents|length|default:1 }}">
+  <div class="child-name">{{ row.subject_display }}</div>
+  {% if show_actions and row.can_edit %}
+    <div class="child-actions">
+      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}">bearbeiten</a>
+      <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}">umziehen</a>
+      <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
+            onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
+        {% csrf_token %}
+        <button type="submit" class="secondary" style="padding:0.2rem 0.5rem;font-size:0.8rem">entfernen</button>
+      </form>
     </div>
-  </div>
+  {% endif %}
 </td>
+{% if member_col_count %}
+  <td class="col-member" rowspan="{{ row.parents|length|default:1 }}">
+    <div class="mgrid" style="--mcols:{{ member_col_count }}">
+      {% for grid_row in row.member_grid %}{% for cell in grid_row %}
+        <div class="mgrid-v">{% if cell %}{% if cell.value %}{{ cell.value }}{% else %}<span class="muted-cell">—</span>{% endif %}{% endif %}</div>
+      {% endfor %}{% endfor %}
+    </div>
+  </td>
+{% endif %}

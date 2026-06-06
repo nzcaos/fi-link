@@ -92,7 +92,7 @@ from .permissions import (
 )
 from . import lifecycle
 from .tasks import enqueue_aggregate_fanout, enqueue_list_fanout, list_recipient_emails
-from .visibility import build_composed_rows, build_visible_rows
+from .visibility import build_composed_rows, build_visible_rows, member_grid_header
 
 
 @login_required
@@ -166,7 +166,11 @@ def list_detail(request, pk: int):
     )
     # Associate-role attributes become the shared column headers of the wide
     # class-list table (one column per attribute, lined up across all parents).
+    # Member-role attributes form the child grid; its header (rows × columns)
+    # must line up with each child's value grid — same helper, no drift.
     associate_attrs = []
+    member_header = []
+    member_col_count = 0
     if composed:
         rows = build_composed_rows(request.user, lst)
         for row in rows:
@@ -180,6 +184,7 @@ def list_detail(request, pk: int):
             for a in lst.template.attributes.all()
             if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
         ]
+        member_header, member_col_count = member_grid_header(lst.template)
     else:
         rows = build_visible_rows(request.user, lst)
         for row in rows:
@@ -200,6 +205,8 @@ def list_detail(request, pk: int):
             "rows": rows,
             "composed": composed,
             "associate_attrs": associate_attrs,
+            "member_header": member_header,
+            "member_col_count": member_col_count,
             "own_record": own_record,
         },
     )
