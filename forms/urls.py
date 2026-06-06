@@ -7,6 +7,9 @@ app_name = "forms"
 urlpatterns = [
     path("", views.form_index, name="index"),
     path("<int:pk>/", views.form_detail, name="detail"),
+    path("<int:pk>/slots/<int:slot_pk>/signup", views.slot_signup, name="slot_signup"),
+    path("<int:pk>/parts/<int:part_pk>/contribute", views.contribute, name="contribute"),
+    path("<int:pk>/signups/<int:signup_pk>/remove", views.signup_remove, name="signup_remove"),
     path(
         "<int:form_pk>/assets/<int:asset_pk>/",
         views.form_asset,

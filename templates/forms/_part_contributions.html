@@ -1,7 +1,7 @@
 {% comment %}
   Freitext-Beitrags-Teil. Erwartet `entry` mit `contributions` (je Eintrag:
-  name/email/is_own/text; name=None → „anonym") und `contribution_label`.
-  Beitrag-eintragen/-bearbeiten-Button folgt in Phase 3.
+  name/email/is_own/text; name=None → „anonym"), `contribution_label`, `part`,
+  `my_contribution`. Kontext: `can_signup`, `share_token`, `form_obj`.
 {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
@@ -30,3 +30,18 @@
     </tbody>
   </table>
 </div>
+
+{% if can_signup and request.user.is_authenticated %}
+  <p style="margin-top:.5rem">
+    <a href="{% url 'forms:contribute' pk=form_obj.pk part_pk=entry.part.id %}{% if share_token %}?token={{ share_token }}{% endif %}">
+      {% if entry.my_contribution %}Meinen Beitrag bearbeiten{% else %}Beitrag eintragen{% endif %}
+    </a>
+    {% if entry.my_contribution %}
+      <form method="post" action="{% url 'forms:signup_remove' pk=form_obj.pk signup_pk=entry.my_contribution.id %}" style="display:inline;margin-left:.5rem">
+        {% csrf_token %}
+        {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
+        <button type="submit">Entfernen</button>
+      </form>
+    {% endif %}
+  </p>
+{% endif %}

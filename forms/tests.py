@@ -285,6 +285,125 @@ class FormContributionRenderTests(TestCase):
         self.assertNotContains(resp, "A Bob")
 
 
+class FormSignupActionTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.alice = _user("alice")  # has access
+        self.bob = _user("bob")      # no access, no token
+        self.form = Form.objects.create(
+            title="Fest", created_by=self.creator, share_token="TOK"
+        )
+        FormAccess.objects.create(form=self.form, user=self.alice)
+        self.slots_part = FormPart.objects.create(
+            form=self.form, kind=FormPart.Kind.SLOTS
+        )
+        self.slot = FormSlot.objects.create(
+            part=self.slots_part, label="Aufbau", capacity=1
+        )
+        self.contrib_part = FormPart.objects.create(
+            form=self.form, kind=FormPart.Kind.CONTRIBUTIONS, contribution_required=True
+        )
+
+    def _client(self, user):
+        c = Client()
+        c.force_login(user)
+        return c
+
+    def _slot_url(self):
+        return reverse(
+            "forms:slot_signup", kwargs={"pk": self.form.pk, "slot_pk": self.slot.pk}
+        )
+
+    def _contrib_url(self):
+        return reverse(
+            "forms:contribute",
+            kwargs={"pk": self.form.pk, "part_pk": self.contrib_part.pk},
+        )
+
+    # --- slot signup ---
+    def test_slot_signup_creates_and_grants_access(self):
+        resp = self._client(self.alice).post(self._slot_url(), {"name_visible": "on"})
+        self.assertEqual(resp.status_code, 302)
+        s = FormSignup.objects.get(slot=self.slot, user=self.alice)
+        self.assertTrue(s.name_visible)
+        self.assertFalse(s.email_visible)  # checkbox absent → hidden
+        self.assertTrue(FormAccess.objects.filter(form=self.form, user=self.alice).exists())
+
+    def test_slot_signup_without_access_or_token_forbidden(self):
+        resp = self._client(self.bob).post(self._slot_url(), {"name_visible": "on"})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(FormSignup.objects.filter(user=self.bob).exists())
+
+    def test_slot_capacity_enforced(self):
+        FormSignup.objects.create(
+            part=self.slots_part, slot=self.slot, user=self.creator
+        )  # fills capacity 1
+        self._client(self.alice).post(self._slot_url(), {"name_visible": "on"})
+        self.assertEqual(FormSignup.objects.filter(slot=self.slot).count(), 1)
+
+    def test_no_double_signup_same_slot(self):
+        c = self._client(self.alice)
+        c.post(self._slot_url(), {"name_visible": "on"})
+        c.post(self._slot_url(), {"name_visible": "on"})
+        self.assertEqual(
+            FormSignup.objects.filter(slot=self.slot, user=self.alice).count(), 1
+        )
+
+    # --- contribution ---
+    def test_contribute_creates_then_updates(self):
+        c = self._client(self.alice)
+        c.post(self._contrib_url(), {"contribution_text": "Apfelkuchen", "name_visible": "on"})
+        s = FormSignup.objects.get(part=self.contrib_part, user=self.alice)
+        self.assertEqual(s.contribution_text, "Apfelkuchen")
+        c.post(self._contrib_url(), {"contribution_text": "Brezeln"})
+        s.refresh_from_db()
+        self.assertEqual(s.contribution_text, "Brezeln")
+        self.assertEqual(
+            FormSignup.objects.filter(part=self.contrib_part, user=self.alice).count(), 1
+        )
+
+    def test_contribute_required_validation(self):
+        resp = self._client(self.alice).post(self._contrib_url(), {"name_visible": "on"})
+        self.assertEqual(resp.status_code, 200)  # re-rendered with errors
+        self.assertFalse(
+            FormSignup.objects.filter(part=self.contrib_part, user=self.alice).exists()
+        )
+
+    # --- removal ---
+    def test_remove_own(self):
+        s = FormSignup.objects.create(part=self.slots_part, slot=self.slot, user=self.alice)
+        self._client(self.alice).post(
+            reverse("forms:signup_remove", kwargs={"pk": self.form.pk, "signup_pk": s.pk})
+        )
+        self.assertFalse(FormSignup.objects.filter(pk=s.pk).exists())
+
+    def test_remove_other_forbidden(self):
+        s = FormSignup.objects.create(part=self.slots_part, slot=self.slot, user=self.alice)
+        resp = self._client(self.bob).post(
+            reverse("forms:signup_remove", kwargs={"pk": self.form.pk, "signup_pk": s.pk})
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(FormSignup.objects.filter(pk=s.pk).exists())
+
+    def test_admin_can_remove_other(self):
+        s = FormSignup.objects.create(part=self.slots_part, slot=self.slot, user=self.alice)
+        self._client(self.creator).post(
+            reverse("forms:signup_remove", kwargs={"pk": self.form.pk, "signup_pk": s.pk})
+        )
+        self.assertFalse(FormSignup.objects.filter(pk=s.pk).exists())
+
+    # --- closed form gates all writes ---
+    def test_closed_form_blocks_signup_and_contribute(self):
+        self.form.is_open = False
+        self.form.save(update_fields=["is_open"])
+        c = self._client(self.alice)
+        self.assertEqual(c.post(self._slot_url(), {"name_visible": "on"}).status_code, 403)
+        self.assertEqual(
+            c.post(self._contrib_url(), {"contribution_text": "X"}).status_code, 403
+        )
+        self.assertFalse(FormSignup.objects.filter(user=self.alice).exists())
+
+
 class FormAssetTests(TestCase):
     def setUp(self):
         self.creator = _user("root", superuser=True)

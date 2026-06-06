@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Beitrag — {{ form_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'forms:detail' pk=form_obj.pk %}">← Zurück zum Formular</a></p>
+  <h1>{{ form_obj.title }}</h1>
+  {% if part.title %}<h2 style="font-size:1.15rem">{{ part.title }}</h2>{% endif %}
+
+  <form method="post" action="{% url 'forms:contribute' pk=form_obj.pk part_pk=part.id %}">
+    {% csrf_token %}
+    {% if token %}<input type="hidden" name="token" value="{{ token }}">{% endif %}
+
+    <p>
+      <label for="id_contribution_text">{{ cform.contribution_text.label }}</label><br>
+      {{ cform.contribution_text }}
+      {% for e in cform.contribution_text.errors %}<span style="color:#b00020">{{ e }}</span>{% endfor %}
+    </p>
+
+    <p><label>{{ cform.name_visible }} {{ cform.name_visible.label }}</label></p>
+    <p><label>{{ cform.email_visible }} {{ cform.email_visible.label }}</label></p>
+    <p class="field-label">
+      Ihre Sichtbarkeit gilt für alle, die dieses Formular sehen. Form-Verwalter
+      sehen Ihren Namen immer.
+    </p>
+
+    <button type="submit">Speichern</button>
+  </form>
+{% endblock %}

@@ -1,7 +1,8 @@
 {% comment %}
   Slot-/Positions-Teil. Erwartet `entry` mit `slots` (je Slot: slot, filled,
-  free, is_full). `filled` enthält Zellen mit name/email/is_own; name=None →
-  „vergeben". Eintragen-/Entfernen-Buttons folgen in Phase 3.
+  free, is_full, mine). `filled` enthält Zellen mit name/email/is_own; name=None
+  → „vergeben". `mine` = eigene Eintragung in diesem Slot (oder None).
+  Kontext: `can_signup`, `share_token`, `form_obj`.
 {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
@@ -32,6 +33,24 @@
               <div class="field-label">noch {{ s.free }} frei</div>
             {% elif not s.filled %}
               <span class="field-label">—</span>
+            {% endif %}
+
+            {% if can_signup and request.user.is_authenticated %}
+              {% if s.mine %}
+                <form method="post" action="{% url 'forms:signup_remove' pk=form_obj.pk signup_pk=s.mine.id %}" style="margin-top:.4rem">
+                  {% csrf_token %}
+                  {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
+                  <button type="submit">Austragen</button>
+                </form>
+              {% elif s.free %}
+                <form method="post" action="{% url 'forms:slot_signup' pk=form_obj.pk slot_pk=s.slot.id %}" style="margin-top:.4rem">
+                  {% csrf_token %}
+                  {% if share_token %}<input type="hidden" name="token" value="{{ share_token }}">{% endif %}
+                  <label style="display:block"><input type="checkbox" name="name_visible" checked> Name sichtbar</label>
+                  <label style="display:block"><input type="checkbox" name="email_visible"> E-Mail sichtbar</label>
+                  <button type="submit">Eintragen</button>
+                </form>
+              {% endif %}
             {% endif %}
           </td>
         </tr>

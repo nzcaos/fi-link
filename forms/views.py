@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import re
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Prefetch
 from django.http import HttpResponse, HttpResponseForbidden
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
+from django.views.decorators.http import require_POST
 
-from .models import Form, FormPart, FormPartAsset, FormSignup
+from .forms import ContributionForm
+from .models import Form, FormAccess, FormPart, FormPartAsset, FormSignup, FormSlot
 from .permissions import (
     _is_own,
     can_user_access_form,
@@ -86,10 +90,18 @@ def _build_part(viewer, form: Form, part: FormPart) -> dict:
         for s in signups:
             by_slot.setdefault(s.slot_id, []).append(s)
         for slot in part.slots.all():
-            filled = [_signup_cell(viewer, s) for s in by_slot.get(slot.id, [])]
+            slot_signups = by_slot.get(slot.id, [])
+            filled = [_signup_cell(viewer, s) for s in slot_signups]
             free = max(slot.capacity - len(filled), 0)
+            mine = next((s for s in slot_signups if _is_own(viewer, s)), None)
             entry["slots"].append(
-                {"slot": slot, "filled": filled, "free": free, "is_full": free == 0}
+                {
+                    "slot": slot,
+                    "filled": filled,
+                    "free": free,
+                    "is_full": free == 0,
+                    "mine": mine,
+                }
             )
     else:  # CONTRIBUTIONS
         for s in signups:
@@ -101,9 +113,14 @@ def _build_part(viewer, form: Form, part: FormPart) -> dict:
     return entry
 
 
-def _render_form(request, form: Form) -> dict:
+def _render_form(request, form: Form, *, share_token: str | None = None) -> dict:
     """Build the template context for viewing a form (shared by the access-gated
-    `form_detail` and, from Phase 4, the broadcast-link `shared` view)."""
+    `form_detail` and, from Phase 4, the broadcast-link `shared` view).
+
+    ``share_token`` is threaded into the signup forms so a broadcast-link visitor
+    (who has no FormAccess yet) is authorised by the token; see
+    ``_can_user_signup``.
+    """
     parts_qs = form.parts.prefetch_related(
         "slots",
         Prefetch(
@@ -114,6 +131,7 @@ def _render_form(request, form: Form) -> dict:
     parts = [_build_part(request.user, form, part) for part in parts_qs]
     return {
         "form_obj": form,
+        "share_token": share_token,
         "parts": parts,
         "can_signup": form.is_open,
         "is_form_admin": can_user_admin_form(request.user, form),
@@ -135,6 +153,120 @@ def form_detail(request, pk: int):
     if not can_user_access_form(request.user, form):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf dieses Formular.")
     return render(request, "forms/detail.html", _render_form(request, form))
+
+
+def _can_user_signup(user, form: Form, token: str) -> bool:
+    """A user may sign up if the form is open AND either they already have access
+    OR they present the form's valid broadcast token (Phase 4). Signing up then
+    grants FormAccess, so the token is only needed for the first interaction."""
+    if not form.is_open:
+        return False
+    if can_user_access_form(user, form):
+        return True
+    return bool(form.share_token) and token == form.share_token
+
+
+def _signup_redirect(form: Form, token: str):
+    """Back to the broadcast view if the visitor came via a token, else the
+    access-gated detail page."""
+    if token and token == form.share_token:
+        return redirect("forms:shared", token=token)
+    return redirect("forms:detail", pk=form.pk)
+
+
+@login_required
+@require_POST
+def slot_signup(request, pk: int, slot_pk: int):
+    slot = get_object_or_404(FormSlot, pk=slot_pk, part__form_id=pk)
+    form = slot.part.form
+    token = request.POST.get("token", "")
+    if not _can_user_signup(request.user, form, token):
+        return HttpResponseForbidden("Eintragen ist hier nicht möglich.")
+
+    with transaction.atomic():
+        locked = FormSlot.objects.select_for_update().get(pk=slot.pk)
+        if FormSignup.objects.filter(slot=locked, user=request.user).exists():
+            messages.info(request, "Sie sind hier bereits eingetragen.")
+        elif FormSignup.objects.filter(slot=locked).count() >= locked.capacity:
+            messages.error(request, "Diese Position ist bereits voll belegt.")
+        else:
+            FormSignup.objects.create(
+                part=locked.part,
+                slot=locked,
+                user=request.user,
+                name_visible="name_visible" in request.POST,
+                email_visible="email_visible" in request.POST,
+            )
+            FormAccess.objects.get_or_create(form=form, user=request.user)
+            messages.success(request, f"Eingetragen: {locked.label}.")
+    return _signup_redirect(form, token)
+
+
+@login_required
+def contribute(request, pk: int, part_pk: int):
+    part = get_object_or_404(
+        FormPart, pk=part_pk, form_id=pk, kind=FormPart.Kind.CONTRIBUTIONS
+    )
+    form = part.form
+    token = request.GET.get("token", "") or request.POST.get("token", "")
+    if not _can_user_signup(request.user, form, token):
+        return HttpResponseForbidden("Eintragen ist hier nicht möglich.")
+
+    existing = FormSignup.objects.filter(
+        part=part, slot__isnull=True, user=request.user
+    ).first()
+
+    if request.method == "POST":
+        cform = ContributionForm(request.POST, part=part)
+        if cform.is_valid():
+            FormSignup.objects.update_or_create(
+                part=part,
+                slot=None,
+                user=request.user,
+                defaults={
+                    "contribution_text": cform.cleaned_data["contribution_text"],
+                    "name_visible": cform.cleaned_data["name_visible"],
+                    "email_visible": cform.cleaned_data["email_visible"],
+                },
+            )
+            FormAccess.objects.get_or_create(form=form, user=request.user)
+            messages.success(request, "Ihr Beitrag wurde gespeichert.")
+            return _signup_redirect(form, token)
+    else:
+        initial = (
+            {
+                "contribution_text": existing.contribution_text,
+                "name_visible": existing.name_visible,
+                "email_visible": existing.email_visible,
+            }
+            if existing
+            else None
+        )
+        cform = ContributionForm(initial=initial, part=part)
+
+    return render(
+        request,
+        "forms/contribute.html",
+        {"form_obj": form, "part": part, "cform": cform, "token": token},
+    )
+
+
+@login_required
+@require_POST
+def signup_remove(request, pk: int, signup_pk: int):
+    signup = get_object_or_404(FormSignup, pk=signup_pk, part__form_id=pk)
+    form = signup.part.form
+    is_admin = can_user_admin_form(request.user, form)
+    is_own = signup.user_id == request.user.id
+    if not (is_own or is_admin):
+        return HttpResponseForbidden("Keine Berechtigung zum Entfernen.")
+    # Self-removal requires the form to be open; admins may moderate anytime.
+    if is_own and not is_admin and not form.is_open:
+        return HttpResponseForbidden("Die Eintragung ist geschlossen.")
+    token = request.POST.get("token", "")
+    signup.delete()
+    messages.success(request, "Eintrag entfernt.")
+    return _signup_redirect(form, token)
 
 
 @login_required
