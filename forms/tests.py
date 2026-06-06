@@ -502,6 +502,67 @@ class FormBroadcastTests(TestCase):
         self.assertNotContains(resp, "Freigabe-Link")
 
 
+class FormCloneTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.other = _user("other", superuser=True)
+        self.alice = _user("alice")
+        self.form = Form.objects.create(
+            title="Sommerfest", created_by=self.creator, share_token="TOK", is_open=False
+        )
+        self.html = FormPart.objects.create(
+            form=self.form, order=0, kind=FormPart.Kind.HTML, title="Intro"
+        )
+        self.asset = FormPartAsset.objects.create(
+            part=self.html, title="Logo", mime_type="image/png", data=b"PNG"
+        )
+        self.html.body = f"Bild [[asset:{self.asset.id}]] Ende"
+        self.html.save(update_fields=["body"])
+        self.slots = FormPart.objects.create(
+            form=self.form, order=1, kind=FormPart.Kind.SLOTS, title="Helfer"
+        )
+        self.slot = FormSlot.objects.create(part=self.slots, label="Aufbau", capacity=2)
+        self.contrib = FormPart.objects.create(
+            form=self.form, order=2, kind=FormPart.Kind.CONTRIBUTIONS,
+            contribution_label="Kuchen", contribution_required=False,
+        )
+        # Existing participation that must NOT be carried over.
+        FormSignup.objects.create(part=self.slots, slot=self.slot, user=self.alice)
+        FormSignup.objects.create(
+            part=self.contrib, user=self.alice, contribution_text="Apfelkuchen"
+        )
+        FormAccess.objects.create(form=self.form, user=self.alice)
+
+    def test_clone_copies_structure_not_participation(self):
+        clone = self.form.clone(created_by=self.other)
+        self.assertNotEqual(clone.pk, self.form.pk)
+        self.assertEqual(clone.title, "Sommerfest (Kopie)")
+        self.assertEqual(clone.created_by, self.other)
+        self.assertIsNone(clone.share_token)
+        self.assertTrue(clone.is_open)
+        # Structure copied.
+        self.assertEqual(clone.parts.count(), 3)
+        cslots = clone.parts.get(kind=FormPart.Kind.SLOTS)
+        self.assertEqual(cslots.title, "Helfer")
+        self.assertEqual(cslots.slots.count(), 1)
+        self.assertEqual(cslots.slots.first().capacity, 2)
+        ccontrib = clone.parts.get(kind=FormPart.Kind.CONTRIBUTIONS)
+        self.assertEqual(ccontrib.contribution_label, "Kuchen")
+        self.assertFalse(ccontrib.contribution_required)
+        # No participation on the clone; original untouched.
+        self.assertEqual(FormSignup.objects.filter(part__form=clone).count(), 0)
+        self.assertEqual(FormAccess.objects.filter(form=clone).count(), 0)
+        self.assertEqual(FormSignup.objects.filter(part__form=self.form).count(), 2)
+
+    def test_clone_remaps_asset_placeholder(self):
+        clone = self.form.clone(created_by=self.other)
+        chtml = clone.parts.get(kind=FormPart.Kind.HTML)
+        casset = chtml.assets.get()
+        self.assertNotEqual(casset.id, self.asset.id)
+        self.assertIn(f"[[asset:{casset.id}]]", chtml.body)
+        self.assertNotIn(f"[[asset:{self.asset.id}]]", chtml.body)
+
+
 class FormAssetTests(TestCase):
     def setUp(self):
         self.creator = _user("root", superuser=True)

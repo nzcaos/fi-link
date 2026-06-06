@@ -23,15 +23,19 @@ English class names, German verbose_names (CLAUDE.md / *Code conventions*).
 """
 from __future__ import annotations
 
+import re
 import secrets
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 
 
 def _gen_share_token() -> str:
     """Random URL-safe token for a form's broadcast link."""
     return secrets.token_urlsafe(32)
+
+
+_ASSET_REF_RE = re.compile(r"\[\[asset:(\d+)\]\]")
 
 
 class Form(models.Model):
@@ -65,6 +69,57 @@ class Form(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+    @transaction.atomic
+    def clone(self, *, created_by, title: str | None = None) -> "Form":
+        """Create a blank copy for re-use (yearly events): copies parts, slots,
+        asset images, and authored texts — but **no** signups, no FormAccess, no
+        share token (regenerated lazily), and reopens signups.
+
+        Asset `[[asset:<id>]]` references in each part's body are rewritten to the
+        cloned asset ids, otherwise the copied body would point at the originals'
+        assets (which the asset view scopes to the owning form → 404).
+        """
+        clone = Form.objects.create(
+            title=title or f"{self.title} (Kopie)",
+            created_by=created_by,
+            is_open=True,
+        )
+        for part in self.parts.all():
+            new_part = FormPart.objects.create(
+                form=clone,
+                order=part.order,
+                kind=part.kind,
+                title=part.title,
+                body=part.body,
+                contribution_label=part.contribution_label,
+                contribution_required=part.contribution_required,
+            )
+            id_map: dict[int, int] = {}
+            for asset in part.assets.all():
+                new_asset = FormPartAsset.objects.create(
+                    part=new_part,
+                    title=asset.title,
+                    mime_type=asset.mime_type,
+                    data=asset.data,
+                )
+                id_map[asset.id] = new_asset.id
+            if id_map and new_part.body:
+                remapped = _ASSET_REF_RE.sub(
+                    lambda m: f"[[asset:{id_map.get(int(m.group(1)), m.group(1))}]]",
+                    new_part.body,
+                )
+                if remapped != new_part.body:
+                    new_part.body = remapped
+                    new_part.save(update_fields=["body"])
+            for slot in part.slots.all():
+                FormSlot.objects.create(
+                    part=new_part,
+                    order=slot.order,
+                    label=slot.label,
+                    capacity=slot.capacity,
+                )
+        return clone
 
 
 class FormPart(models.Model):

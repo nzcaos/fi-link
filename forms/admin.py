@@ -1,5 +1,5 @@
 from django import forms as djforms
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from .models import (
     Form,
@@ -34,11 +34,28 @@ class FormAdmin(admin.ModelAdmin):
     search_fields = ("title",)
     readonly_fields = ("created_by", "share_token", "created_at", "updated_at")
     inlines = [FormPartInline, FormAccessInline]
+    actions = ["clone_forms"]
 
     def save_model(self, request, obj, form, change):
         if not change and not obj.created_by_id:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+    @admin.action(description="Als Vorlage klonen (ohne Eintragungen)")
+    def clone_forms(self, request, queryset):
+        """Re-use a form for the next year: copies structure + texts, drops all
+        signups/access/token. See Form.clone()."""
+        clones = [form.clone(created_by=request.user) for form in queryset]
+        if len(clones) == 1:
+            self.message_user(
+                request,
+                f"Formular geklont: „{clones[0].title}“. Titel und Inhalte nun anpassen.",
+                messages.SUCCESS,
+            )
+        else:
+            self.message_user(
+                request, f"{len(clones)} Formulare geklont.", messages.SUCCESS
+            )
 
 
 class FormPartAssetForm(djforms.ModelForm):
