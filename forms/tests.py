@@ -23,7 +23,12 @@ from .models import (
     FormSignup,
     FormSlot,
 )
-from .permissions import can_user_access_form
+from .permissions import (
+    can_user_access_form,
+    can_user_admin_form,
+    can_user_see_signup_email,
+    can_user_see_signup_name,
+)
 
 
 def _user(username, *, superuser=False):
@@ -105,11 +110,6 @@ class FormPartRenderTests(TestCase):
         body = self._get().content.decode()
         self.assertLess(body.index("Kopf"), body.index("Helfer"))
 
-    def test_non_html_part_shows_placeholder(self):
-        # Phase 1: slot/contribution parts are not yet rendered.
-        resp = self._get()
-        self.assertContains(resp, "in Kürze ergänzt")
-
     def test_closed_form_shows_hint(self):
         self.form.is_open = False
         self.form.save(update_fields=["is_open"])
@@ -167,6 +167,120 @@ class FormSignupModelTests(TestCase):
             FormSignup.objects.create(
                 part=self.contrib_part, user=self.alice, contribution_text="Brezeln"
             )
+
+
+class FormVisibilityHelperTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.viewer = _user("viewer")
+        self.alice = _user("alice")
+        self.form = Form.objects.create(title="Fest", created_by=self.creator)
+        self.part = FormPart.objects.create(form=self.form, kind=FormPart.Kind.CONTRIBUTIONS)
+        self.hidden = FormSignup.objects.create(
+            part=self.part, user=self.alice, name_visible=False, email_visible=False
+        )
+
+    def test_admin_helper(self):
+        self.assertTrue(can_user_admin_form(self.creator, self.form))  # creator
+        self.assertFalse(can_user_admin_form(self.viewer, self.form))
+
+    def test_name_hidden_for_others_visible_to_self_and_admin(self):
+        self.assertFalse(can_user_see_signup_name(self.viewer, self.hidden))
+        self.assertTrue(can_user_see_signup_name(self.alice, self.hidden))    # own
+        self.assertTrue(can_user_see_signup_name(self.creator, self.hidden))  # admin
+
+    def test_email_switch(self):
+        self.assertFalse(can_user_see_signup_email(self.viewer, self.hidden))
+        self.hidden.email_visible = True
+        self.hidden.save(update_fields=["email_visible"])
+        self.assertTrue(can_user_see_signup_email(self.viewer, self.hidden))
+
+
+class FormSlotRenderTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.viewer = _user("viewer")  # has access, not signed up
+        self.alice = _user("alice")
+        self.bob = _user("bob")
+        self.form = Form.objects.create(title="Sommerfest", created_by=self.creator)
+        FormAccess.objects.create(form=self.form, user=self.viewer)
+        self.part = FormPart.objects.create(
+            form=self.form, kind=FormPart.Kind.SLOTS, title="Helfer"
+        )
+        self.slot = FormSlot.objects.create(
+            part=self.part, label="Aufbau", capacity=3
+        )
+        FormSignup.objects.create(
+            part=self.part, slot=self.slot, user=self.alice,
+            name_visible=True, email_visible=True,
+        )
+        FormSignup.objects.create(
+            part=self.part, slot=self.slot, user=self.bob, name_visible=False,
+        )
+
+    def _get_as(self, user):
+        c = Client()
+        c.force_login(user)
+        return c.get(reverse("forms:detail", kwargs={"pk": self.form.pk}))
+
+    def test_visible_name_and_email_shown(self):
+        resp = self._get_as(self.viewer)
+        self.assertContains(resp, "A Alice")
+        self.assertContains(resp, "alice@x.org")
+
+    def test_hidden_name_shows_vergeben(self):
+        resp = self._get_as(self.viewer)
+        self.assertContains(resp, "vergeben")
+        self.assertNotContains(resp, "A Bob")  # bob is not the logged-in viewer
+
+    def test_free_count_and_capacity(self):
+        resp = self._get_as(self.viewer)
+        self.assertContains(resp, "2/3")          # 2 filled of 3
+        self.assertContains(resp, "noch 1 frei")
+
+    def test_own_signup_marked(self):
+        # Bob (name hidden to others) still sees his own row marked.
+        resp = self._get_as(self.bob)
+        self.assertContains(resp, "(du)")
+
+
+class FormContributionRenderTests(TestCase):
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.viewer = _user("viewer")
+        self.alice = _user("alice")
+        self.bob = _user("bob")
+        self.form = Form.objects.create(title="Kuchen", created_by=self.creator)
+        FormAccess.objects.create(form=self.form, user=self.viewer)
+        self.part = FormPart.objects.create(
+            form=self.form, kind=FormPart.Kind.CONTRIBUTIONS,
+            title="Kuchenspende", contribution_label="Was bringst du mit?",
+        )
+        FormSignup.objects.create(
+            part=self.part, user=self.alice, contribution_text="Apfelkuchen",
+            name_visible=True,
+        )
+        FormSignup.objects.create(
+            part=self.part, user=self.bob, contribution_text="Brezeln",
+            name_visible=False,
+        )
+
+    def _get(self):
+        c = Client()
+        c.force_login(self.viewer)
+        return c.get(reverse("forms:detail", kwargs={"pk": self.form.pk}))
+
+    def test_label_and_texts_render(self):
+        resp = self._get()
+        self.assertContains(resp, "Was bringst du mit?")
+        self.assertContains(resp, "Apfelkuchen")
+        self.assertContains(resp, "Brezeln")  # text visible even when name hidden
+
+    def test_name_visibility(self):
+        resp = self._get()
+        self.assertContains(resp, "A Alice")
+        self.assertContains(resp, "anonym")
+        self.assertNotContains(resp, "A Bob")
 
 
 class FormAssetTests(TestCase):

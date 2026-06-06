@@ -1,0 +1,43 @@
+{% comment %}
+  Slot-/Positions-Teil. Erwartet `entry` mit `slots` (je Slot: slot, filled,
+  free, is_full). `filled` enthält Zellen mit name/email/is_own; name=None →
+  „vergeben". Eintragen-/Entfernen-Buttons folgen in Phase 3.
+{% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Position</th>
+        <th>Plätze</th>
+        <th>Eingetragen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in entry.slots %}
+        <tr>
+          <td>{{ s.slot.label }}</td>
+          <td>{{ s.filled|length }}/{{ s.slot.capacity }}</td>
+          <td>
+            {% for cell in s.filled %}
+              <div>
+                {% if cell.name %}
+                  {{ cell.name }}{% if cell.email %} <span class="field-label">&lt;{{ cell.email }}&gt;</span>{% endif %}
+                  {% if cell.is_own %}<span class="field-label">(du)</span>{% endif %}
+                {% else %}
+                  <span class="field-label">vergeben</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+            {% if s.free %}
+              <div class="field-label">noch {{ s.free }} frei</div>
+            {% elif not s.filled %}
+              <span class="field-label">—</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3"><span class="field-label">Keine Positionen definiert.</span></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

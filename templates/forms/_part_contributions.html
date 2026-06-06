@@ -1,0 +1,32 @@
+{% comment %}
+  Freitext-Beitrags-Teil. Erwartet `entry` mit `contributions` (je Eintrag:
+  name/email/is_own/text; name=None → „anonym") und `contribution_label`.
+  Beitrag-eintragen/-bearbeiten-Button folgt in Phase 3.
+{% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Person</th>
+        <th>{{ entry.contribution_label|default:"Beitrag" }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for cell in entry.contributions %}
+        <tr>
+          <td>
+            {% if cell.name %}
+              {{ cell.name }}{% if cell.email %} <span class="field-label">&lt;{{ cell.email }}&gt;</span>{% endif %}
+              {% if cell.is_own %}<span class="field-label">(du)</span>{% endif %}
+            {% else %}
+              <span class="field-label">anonym</span>
+            {% endif %}
+          </td>
+          <td>{{ cell.text|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="2"><span class="field-label">Noch keine Beiträge.</span></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
