@@ -204,6 +204,8 @@ class FormSlotRenderTests(TestCase):
         self.bob = _user("bob")
         self.form = Form.objects.create(title="Sommerfest", created_by=self.creator)
         FormAccess.objects.create(form=self.form, user=self.viewer)
+        # A signed-up user has form access (auto-granted on signup in Phase 3).
+        FormAccess.objects.create(form=self.form, user=self.bob)
         self.part = FormPart.objects.create(
             form=self.form, kind=FormPart.Kind.SLOTS, title="Helfer"
         )
