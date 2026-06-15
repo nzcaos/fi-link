@@ -45,16 +45,29 @@ in `.env`; `__MACAROON_SECRET_KEY__` und `__FORM_SECRET__` je mit einem eigenen
 ```
 cp synapse/homeserver.yaml.example synapse/homeserver.yaml
 ```
-Signing-Key (und fehlende Keys) einmalig erzeugen lassen — der `generate`-Lauf
-legt `fichtelink.caos.cloud.signing.key` neben die Config:
+Nur den fehlenden Signing-Key zur bestehenden Config erzeugen. **Nicht**
+`docker compose run synapse generate` — dieser Modus baut eine komplette Config
+aus `SYNAPSE_*`-Env-Variablen und überschreibt die handgepflegte yaml. Stattdessen
+gezielt `--generate-keys` mit überschriebenem Entrypoint:
 ```
-docker compose run --rm synapse generate
+docker compose run --rm --entrypoint python synapse -m synapse.app.homeserver --config-path /data/homeserver.yaml --generate-keys
 ```
-Achtung: `generate` kann die `homeserver.yaml` überschreiben/ergänzen. Danach
-prüfen, dass die obigen Werte (server_name, database→db, enable_registration:
-false, die drei Privacy-Settings) noch stimmen; ggf. aus der `.example` zurück-
-mergen. Der Signing-Key darf NICHT neu erzeugt werden, sobald der Server einmal
-föderiert hat.
+Das liest die vorhandene Config und legt nur den fehlenden Key am Pfad aus
+`signing_key_path` an, ohne die yaml anzufassen.
+
+Besitzrechte setzen: `--generate-keys` läuft als root, Synapse läuft im
+`run`-Modus aber als unprivilegierter User `991:991` und kann eine root-eigene
+0600-Datei nicht lesen (`Permission denied: …signing.key` → Crash-Schleife,
+Port 8008 wird nie published). Daher das gesamte Daten-Verzeichnis übereignen:
+```
+sudo chown -R 991:991 synapse
+```
+Prüfen, dass der Key vorhanden ist:
+```
+ls -l synapse/fichtelink.caos.cloud.signing.key
+```
+Der Signing-Key darf NICHT neu erzeugt werden, sobald der Server einmal
+föderiert hat (das ändert die Server-Identität und bricht Föderation + Räume).
 
 ### 5. Synapse starten
 ```
@@ -106,10 +119,15 @@ Dann Service-Account anlegen (Phase 1):
 docker compose exec web python manage.py matrix_bootstrap_service_account
 ```
 
-## Firewall
+## Firewall / Port-Exposition
 - Öffentlich nur `443/TCP` (Apache). `8008`/`8448` der VM **nicht** öffentlich.
-- Der gemappte `SYNAPSE_PORT` (8008) der VM darf nur vom Apache-Proxy-Host
-  erreichbar sein — gleiche Regel wie für `WEB_PORT`.
+- Achtung: Docker published Ports über eigene iptables-Regeln und **umgeht ufw** —
+  eine ufw-`deny`-Regel schützt einen gemappten Container-Port also nicht
+  zuverlässig. Die eigentliche Kontrolle ist die **Bind-Adresse**: `SYNAPSE_BIND_ADDR`
+  in `.env` auf `127.0.0.1` (Proxy auf demselben Host) bzw. die private VM-IP
+  (Proxy auf separatem Host) setzen — nie `0.0.0.0` auf einem öffentlich
+  erreichbaren Host. Nach Änderung: `docker compose up -d --force-recreate synapse`,
+  Kontrolle mit `sudo ss -ltnp | grep 8008` (Bind-Adresse statt `0.0.0.0`).
 
 ## Betrieb / Day-2
 - Backup: die `synapse`-DB in den bestehenden `pg_dump`-Lauf aufnehmen

@@ -69,10 +69,13 @@ services:
     volumes:
       - ./synapse:/data
     ports:
-      # Published ONLY to the proxy host (VM firewall must restrict to it),
-      # exactly like `web`. 8448 is NOT mapped — federation runs through the
-      # Apache .well-known delegation on 443.
-      - "${SYNAPSE_PORT:-8008}:8008"
+      # Bind to one interface (SYNAPSE_BIND_ADDR, default 127.0.0.1) so 8008 is
+      # not world-reachable — Docker port publishing BYPASSES ufw, so the bind
+      # address is the real control, not a firewall rule. Set SYNAPSE_BIND_ADDR
+      # to the VM's private IP when the reverse proxy is on a separate host.
+      # 8448 is NOT mapped — federation runs through the Apache .well-known
+      # delegation on 443.
+      - "${SYNAPSE_BIND_ADDR:-127.0.0.1}:${SYNAPSE_PORT:-8008}:8008"
     restart: unless-stopped
 
 volumes:
