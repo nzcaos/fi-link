@@ -44,6 +44,7 @@ local_settings.py
 .vscode/
 *.swp
 .DS_Store
+.obsidian/
 
 # Claude Code (local-only settings)
 .claude/settings.local.json
