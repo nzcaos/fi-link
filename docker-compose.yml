@@ -51,6 +51,30 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Matrix homeserver (docs/matrix-implementation-plan.md, Phase 0). Uses a
+  # SEPARATE database `synapse` in the existing `db` instance (collation C) —
+  # see docs/matrix-phase0-operator.md for the one-time CREATE DATABASE and
+  # signing-key generation. Config + keys live in the host-mounted ./synapse
+  # dir (gitignored); copy synapse/homeserver.yaml.example to
+  # synapse/homeserver.yaml and fill the secrets there.
+  synapse:
+    image: matrixdotorg/synapse:latest
+    command: ["run"]
+    env_file: .env
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./synapse:/data
+    ports:
+      # Published ONLY to the proxy host (VM firewall must restrict to it),
+      # exactly like `web`. 8448 is NOT mapped — federation runs through the
+      # Apache .well-known delegation on 443.
+      - "${SYNAPSE_PORT:-8008}:8008"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   media:

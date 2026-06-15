@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "accounts",
     "lists",
     "forms",
+    "matrix",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -189,6 +190,23 @@ IMAP_EXPUNGE_GRACE_DAYS = int(os.environ.get("IMAP_EXPUNGE_GRACE_DAYS", "7"))
 MAIL_METADATA_RETENTION_DAYS = int(
     os.environ.get("MAIL_METADATA_RETENTION_DAYS", "90")
 )
+
+# --- Matrix messenger integration (docs/matrix-implementation-plan.md) ---
+# OFF by default so tests/CI and any pre-Phase-0 deploy never touch Matrix.
+# Flip MATRIX_ENABLED on only after Synapse answers and the federation tester
+# is green. Every Matrix code path is guarded by this flag.
+MATRIX_ENABLED = os.environ.get("MATRIX_ENABLED", "False").lower() in ("1", "true", "yes", "on")
+# Synapse is reachable ONLY inside the Docker network — 8008/8448 are never
+# exposed publicly. Both the admin API and the client-server API go here.
+MATRIX_BASE_URL = os.environ.get("MATRIX_BASE_URL", "http://synapse:8008")
+# Unchangeable once Synapse is live: determines the @user:<server_name> id form.
+MATRIX_SERVER_NAME = os.environ.get("MATRIX_SERVER_NAME", "fichtelink.caos.cloud")
+# = homeserver.yaml `registration_shared_secret`. Drives the admin
+# shared-secret registration API. NEVER logged, NEVER committed.
+MATRIX_ADMIN_SHARED_SECRET = os.environ.get("MATRIX_ADMIN_SHARED_SECRET", "")
+# Bound every Synapse HTTP op so a wedged homeserver fails fast (retryable in a
+# procrastinate task) instead of hanging the worker.
+MATRIX_HTTP_TIMEOUT = int(os.environ.get("MATRIX_HTTP_TIMEOUT", "30"))
 
 LOGIN_URL = "/auth/login/"
 # Land authenticated users straight on a list view, not a separate landing

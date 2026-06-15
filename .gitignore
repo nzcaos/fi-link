@@ -33,6 +33,12 @@ local_settings.py
 .env
 .env.local
 
+# Matrix / Synapse runtime data — live config (with secrets), signing keys and
+# logs are generated on the VM. Only the committed *.example template stays in
+# git (mirrors .env.example -> .env).
+/synapse/*
+!/synapse/homeserver.yaml.example
+
 # IDE & OS
 .idea/
 .vscode/
