@@ -18,4 +18,5 @@ urlpatterns = [
     path("auth/", include("accounts.urls")),
     path("lists/", include("lists.urls")),
     path("forms/", include("forms.urls")),
+    path("matrix/", include("matrix.urls")),
 ]

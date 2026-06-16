@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Messenger-Zugang — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Messenger-Zugang</h1>
+
+  {% if not matrix_enabled %}
+    <p style="color:#666">
+      Der Messenger ist auf dieser Installation derzeit nicht aktiviert.
+    </p>
+  {% elif provision_error %}
+    <p style="color:#b00020">
+      Der Messenger-Zugang konnte gerade nicht eingerichtet werden. Bitte später
+      erneut versuchen — wenn das Problem bestehen bleibt, an die Listen-Leitung
+      wenden.
+    </p>
+  {% else %}
+    <p style="color:#666;max-width:42rem">
+      Mit diesen Zugangsdaten meldest du dich in der App <strong>Element</strong>
+      an, um Klassen-Nachrichten zu empfangen. Installiere Element, wähle
+      „Anmelden" → „Anderer Server" und gib die Daten unten ein. Der QR-Code
+      hilft nur beim Ablesen auf dem Handy — eine Anmeldung per QR gibt es in
+      dieser Ausbaustufe noch nicht.
+    </p>
+
+    <table style="border-collapse:collapse;font-size:0.95rem;margin:1rem 0">
+      <tbody>
+        <tr>
+          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Server</th>
+          <td style="padding:0.4rem 0;font-family:monospace">{{ homeserver_url }}</td>
+        </tr>
+        <tr>
+          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Benutzer</th>
+          <td style="padding:0.4rem 0;font-family:monospace">{{ account.matrix_user_id }}</td>
+        </tr>
+        <tr>
+          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Passwort</th>
+          <td style="padding:0.4rem 0;font-family:monospace;word-break:break-all">{{ account.password }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="color:#666;font-size:0.85rem;max-width:42rem">
+      Bewahre das Passwort sicher auf. Du kannst diese Seite jederzeit erneut
+      öffnen, um es wieder anzuzeigen.
+    </p>
+
+    <div class="qr-target" data-text="{{ qr_text }}" style="width:200px;height:200px;margin-top:1rem"></div>
+
+    <script src="{% static 'vendor/qrcodejs-1.0.0.umd.min.js' %}"></script>
+    <script>
+      (function () {
+        var el = document.querySelector(".qr-target");
+        if (el) {
+          new QRCode(el, {
+            text: el.dataset.text,
+            width: 200,
+            height: 200,
+            correctLevel: QRCode.CorrectLevel.M
+          });
+        }
+      })();
+    </script>
+  {% endif %}
+{% endblock %}

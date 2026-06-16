@@ -11,10 +11,12 @@ import hashlib
 import hmac
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.urls import reverse
 
 from accounts.models import Person, User
 from lists.models import List, ListTemplate
+from matrix import service
 from matrix.client import MatrixClient, MatrixError
 from matrix.models import MatrixAccount, MatrixRoom, MatrixServiceAccount
 
@@ -170,3 +172,96 @@ class RequestErrorParsingTests(TestCase):
                 client._request("POST", "/_synapse/admin/v1/register", json={})
         self.assertEqual(ctx.exception.errcode, "M_USER_IN_USE")
         self.assertEqual(ctx.exception.status, 400)
+
+
+@override_settings(MATRIX_ENABLED=True)
+class EnsureAccountTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(given_name="Anna", family_name="Müller", email="anna@example.invalid")
+        self.user = User.objects.create_user(person=self.person, username="anna")
+
+    def _ok(self, **over):
+        result = {
+            "user_id": "@u-deadbeef:fichtelink.caos.cloud",
+            "access_token": "t",
+            "device_id": "d",
+        }
+        result.update(over)
+        return result
+
+    def test_provisions_once_and_is_idempotent(self):
+        with patch.object(MatrixClient, "register_user", return_value=self._ok()) as reg:
+            first = service.ensure_matrix_account(self.user)
+            second = service.ensure_matrix_account(self.user)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(MatrixAccount.objects.count(), 1)
+        # second call must not touch Synapse again
+        self.assertEqual(reg.call_count, 1)
+        self.assertEqual(first.matrix_user_id, "@u-deadbeef:fichtelink.caos.cloud")
+        self.assertTrue(first.password)  # server-assigned password stored
+
+    def test_localpart_is_lowercase_and_displayname_pseudonymous(self):
+        captured = {}
+
+        def reg(self_client, localpart, password, displayname, admin=False):
+            captured["localpart"] = localpart
+            captured["displayname"] = displayname
+            return {"user_id": f"@{localpart}:fichtelink.caos.cloud", "access_token": "t", "device_id": "d"}
+
+        with patch.object(MatrixClient, "register_user", autospec=True, side_effect=reg):
+            service.ensure_matrix_account(self.user)
+        self.assertTrue(captured["localpart"].startswith("u-"))
+        self.assertEqual(captured["localpart"], captured["localpart"].lower())
+        self.assertTrue(captured["displayname"].startswith("Elternteil "))
+        # no real name leaks into the pseudonym
+        self.assertNotIn("Müller", captured["displayname"])
+        self.assertNotIn("Anna", captured["displayname"])
+
+    def test_retries_on_localpart_collision(self):
+        calls = {"n": 0}
+
+        def reg(self_client, localpart, password, displayname, admin=False):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise MatrixError("taken", errcode="M_USER_IN_USE", status=400)
+            return {"user_id": f"@{localpart}:fichtelink.caos.cloud", "access_token": "t", "device_id": "d"}
+
+        with patch.object(MatrixClient, "register_user", autospec=True, side_effect=reg):
+            account = service.ensure_matrix_account(self.user)
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(MatrixAccount.objects.count(), 1)
+        self.assertTrue(account.matrix_user_id.startswith("@u-"))
+
+    @override_settings(MATRIX_ENABLED=False)
+    def test_disabled_raises(self):
+        with self.assertRaises(MatrixError):
+            service.ensure_matrix_account(self.user)
+
+
+class MessengerAccessViewTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(given_name="Bea", family_name="Schmidt", email="bea@example.invalid")
+        self.user = User.objects.create_user(person=self.person, username="bea")
+
+    def test_requires_login(self):
+        resp = self.client.get(reverse("matrix:access"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/login/", resp["Location"])
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_provisions_and_shows_credentials(self):
+        self.client.force_login(self.user)
+        ok = {"user_id": "@u-abc123:fichtelink.caos.cloud", "access_token": "t", "device_id": "d"}
+        with patch.object(MatrixClient, "register_user", return_value=ok):
+            resp = self.client.get(reverse("matrix:access"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "@u-abc123:fichtelink.caos.cloud")
+        self.assertTrue(MatrixAccount.objects.filter(user=self.user).exists())
+
+    @override_settings(MATRIX_ENABLED=False)
+    def test_disabled_shows_notice_and_provisions_nothing(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("matrix:access"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "nicht aktiviert")
+        self.assertFalse(MatrixAccount.objects.filter(user=self.user).exists())

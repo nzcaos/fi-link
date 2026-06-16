@@ -244,6 +244,7 @@
             {% block menu_user %}{% endblock %}
             <a href="{% url 'lists:index' %}">Alle Listen</a>
             <a href="{% url 'forms:index' %}">Formulare</a>
+            {% if matrix_enabled %}<a href="{% url 'matrix:access' %}">Messenger-Zugang</a>{% endif %}
             <a href="{% url 'accounts:passkeys' %}">Passkeys</a>
             {# Admin functions, visually set off — pages fill this only for admins. #}
             {% block menu_admin %}{% endblock %}
