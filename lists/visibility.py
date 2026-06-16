@@ -403,8 +403,12 @@ def build_composed_rows(user, lst: List) -> list[dict]:
         cells = []
         for attribute in attrs:
             if ctx.field_visible(record, attribute):
-                value = values_map.get(attribute.pk, "")
-                fields.append((attribute, value))
+                value = values_map.get(attribute.pk)
+                # Stacked `fields` show an empty string for a missing value; the
+                # positional `cells` (→ member_grid / parent cells) keep None for
+                # a missing value so it renders as "—", exactly like a hidden cell
+                # (visibility.build_composed_rows contract; _child_cell.html).
+                fields.append((attribute, value if value is not None else ""))
                 cells.append(value)
             else:
                 cells.append(None)
