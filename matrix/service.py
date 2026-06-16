@@ -12,7 +12,7 @@ import secrets
 from django.conf import settings
 
 from .client import MatrixClient, MatrixError
-from .models import MatrixAccount
+from .models import MatrixAccount, MatrixRoom, MatrixServiceAccount
 
 log = logging.getLogger(__name__)
 
@@ -66,3 +66,41 @@ def ensure_matrix_account(user) -> MatrixAccount:
         return account
 
     raise MatrixError("Kein freier Matrix-Localpart nach mehreren Versuchen.") from last_exc
+
+
+def ensure_room_for_list(list_obj) -> MatrixRoom:
+    """Return the list's Matrix room, creating it on first use.
+
+    Idempotent: a second call returns the existing MatrixRoom without touching
+    Synapse. The room is invite-only with history visible only from the invite
+    onward; the service account holds the sole invite right (PL 100). Broadcast
+    lists raise events_default to 50 so only admins (promoted to PL≥50 in
+    Phase 4) can post. Acting identity is the bootstrapped service account.
+    """
+    if not settings.MATRIX_ENABLED:
+        raise MatrixError("Matrix-Integration ist deaktiviert (MATRIX_ENABLED=False).")
+
+    existing = MatrixRoom.objects.filter(list=list_obj).first()
+    if existing:
+        return existing
+    if not list_obj.matrix_room_enabled:
+        raise MatrixError(f"Liste {list_obj.pk} ist nicht für einen Matrix-Raum freigeschaltet.")
+
+    service_account = MatrixServiceAccount.get()
+    if service_account is None:
+        raise MatrixError(
+            "Kein Matrix-Service-Konto vorhanden — matrix_bootstrap_service_account ausführen."
+        )
+
+    client = MatrixClient.from_settings()
+    events_default = 50 if list_obj.matrix_broadcast_only else 0
+    room_id = client.create_room(
+        service_account.access_token,
+        name=list_obj.title,
+        topic="",
+        events_default=events_default,
+        history_visibility="invited",
+    )
+    room = MatrixRoom.objects.create(list=list_obj, room_id=room_id)
+    log.info("matrix: created room %s for list %s", room_id, list_obj.pk)
+    return room

@@ -265,3 +265,67 @@ class MessengerAccessViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "nicht aktiviert")
         self.assertFalse(MatrixAccount.objects.filter(user=self.user).exists())
+
+
+@override_settings(MATRIX_ENABLED=True)
+class EnsureRoomTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        self.svc = MatrixServiceAccount.objects.create(
+            matrix_user_id="@fichtelink-service:fichtelink.caos.cloud",
+            access_token="svc-token",
+        )
+
+    def test_creates_room_and_is_idempotent(self):
+        with patch.object(MatrixClient, "create_room", return_value="!abc:fichtelink.caos.cloud") as cr:
+            first = service.ensure_room_for_list(self.list)
+            second = service.ensure_room_for_list(self.list)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(MatrixRoom.objects.count(), 1)
+        self.assertEqual(cr.call_count, 1)
+        self.assertEqual(first.room_id, "!abc:fichtelink.caos.cloud")
+
+    def test_chat_mode_events_default_zero(self):
+        with patch.object(MatrixClient, "create_room", return_value="!r:fichtelink.caos.cloud") as cr:
+            service.ensure_room_for_list(self.list)
+        self.assertEqual(cr.call_args.kwargs["events_default"], 0)
+        self.assertEqual(cr.call_args.kwargs["history_visibility"], "invited")
+        # acts as the service account
+        self.assertEqual(cr.call_args.args[0], "svc-token")
+
+    def test_broadcast_mode_events_default_fifty(self):
+        self.list.matrix_broadcast_only = True
+        self.list.save()
+        with patch.object(MatrixClient, "create_room", return_value="!r:fichtelink.caos.cloud") as cr:
+            service.ensure_room_for_list(self.list)
+        self.assertEqual(cr.call_args.kwargs["events_default"], 50)
+
+    def test_raises_without_service_account(self):
+        self.svc.delete()
+        with patch.object(MatrixClient, "create_room") as cr:
+            with self.assertRaises(MatrixError):
+                service.ensure_room_for_list(self.list)
+        cr.assert_not_called()
+
+    def test_raises_when_not_enabled(self):
+        other = List.objects.create(title="VHS-Kurs", email_alias="vhs", template=self.template)
+        with patch.object(MatrixClient, "create_room") as cr:
+            with self.assertRaises(MatrixError):
+                service.ensure_room_for_list(other)
+        cr.assert_not_called()
+
+
+class RoomStateClientTests(TestCase):
+    def test_get_room_state_hits_state_endpoint(self):
+        client = _client()
+        sample = [{"type": "m.room.join_rules", "content": {"join_rule": "invite"}}]
+        with patch.object(client, "_request", return_value=sample) as req:
+            state = client.get_room_state("tok", "!room:fichtelink.caos.cloud")
+        self.assertEqual(state, sample)
+        method, path = req.call_args.args
+        self.assertEqual(method, "GET")
+        self.assertTrue(path.endswith("/state"))
+        self.assertEqual(req.call_args.kwargs["access_token"], "tok")

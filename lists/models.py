@@ -261,6 +261,23 @@ class List(models.Model):
         blank=True,
     )
 
+    # Matrix messenger config (docs/matrix-implementation-plan.md, Phase 3).
+    # Two flag columns only — all Matrix *logic* lives in the `matrix` app; the
+    # room (MatrixRoom) is keyed back to this list. `matrix_room_enabled` marks
+    # a list as eligible for a class chat room (default off; the introducing
+    # migration backfills True for existing cohort/class lists). `matrix_broadcast_only`
+    # switches the room to broadcast mode (events_default=50: only admins/PL≥50 send).
+    matrix_room_enabled = models.BooleanField(
+        "Matrix-Klassenraum aktiv",
+        default=False,
+        help_text="Wenn aktiv, bekommt diese Liste einen Matrix-Klassenraum (nur Schulklassen).",
+    )
+    matrix_broadcast_only = models.BooleanField(
+        "Matrix-Broadcast-Modus",
+        default=False,
+        help_text="Wenn aktiv, dürfen nur Admins (Elternvertretung) im Raum senden.",
+    )
+
     archived_at = models.DateTimeField("archiviert am", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

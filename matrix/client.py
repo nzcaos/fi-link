@@ -202,6 +202,19 @@ class MatrixClient:
         log.info("matrix: created room %s (%s)", room_id, name)
         return room_id
 
+    def get_room_state(self, access_token: str, room_id: str) -> list[dict[str, Any]]:
+        """GET the full room state (list of state events) — used to verify a
+        freshly created room's join_rules / history_visibility / power_levels.
+        """
+        from urllib.parse import quote
+
+        rid = quote(room_id, safe="")
+        return self._request(
+            "GET",
+            f"/_matrix/client/v3/rooms/{rid}/state",
+            access_token=access_token,
+        )  # type: ignore[return-value]
+
     def set_user_power_level(
         self, access_token: str, room_id: str, user_id: str, level: int
     ) -> None:
