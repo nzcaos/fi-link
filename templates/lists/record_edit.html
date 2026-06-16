@@ -23,7 +23,22 @@
 
     <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
       <legend style="font-weight:500">Name des Eintrags</legend>
-      <p style="margin:0.25rem 0 0.5rem"><strong>{{ record.subject }}</strong></p>
+      {% if form.name_editable %}
+        <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0.5rem">
+          Diese Person hat sich nicht selbst registriert — du kannst ihren Namen
+          hier ändern. Sobald sie sich selbst anmeldet, pflegt sie ihn selbst.
+        </p>
+        <div style="margin:0.4rem 0">
+          {{ form.subject_given_name.label_tag }} {{ form.subject_given_name }}
+          {% if form.subject_given_name.errors %}<div class="error">{{ form.subject_given_name.errors }}</div>{% endif %}
+        </div>
+        <div style="margin:0.4rem 0">
+          {{ form.subject_family_name.label_tag }} {{ form.subject_family_name }}
+          {% if form.subject_family_name.errors %}<div class="error">{{ form.subject_family_name.errors }}</div>{% endif %}
+        </div>
+      {% else %}
+        <p style="margin:0.25rem 0 0.5rem"><strong>{{ record.subject }}</strong></p>
+      {% endif %}
       <p style="font-size:0.85rem;color:#555;margin:0 0 0.25rem">
         Hier kannst du steuern, wer den Namen sieht. Wenn niemand ihn sehen darf, wird er als
         <code>?N</code> angezeigt (durchnummeriert pro Listenansicht). Listen-Admins und

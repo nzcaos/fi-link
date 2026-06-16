@@ -12,7 +12,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from accounts.models import Person
+from accounts.models import Person, User
 
 from .models import (
     AdminInviteToken,
@@ -250,6 +250,24 @@ class RecordEditForm(forms.Form):
         self._attribute_fields: dict[int, ListAttribute] = {}
         self._visibility_fields: dict[int, ListAttribute] = {}
 
+        # Subject-name editing: a RecordManager/super-admin may correct the name
+        # of a subject who has NOT self-registered (no own USER) — e.g. a parent
+        # who entered their partner and child into a class list. Once the person
+        # has their own USER they manage the name via "Mein Profil", so it is not
+        # offered here (avoids a manager overriding a self-registered person, and
+        # avoids two edit surfaces). Same B3 gate as the visibility matrix —
+        # the name is PERSON-owned data, not something a mere list-admin edits.
+        self.name_editable = self.user_can_edit_visibility and not User.objects.filter(
+            person=record.subject
+        ).exists()
+        if self.name_editable:
+            self.fields["subject_given_name"] = forms.CharField(
+                label="Vorname", max_length=200, initial=record.subject.given_name
+            )
+            self.fields["subject_family_name"] = forms.CharField(
+                label="Nachname", max_length=200, initial=record.subject.family_name
+            )
+
         values = {
             v.attribute_id: v.value
             for v in ListRecordValue.objects.filter(record=record).select_related("attribute")
@@ -417,6 +435,16 @@ class RecordEditForm(forms.Form):
                         sentinel=ListRecordAccess.Sentinel.EMAIL,
                         audience_id=audience_id,
                     )
+
+        # Subject name (PERSON-level). Server-side gate mirrors the field
+        # presence (manager/super + subject has no own USER); a tampered POST
+        # without that gate is ignored. PERSON changes are list-wide, hence the
+        # strict gate.
+        if self.name_editable:
+            person = self.record.subject
+            person.given_name = self.cleaned_data["subject_given_name"].strip()
+            person.family_name = self.cleaned_data["subject_family_name"].strip()
+            person.save(update_fields=["given_name", "family_name", "updated_at"])
 
         # 3) RecordManager: ensure the saving user is registered as a manager
         # (basis depends on context; default to SELF_REGISTERED if this is the

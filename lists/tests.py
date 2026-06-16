@@ -5108,3 +5108,65 @@ class PostLoginLandingTests(TestCase):
         self.client.force_login(self.user)
         resp = self.client.get("/")
         self.assertRedirects(resp, reverse("lists:home"), fetch_redirect_response=False)
+
+
+class RecordSubjectNameEditTests(TestCase):
+    """A RecordManager may edit the name of a subject who has no own USER
+    (entered by someone else); once the subject self-registers it is read-only
+    here and managed via "Mein Profil"."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        self.lst = List.objects.create(title="5a", email_alias="5a", template=self.template)
+        mp = Person.objects.create(given_name="Eva", family_name="Mueller", email="eva@example.invalid")
+        self.manager = User.objects.create_user(person=mp, username="eva")
+        # Child: a PERSON without a USER, entered by the managing parent.
+        self.child = Person.objects.create(given_name="Lina", family_name="Mueler")  # typo on purpose
+        self.child_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.child, role=ListRecord.Role.MEMBER
+        )
+        RecordManager.objects.create(
+            record=self.child_rec, user=self.manager, basis=RecordManager.Basis.GUARDIAN
+        )
+
+    def test_manager_can_edit_userless_subject_name(self):
+        form = RecordEditForm(record=self.child_rec, user=self.manager)
+        self.assertTrue(form.name_editable)
+        form = RecordEditForm(
+            {"subject_given_name": "Lina", "subject_family_name": "Mueller", "vis_name": []},
+            record=self.child_rec, user=self.manager,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.child.refresh_from_db()
+        self.assertEqual((self.child.given_name, self.child.family_name), ("Lina", "Mueller"))
+
+    def test_name_read_only_once_subject_has_own_user(self):
+        own_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.manager.person, role=ListRecord.Role.ASSOCIATE
+        )
+        RecordManager.objects.create(
+            record=own_rec, user=self.manager, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        form = RecordEditForm(record=own_rec, user=self.manager)
+        self.assertFalse(form.name_editable)
+        self.assertNotIn("subject_given_name", form.fields)
+
+    def test_tampered_name_post_ignored_when_not_editable(self):
+        own_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.manager.person, role=ListRecord.Role.ASSOCIATE
+        )
+        RecordManager.objects.create(
+            record=own_rec, user=self.manager, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        form = RecordEditForm(
+            {"subject_given_name": "Hacked", "subject_family_name": "Name", "vis_name": []},
+            record=own_rec, user=self.manager,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.manager.person.refresh_from_db()
+        self.assertEqual(self.manager.person.given_name, "Eva")  # unchanged
