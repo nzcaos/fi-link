@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // .tool_response.filePath // empty'); case \"$f\" in *.html) bad=$(grep -nE '\\{#' \"$f\" 2>/dev/null | grep -vE '#\\}'); if [ -n \"$bad\" ]; then jq -n --arg f \"$f\" --arg b \"$bad\" '{decision:\"block\",reason:(\"Mehrzeiliger Django-Kommentar in \"+$f+\": {# #} ist einzeilig. Nutze {% comment %}…{% endcomment %}. Betroffene Zeilen:\\n\"+$b)}'; fi;; esac; exit 0",
+            "statusMessage": "Prüfe Template auf mehrzeilige {# #}-Kommentare"
+          }
+        ]
+      }
+    ]
+  }
+}
