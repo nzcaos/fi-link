@@ -88,20 +88,11 @@
             </td>
             <td class="actions">
               {% if row.can_edit %}
+                {# Umzug + Löschen leben jetzt im Bearbeiten-Dialog. #}
                 <span class="icon-actions">
                   <a class="icon-btn" href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=row.record.pk %}" title="Bearbeiten" aria-label="Bearbeiten">
                     <svg class="icon"><use href="#icon-edit"/></svg>
                   </a>
-                  <a class="icon-btn" href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=row.record.pk %}" title="In andere Liste umziehen" aria-label="Umziehen">
-                    <svg class="icon"><use href="#icon-move"/></svg>
-                  </a>
-                  <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=row.record.pk %}" style="display:inline"
-                        onsubmit="return confirm('Eintrag „{{ row.record.subject }}“ wirklich entfernen?')">
-                    {% csrf_token %}
-                    <button type="submit" class="icon-btn danger" title="Entfernen" aria-label="Entfernen">
-                      <svg class="icon"><use href="#icon-trash"/></svg>
-                    </button>
-                  </form>
                 </span>
               {% endif %}
             </td>

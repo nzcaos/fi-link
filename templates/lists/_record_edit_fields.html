@@ -1,0 +1,84 @@
+{% comment %}
+The editable fieldsets for ONE record's RecordEditForm — name (+ visibility),
+e-mail (+ visibility) and the per-attribute value/visibility rows. Factored out
+of record_edit.html so the combined family dialog can render the same block once
+per section (child + linked parents). Context: `form` (a RecordEditForm).
+{% endcomment %}
+{% if form.non_field_errors %}
+  <div class="error">{{ form.non_field_errors }}</div>
+{% endif %}
+
+{% if not form.user_can_edit_visibility %}
+  <p style="background:#f5f5f0;border-left:3px solid #c8b86a;padding:0.5rem 0.75rem;font-size:0.9rem;color:#555">
+    Sie können die Werte dieses Eintrags korrigieren, aber nicht die Sichtbarkeits-Matrix ändern.
+    Diese Einstellung gehört dem Eigentümer des Eintrags (bzw. der Erziehungsberechtigten).
+  </p>
+{% endif %}
+
+<fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
+  <legend style="font-weight:500">Name des Eintrags</legend>
+  {% if form.name_editable %}
+    <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0.5rem">
+      Diese Person hat sich nicht selbst registriert — du kannst ihren Namen
+      hier ändern. Sobald sie sich selbst anmeldet, pflegt sie ihn selbst.
+    </p>
+    <div style="margin:0.4rem 0">
+      {{ form.subject_given_name.label_tag }} {{ form.subject_given_name }}
+      {% if form.subject_given_name.errors %}<div class="error">{{ form.subject_given_name.errors }}</div>{% endif %}
+    </div>
+    <div style="margin:0.4rem 0">
+      {{ form.subject_family_name.label_tag }} {{ form.subject_family_name }}
+      {% if form.subject_family_name.errors %}<div class="error">{{ form.subject_family_name.errors }}</div>{% endif %}
+    </div>
+  {% else %}
+    <p style="margin:0.25rem 0 0.5rem"><strong>{{ form.record.subject }}</strong></p>
+  {% endif %}
+  <p style="font-size:0.85rem;color:#555;margin:0 0 0.25rem">
+    Hier kannst du steuern, wer den Namen sieht. Wenn niemand ihn sehen darf, wird er als
+    <code>?N</code> angezeigt (durchnummeriert pro Listenansicht). Listen-Admins und
+    Super-Admins sehen den Namen weiterhin.
+  </p>
+  <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
+  <div>{{ form.vis_name }}</div>
+</fieldset>
+
+{% if form.name_editable or form.has_email_vis %}
+<fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
+  <legend style="font-weight:500">E-Mail-Adresse</legend>
+  {% if form.name_editable %}
+    <p style="font-size:0.85rem;color:#555;margin:0.25rem 0">
+      Diese Person hat sich nicht selbst registriert — du kannst ihre
+      E-Mail-Adresse hier ändern. Sobald sie sich selbst anmeldet, wird die
+      Adresse zur Anmeldeadresse und ist hier nicht mehr änderbar.
+    </p>
+    <div style="margin:0.4rem 0">
+      {{ form.subject_email.label_tag }} {{ form.subject_email }}
+      {% if form.subject_email.errors %}<div class="error">{{ form.subject_email.errors }}</div>{% endif %}
+    </div>
+  {% endif %}
+  {% if form.has_email_vis %}
+    <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">
+      {{ form.vis_email.help_text }} Listen-Admins und Super-Admins sehen sie weiterhin.
+    </p>
+    <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
+    <div>{{ form.vis_email }}</div>
+  {% endif %}
+</fieldset>
+{% endif %}
+
+{% for attribute, value_field, vis_field in form.iter_attribute_rows %}
+  <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px">
+    <legend style="font-weight:500">{{ attribute.name }}</legend>
+
+    {{ value_field.label_tag }}
+    {{ value_field }}
+    {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
+
+    {% if vis_field %}
+      <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
+      <div>{{ vis_field }}</div>
+    {% else %}
+      <p style="font-size:0.85rem;color:#555">Dieses Feld ist immer öffentlich (Vorlage erzwingt das).</p>
+    {% endif %}
+  </fieldset>
+{% endfor %}

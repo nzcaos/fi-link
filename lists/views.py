@@ -92,7 +92,7 @@ from .permissions import (
 )
 from . import lifecycle
 from .tasks import enqueue_aggregate_fanout, enqueue_list_fanout, list_recipient_emails
-from .visibility import build_composed_rows, build_visible_rows, member_grid_header
+from .visibility import build_composed_rows, build_visible_rows, member_grid_header, _role_label
 
 
 @login_required
@@ -488,22 +488,82 @@ def list_invite(request, pk: int):
 
 
 @login_required
+def _editable_associate_records(user, lst: List, child: ListRecord):
+    """The associate (parent) records linked to a child `member` record in this
+    list that `user` may edit — for the combined family edit dialog. Returns
+    ``[(record, role_label), …]`` ordered stably by record id.
+    """
+    rel_role = dict(
+        PersonRelationship.objects.filter(subject_person_id=child.subject_id)
+        .values_list("related_person_id", "role")
+    )
+    if not rel_role:
+        return []
+    assoc = (
+        ListRecord.objects.filter(
+            list=lst,
+            role=ListRecord.Role.ASSOCIATE,
+            subject_id__in=list(rel_role.keys()),
+            archived_at__isnull=True,
+        )
+        .select_related("subject")
+        .order_by("id")
+    )
+    return [
+        (rec, _role_label(rel_role.get(rec.subject_id, ""))) for rec in assoc
+        if can_user_edit_record(user, rec)
+    ]
+
+
 def record_edit(request, pk: int, record_pk: int):
+    """Edit a record. For a child (`member`) record in a `via_associate` list
+    this is a *combined family dialog*: the child plus each linked parent
+    (associate) record the user may edit, each as its own prefixed
+    RecordEditForm inside a single HTML form. The anchor keeps the unprefixed
+    field names (backward compatible); associates are namespaced `a<pk>-…` so
+    the POST fields don't collide. One submit saves them all.
+    """
     lst = get_object_or_404(List, pk=pk)
     record = get_object_or_404(ListRecord, pk=record_pk, list=lst)
     if not can_user_edit_record(request.user, record):
         return HttpResponseForbidden("Sie dürfen diesen Eintrag nicht bearbeiten.")
+
+    # (kind, record, role_label, prefix) — the anchor first, unprefixed.
+    section_specs = [("member" if record.role == ListRecord.Role.MEMBER else "associate", record, "", None)]
+    if (
+        lst.template.member_subject_mode == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
+        and record.role == ListRecord.Role.MEMBER
+    ):
+        for arec, role in _editable_associate_records(request.user, lst, record):
+            section_specs.append(("associate", arec, role, f"a{arec.pk}"))
+
+    data = request.POST if request.method == "POST" else None
+    sections = [
+        {
+            "kind": kind,
+            "record": rec,
+            "role": role,
+            "form": RecordEditForm(data, record=rec, user=request.user, prefix=prefix),
+        }
+        for (kind, rec, role, prefix) in section_specs
+    ]
+
     if request.method == "POST":
-        form = RecordEditForm(request.POST, record=record, user=request.user)
-        if form.is_valid():
-            form.save()
+        # Validate every form (list comp forces evaluation so all errors show).
+        if all([s["form"].is_valid() for s in sections]):
+            for s in sections:
+                s["form"].save()
             return redirect("lists:detail", pk=lst.pk)
-    else:
-        form = RecordEditForm(record=record, user=request.user)
+
     return render(
         request,
         "lists/record_edit.html",
-        {"list_obj": lst, "record": record, "form": form},
+        {
+            "list_obj": lst,
+            "record": record,
+            "sections": sections,
+            "can_transfer": can_user_initiate_transfer(request.user, record),
+        },
     )
 
 

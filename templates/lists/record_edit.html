@@ -3,90 +3,28 @@
 {% block content %}
   <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
   <h1>Eintrag bearbeiten</h1>
-  <p style="color:#666">
-    Liste: <strong>{{ list_obj.title }}</strong> · Person: <strong>{{ record.subject }}</strong>
-  </p>
+  <p style="color:#666">Liste: <strong>{{ list_obj.title }}</strong></p>
 
-  {% if form.non_field_errors %}
-    <div class="error">{{ form.non_field_errors }}</div>
-  {% endif %}
-
-  {% if not form.user_can_edit_visibility %}
-    <p style="background:#f5f5f0;border-left:3px solid #c8b86a;padding:0.5rem 0.75rem;font-size:0.9rem;color:#555">
-      Sie können die Werte dieses Eintrags korrigieren, aber nicht die Sichtbarkeits-Matrix ändern.
-      Diese Einstellung gehört dem Eigentümer des Eintrags (bzw. der Erziehungsberechtigten).
-    </p>
-  {% endif %}
-
+  {% comment %}
+    One HTML form wrapping every section's RecordEditForm — the child plus, for
+    a school-class child, each linked parent (combined family dialog). One submit
+    saves them all. Section forms are prefixed in the view so their fields don't
+    collide.
+  {% endcomment %}
   <form method="post">
     {% csrf_token %}
-
-    <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
-      <legend style="font-weight:500">Name des Eintrags</legend>
-      {% if form.name_editable %}
-        <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0.5rem">
-          Diese Person hat sich nicht selbst registriert — du kannst ihren Namen
-          hier ändern. Sobald sie sich selbst anmeldet, pflegt sie ihn selbst.
-        </p>
-        <div style="margin:0.4rem 0">
-          {{ form.subject_given_name.label_tag }} {{ form.subject_given_name }}
-          {% if form.subject_given_name.errors %}<div class="error">{{ form.subject_given_name.errors }}</div>{% endif %}
-        </div>
-        <div style="margin:0.4rem 0">
-          {{ form.subject_family_name.label_tag }} {{ form.subject_family_name }}
-          {% if form.subject_family_name.errors %}<div class="error">{{ form.subject_family_name.errors }}</div>{% endif %}
-        </div>
+    {% for section in sections %}
+      {% if sections|length > 1 %}
+        <h2 style="margin-top:1.5rem">
+          {% if section.kind == 'member' %}Schulkind{% else %}{{ section.role|default:'Bezugsperson' }}{% endif %}:
+          {{ section.record.subject }}
+        </h2>
       {% else %}
-        <p style="margin:0.25rem 0 0.5rem"><strong>{{ record.subject }}</strong></p>
+        <p style="color:#666;margin-top:-.4rem">Person: <strong>{{ section.record.subject }}</strong></p>
       {% endif %}
-      <p style="font-size:0.85rem;color:#555;margin:0 0 0.25rem">
-        Hier kannst du steuern, wer den Namen sieht. Wenn niemand ihn sehen darf, wird er als
-        <code>?N</code> angezeigt (durchnummeriert pro Listenansicht). Listen-Admins und
-        Super-Admins sehen den Namen weiterhin.
-      </p>
-      <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-      <div>{{ form.vis_name }}</div>
-    </fieldset>
-
-    {% if form.name_editable or form.has_email_vis %}
-    <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px;background:#fafaf6">
-      <legend style="font-weight:500">E-Mail-Adresse</legend>
-      {% if form.name_editable %}
-        <p style="font-size:0.85rem;color:#555;margin:0.25rem 0">
-          Diese Person hat sich nicht selbst registriert — du kannst ihre
-          E-Mail-Adresse hier ändern. Sobald sie sich selbst anmeldet, wird die
-          Adresse zur Anmeldeadresse und ist hier nicht mehr änderbar.
-        </p>
-        <div style="margin:0.4rem 0">
-          {{ form.subject_email.label_tag }} {{ form.subject_email }}
-          {% if form.subject_email.errors %}<div class="error">{{ form.subject_email.errors }}</div>{% endif %}
-        </div>
-      {% endif %}
-      {% if form.has_email_vis %}
-        <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">
-          {{ form.vis_email.help_text }} Listen-Admins und Super-Admins sehen sie weiterhin.
-        </p>
-        <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-        <div>{{ form.vis_email }}</div>
-      {% endif %}
-    </fieldset>
-    {% endif %}
-
-    {% for attribute, value_field, vis_field in form.iter_attribute_rows %}
-      <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px">
-        <legend style="font-weight:500">{{ attribute.name }}</legend>
-
-        {{ value_field.label_tag }}
-        {{ value_field }}
-        {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
-
-        {% if vis_field %}
-          <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-          <div>{{ vis_field }}</div>
-        {% else %}
-          <p style="font-size:0.85rem;color:#555">Dieses Feld ist immer öffentlich (Vorlage erzwingt das).</p>
-        {% endif %}
-      </fieldset>
+      {% with form=section.form %}
+        {% include "lists/_record_edit_fields.html" %}
+      {% endwith %}
     {% endfor %}
 
     <p style="margin-top:1rem">
@@ -94,4 +32,23 @@
       <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
     </p>
   </form>
+
+  {% comment %}
+    Umzug + Löschen of this entry — moved here out of the list view so the list
+    stays uncluttered. Separate forms (different method/action), hence outside
+    the edit form above.
+  {% endcomment %}
+  <hr>
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem">
+    {% if can_transfer %}
+      <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=record.pk %}">
+        <button type="button" class="secondary">{% if list_obj.template.member_subject_mode == 'via_associate' %}In eine andere Klasse umziehen{% else %}In eine andere Liste umziehen{% endif %}</button>
+      </a>
+    {% endif %}
+    <form method="post" action="{% url 'lists:record_remove' pk=list_obj.pk record_pk=record.pk %}"
+          onsubmit="return confirm('Eintrag „{{ record.subject }}“ wirklich löschen?')">
+      {% csrf_token %}
+      <button type="submit" class="danger">Löschen</button>
+    </form>
+  </div>
 {% endblock %}

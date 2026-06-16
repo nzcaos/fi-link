@@ -39,15 +39,10 @@ attribute columns line up because `parent.cells` is positional over
               {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj member_col_count=member_col_count %}
             {% endif %}
             <td>
+              {# Bezugspersonen werden im Familien-Dialog des Kindes bearbeitet,
+                 daher hier kein eigenes Bearbeiten-Icon mehr. #}
               <span class="parent-role">{{ parent.label }}</span>
               <span class="parent-name">{{ parent.subject_display }}</span>
-              {% if show_actions and parent.can_edit %}
-                <a class="icon-btn" style="margin-left:.4rem;vertical-align:middle"
-                   href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=parent.record.pk %}"
-                   title="Bearbeiten" aria-label="Bearbeiten">
-                  <svg class="icon"><use href="#icon-edit"/></svg>
-                </a>
-              {% endif %}
             </td>
             {% for cell in parent.cells %}
               <td>{% if cell %}{{ cell }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
