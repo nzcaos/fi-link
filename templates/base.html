@@ -263,9 +263,11 @@
         <details class="menu">
           <summary>{{ request.user.person.full_name|default:"Menü" }}</summary>
           <nav class="menu-panel">
-            {# Normal-user functions first: page-specific ones, then the globals.
-               Lists and forms are not differentiated for the end user — one
-               unified overview, and the title-switcher for quick jumping. #}
+            {% comment %}
+              Normal-user functions first: page-specific ones, then the globals.
+              Lists and forms are not differentiated for the end user — one
+              unified overview, and the title-switcher for quick jumping.
+            {% endcomment %}
             {% block menu_user %}{% endblock %}
             <a href="{% url 'lists:index' %}">Meine Listen &amp; Formulare</a>
             <a href="{% url 'accounts:profile' %}">Mein Profil</a>
