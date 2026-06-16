@@ -16,7 +16,11 @@
     </p>
   {% else %}
     <style>
-      .copy-btn { margin-left: 0.5rem; font-size: 0.8rem; }
+      .cred { margin: 0.75rem 0; }
+      .cred-label { font-weight: 600; margin-bottom: 0.2rem; }
+      .cred-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+      .cred-value { font-family: monospace; word-break: break-all; }
+      .copy-btn { font-size: 0.8rem; }
       .qr-handoff { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; max-width: 26rem; }
       /* The QR only helps on a desktop/laptop (scan to continue on the phone).
          Hide it on touch / small screens — there you're already on the phone. */
@@ -24,27 +28,29 @@
     </style>
 
     <p style="color:#666;max-width:42rem">
-      Mit diesen Zugangsdaten meldest du dich in der App <strong>Element</strong>
-      an, um Klassen-Nachrichten zu empfangen. Installiere Element und wähle
-      „Anmelden". Im Feld <em>Benutzername</em> die Matrix-ID unten eingeben — den
-      Server erkennt Element dann automatisch (falls Element vorab nach dem
-      Server fragt: <code>{{ server_name }}</code> eingeben). Danach das Passwort.
+      Mit diesen Zugangsdaten meldest du dich in einer
+      <strong>Matrix-Messenger-App</strong> an (z.&nbsp;B. Element X, FluffyChat
+      oder SchildiChat), um Klassen-Nachrichten zu empfangen. Installiere eine
+      solche App und wähle „Anmelden". Im Feld <em>Benutzername</em> die
+      Matrix-ID unten eingeben — den Server erkennt die App meist automatisch
+      (falls vorab nach dem Server gefragt wird: <code>{{ server_name }}</code>
+      eingeben). Danach das Passwort.
     </p>
 
-    <table style="border-collapse:collapse;font-size:0.95rem;margin:1rem 0">
-      <tbody>
-        <tr>
-          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Benutzer</th>
-          <td style="padding:0.4rem 0;font-family:monospace">{{ account.matrix_user_id }}</td>
-          <td><button type="button" class="copy-btn secondary" data-copy="{{ account.matrix_user_id }}">kopieren</button></td>
-        </tr>
-        <tr>
-          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Passwort</th>
-          <td style="padding:0.4rem 0;font-family:monospace;word-break:break-all">{{ account.password }}</td>
-          <td><button type="button" class="copy-btn secondary" data-copy="{{ account.password }}">kopieren</button></td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="cred">
+      <div class="cred-label">Benutzer</div>
+      <div class="cred-row">
+        <code class="cred-value">{{ account.matrix_user_id }}</code>
+        <button type="button" class="copy-btn secondary" data-copy="{{ account.matrix_user_id }}">kopieren</button>
+      </div>
+    </div>
+    <div class="cred">
+      <div class="cred-label">Passwort</div>
+      <div class="cred-row">
+        <code class="cred-value">{{ account.password }}</code>
+        <button type="button" class="copy-btn secondary" data-copy="{{ account.password }}">kopieren</button>
+      </div>
+    </div>
 
     <p style="color:#666;font-size:0.85rem;max-width:42rem">
       Bewahre das Passwort sicher auf. Du kannst diese Seite jederzeit erneut
