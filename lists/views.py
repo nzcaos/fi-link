@@ -487,7 +487,6 @@ def list_invite(request, pk: int):
     return render(request, "lists/invite_create.html", {"list_obj": lst, "form": form})
 
 
-@login_required
 def _editable_associate_records(user, lst: List, child: ListRecord):
     """The associate (parent) records linked to a child `member` record in this
     list that `user` may edit — for the combined family edit dialog. Returns
@@ -515,6 +514,7 @@ def _editable_associate_records(user, lst: List, child: ListRecord):
     ]
 
 
+@login_required
 def record_edit(request, pk: int, record_pk: int):
     """Edit a record. For a child (`member`) record in a `via_associate` list
     this is a *combined family dialog*: the child plus each linked parent
