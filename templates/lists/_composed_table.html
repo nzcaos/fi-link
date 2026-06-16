@@ -1,31 +1,23 @@
 {% comment %}
 Wide multi-person class-list table for via_associate lists (school classes).
-Context: `rows` (from build_composed_rows), `associate_attrs` + `member_header`
-+ `member_col_count` (the shared column headers), and — only when actions are
-wanted — `show_actions` + `list_obj`.
+Context: `rows` (from build_composed_rows), `associate_attrs` + `member_col_count`
+(the latter only gates whether the member column exists), and — only when
+actions are wanted — `show_actions` + `list_obj`.
 
-One <tr> per linked parent. The child's name + member-attribute grid
+One <tr> per linked parent. The child's name + member attributes
 (lists/_child_cell.html) span the parents via rowspan: the name column
-auto-sizes to the longest name, the member grid has a fixed column count so its
-values line up under the `member_header` columns and across every child
-(CLAUDE.md / *List display defaults*). The parent attribute columns line up
-because `parent.cells` is positional over `associate_attrs` (None where that
-parent hid the field → "—").
+auto-sizes to the longest name; the member attributes render as one horizontal
+row per `display_row`, each cell self-labelling and content-sized (so "Adresse"
+gets more room than "PLZ") — hence the member column needs no per-attribute
+header. The parent attribute columns line up because `parent.cells` is
+positional over `associate_attrs` (None where that parent hid the field → "—").
 {% endcomment %}
 <div class="table-wrap">
 <table class="data-table class-list">
   <thead>
     <tr>
       <th class="col-name">Schulkind</th>
-      {% if member_col_count %}
-        <th class="col-member">
-          <div class="mgrid" style="--mcols:{{ member_col_count }}">
-            {% for hrow in member_header %}{% for attr in hrow %}
-              <div class="mgrid-h">{% if attr %}{{ attr.name }}{% endif %}</div>
-            {% endfor %}{% endfor %}
-          </div>
-        </th>
-      {% endif %}
+      {% if member_col_count %}<th class="col-member">Angaben zum Kind</th>{% endif %}
       <th>Bezugsperson</th>
       {% for attr in associate_attrs %}<th>{{ attr.name }}</th>{% endfor %}
       <th>E-Mail</th>

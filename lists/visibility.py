@@ -328,12 +328,14 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     email visibility (consent is per parent), so separated parents, a single
     guardian, and siblings all fall out without special-casing.
 
-    The child's member attributes are laid out as a grid beside the name —
-    columns side by side, distributed over one or more rows by each attribute's
-    `display_row` (configurable in the LISTTEMPLATE). `member_grid` is that
-    grid: one entry per display-row, each a list of ``{"attr", "value"}`` cells
-    (``value`` is ``None`` where the field is hidden → rendered as "—"), so the
-    label is shown once above each column instead of inline per value.
+    The child's member attributes are laid out beside the name — one horizontal
+    row per `display_row` (configurable in the LISTTEMPLATE), the attributes in
+    `position` order, each cell sized to its content. `member_grid` carries that
+    shape: one entry per display-row, each a list of ``{"attr", "value"}`` cells
+    (``value`` is ``None`` where the field is hidden → rendered as "—"); the
+    template (`_child_cell.html`) labels each cell from ``attr.name``. ``None``
+    padding entries keep the data shape stable for the header helper and are
+    skipped by the content-sized render.
 
     Each row is::
 

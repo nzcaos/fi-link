@@ -126,17 +126,19 @@
              border-right: 1px solid var(--border); white-space: nowrap; }
     .class-list .col-name .child-name { font-size: 1.15rem; font-weight: 650;
              letter-spacing: -0.01em; line-height: 1.25; }
-    /* Member attributes: a fixed-column CSS grid in its own column, so the
-       values line up under the header columns and across every child. One grid
-       line per display_row; `--mcols` is the grid column count. The thead and
-       tbody cells share the table padding, so header and values stay aligned. */
+    /* Member attributes: one horizontal flex row per display_row, the attributes
+       in `position` order. Each cell sizes to its own content (label/value),
+       so "Adresse" gets more width than "PLZ" — no fixed equal-width grid. Each
+       cell carries its own label, so no shared column header is needed. */
     .class-list .col-member { vertical-align: middle; }
-    .class-list .mgrid { display: grid;
-             grid-template-columns: repeat(var(--mcols, 1), minmax(4.5rem, 1fr));
-             gap: .3rem .9rem; }
-    .class-list .mgrid-h { font-size: .68rem; color: var(--muted); font-weight: 600;
+    .class-list .mrow { display: flex; flex-wrap: wrap; gap: .25rem 1.1rem;
+             align-items: baseline; }
+    .class-list .mrow + .mrow { margin-top: .35rem; }
+    .class-list .mcell { display: flex; flex-direction: column; min-width: 0;
+             flex: 0 1 auto; }
+    .class-list .mcell-label { font-size: .68rem; color: var(--muted); font-weight: 600;
              text-transform: uppercase; letter-spacing: .03em; line-height: 1.25; }
-    .class-list .mgrid-v { font-size: .9rem; color: var(--text-soft); line-height: 1.3; }
+    .class-list .mcell-value { font-size: .9rem; color: var(--text-soft); line-height: 1.3; }
     .class-list .child-actions { margin-top: .4rem; display: flex; flex-wrap: wrap;
              gap: .35rem; align-items: center; white-space: normal; }
     .class-list .parent-name { font-weight: 600; }
