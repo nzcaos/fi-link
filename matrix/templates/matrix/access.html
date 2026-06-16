@@ -2,6 +2,7 @@
 {% load static %}
 {% block title %}Messenger-Zugang — Fichtelink{% endblock %}
 {% block content %}
+  <p><a href="{% url 'accounts:profile' %}">← Mein Profil</a></p>
   <h1>Messenger-Zugang</h1>
 
   {% if not matrix_enabled %}

@@ -39,7 +39,7 @@
 {% endblock %}
 
 {% block content %}
-  <h1>{{ list_obj.title }}</h1>
+  {% include "_title_switcher.html" with current_title=list_obj.title %}
   <p style="color:#666">
     Vorlage: <strong>{{ list_obj.template.name }}</strong> ·
     Sichtbarkeit: {{ list_obj.get_visibility_display }}

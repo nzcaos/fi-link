@@ -110,8 +110,20 @@ def list_home(request):
 
 @login_required
 def list_index(request):
+    """Unified "Meine Listen & Formulare" overview. Lists and forms are not
+    differentiated for the end user (CLAUDE.md / title-switcher decision) — both
+    are containers to fill in, shown together in one section, tagged only by a
+    muted kind label. The Listen/Formulare split survives solely in the admin
+    surfaces (Django Admin, the per-object admin menus).
+    """
+    from forms.models import Form
+
     user = request.user
     own_lists = accessible_lists_for(user)
+    if user.is_superuser:
+        own_forms = Form.objects.all().order_by("title")
+    else:
+        own_forms = Form.objects.filter(access__user=user).distinct().order_by("title")
     public_lists = (
         List.objects.filter(archived_at__isnull=True)
         .filter(
@@ -126,7 +138,7 @@ def list_index(request):
     return render(
         request,
         "lists/index.html",
-        {"own_lists": own_lists, "public_lists": public_lists},
+        {"own_lists": own_lists, "own_forms": own_forms, "public_lists": public_lists},
     )
 
 

@@ -206,6 +206,27 @@
     .menu-label { padding: 0.45rem 0.7rem 0.2rem; font-size: 0.7rem;
               text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
               font-weight: 600; }
+    /* A muted type tag ("Liste" / "Formular") trailing a menu entry — used in
+       the Gefäß-switcher so the dropdown still hints at the kind. */
+    .menu-kind { float: right; margin-left: 1rem; font-size: 0.7rem; color: var(--muted);
+              text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+
+    /* Title that doubles as a Gefäß-switcher (CLAUDE.md / list+form switching).
+       The <summary> is styled exactly like the <h1> it replaces, so the page
+       reads identically whether or not switching is available — only the small ▾
+       marks it interactive. Reuses .menu / .menu-panel for the dropdown itself. */
+    .title-switcher { display: inline-block; margin: 0 0 .85rem; max-width: 100%; }
+    .title-switcher > summary { padding: 0; border: 0; background: none; box-shadow: none;
+              max-width: none; white-space: normal; overflow: visible; gap: .3rem;
+              font-size: 1.6rem; line-height: 1.2; font-weight: 680;
+              letter-spacing: -0.02em; color: var(--text); }
+    .title-switcher > summary:hover { border: 0; color: var(--brand-strong); }
+    .title-switcher > summary::after { content: "▾"; color: var(--muted); font-size: .55em;
+              align-self: center; }
+    .title-switcher .menu-panel { left: 0; right: auto; min-width: 18rem;
+              max-width: min(90vw, 26rem); max-height: 70vh; overflow-y: auto; }
+    .title-switcher .menu-panel a[aria-current="page"] { background: var(--surface-2);
+              color: var(--brand-strong); font-weight: 650; }
 
     @media (max-width: 560px) {
       .page { padding: 1rem .75rem 3rem; }
@@ -240,13 +261,12 @@
         <details class="menu">
           <summary>{{ request.user.person.full_name|default:"Menü" }}</summary>
           <nav class="menu-panel">
-            {# Normal-user functions first: page-specific ones, then the globals. #}
+            {# Normal-user functions first: page-specific ones, then the globals.
+               Lists and forms are not differentiated for the end user — one
+               unified overview, and the title-switcher for quick jumping. #}
             {% block menu_user %}{% endblock %}
-            <a href="{% url 'lists:index' %}">Alle Listen</a>
-            <a href="{% url 'forms:index' %}">Formulare</a>
-            {% if matrix_enabled %}<a href="{% url 'matrix:access' %}">Messenger-Zugang</a>{% endif %}
+            <a href="{% url 'lists:index' %}">Meine Listen &amp; Formulare</a>
             <a href="{% url 'accounts:profile' %}">Mein Profil</a>
-            <a href="{% url 'accounts:passkeys' %}">Passkeys</a>
             {# Admin functions, visually set off — pages fill this only for admins. #}
             {% block menu_admin %}{% endblock %}
             <div class="menu-sep"></div>

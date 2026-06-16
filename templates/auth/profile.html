@@ -37,4 +37,16 @@
       <button type="submit">Speichern</button>
     </div>
   </form>
+
+  <h2>Konto &amp; Sicherheit</h2>
+  <p style="color:#666;max-width:42rem">
+    Hier verwalten Sie Ihre Anmeldung und – falls aktiviert – Ihren Zugang zum
+    Klassen-Messenger.
+  </p>
+  <p style="margin:.75rem 0">
+    <a href="{% url 'accounts:passkeys' %}" class="btn secondary">Passkeys verwalten</a>
+    {% if matrix_enabled %}
+      <a href="{% url 'matrix:access' %}" class="btn secondary">Messenger-Zugang</a>
+    {% endif %}
+  </p>
 {% endblock %}

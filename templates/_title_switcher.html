@@ -1,0 +1,23 @@
+{% comment %}
+  Page title that doubles as a Gefäß-switcher (list/form quick-switch).
+
+  Renders a plain <h1> when the user has at most one accessible Gefäß, and a
+  dropdown styled to look exactly like that <h1> when they have several — so a
+  parent with siblings in different classes can jump straight between lists (and
+  forms) without leaving the page. `nav_gefaesse` comes from the project
+  `navigation` context processor.
+
+  Caller passes `current_title` (the heading text to show).
+{% endcomment %}
+{% if nav_gefaesse|length > 1 %}
+  <details class="menu title-switcher">
+    <summary>{{ current_title }}</summary>
+    <nav class="menu-panel">
+      {% for g in nav_gefaesse %}
+        <a href="{{ g.url }}"{% if g.url == request.path %} aria-current="page"{% endif %}>{{ g.title }}<span class="menu-kind">{{ g.kind_label }}</span></a>
+      {% endfor %}
+    </nav>
+  </details>
+{% else %}
+  <h1>{{ current_title }}</h1>
+{% endif %}

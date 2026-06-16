@@ -1,21 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Listen — Fichtelink{% endblock %}
+{% block title %}Meine Listen & Formulare — Fichtelink{% endblock %}
 {% block content %}
-  <h1>Listen</h1>
+  <h1>Meine Listen &amp; Formulare</h1>
   <p><a href="{% url 'lists:create' %}"><button type="button">Neue Liste anlegen</button></a></p>
 
-  <h2>Eigene Listen</h2>
-  {% if own_lists %}
+  {% if own_lists or own_forms %}
     <ul>
       {% for l in own_lists %}
         <li><a href="{% url 'lists:detail' pk=l.pk %}">{{ l.title }}</a>
-          <span class="field-label">· {{ l.template.name }}</span>
+          <span class="field-label">· Liste · {{ l.template.name }}</span>
           {% if l.archived_at %}<span style="color:#b00020"> · archiviert</span>{% endif %}
+        </li>
+      {% endfor %}
+      {% for f in own_forms %}
+        <li><a href="{% url 'forms:detail' pk=f.pk %}">{{ f.title }}</a>
+          <span class="field-label">· Formular</span>
         </li>
       {% endfor %}
     </ul>
   {% else %}
-    <p class="field-label">Sie sind in keiner Liste Admin oder Mitglied.</p>
+    <p class="field-label">Sie sind in keiner Liste und keinem Formular eingetragen.</p>
   {% endif %}
 
   {% if public_lists %}

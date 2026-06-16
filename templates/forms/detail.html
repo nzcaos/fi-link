@@ -3,8 +3,7 @@
 {% block page_class %}page-wide{% endblock %}
 
 {% block content %}
-  <p><a href="{% url 'forms:index' %}">← Zurück zu den Formularen</a></p>
-  <h1>{{ form_obj.title }}</h1>
+  {% include "_title_switcher.html" with current_title=form_obj.title %}
 
   {% if share_url %}
     <div style="margin:.5rem 0 1rem;padding:.6rem .8rem;background:var(--surface-soft,#f3f4f6);border-radius:8px">
