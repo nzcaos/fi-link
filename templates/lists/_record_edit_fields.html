@@ -38,8 +38,7 @@ per section (child + linked parents). Context: `form` (a RecordEditForm).
     <code>?N</code> angezeigt (durchnummeriert pro Listenansicht). Listen-Admins und
     Super-Admins sehen den Namen weiterhin.
   </p>
-  <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-  <div>{{ form.vis_name }}</div>
+  <div class="vis-row"><span class="vis-label">Sichtbar für:</span>{{ form.vis_name }}</div>
 </fieldset>
 
 {% if form.name_editable or form.has_email_vis %}
@@ -60,8 +59,7 @@ per section (child + linked parents). Context: `form` (a RecordEditForm).
     <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">
       {{ form.vis_email.help_text }} Listen-Admins und Super-Admins sehen sie weiterhin.
     </p>
-    <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-    <div>{{ form.vis_email }}</div>
+    <div class="vis-row"><span class="vis-label">Sichtbar für:</span>{{ form.vis_email }}</div>
   {% endif %}
 </fieldset>
 {% endif %}
@@ -70,13 +68,13 @@ per section (child + linked parents). Context: `form` (a RecordEditForm).
   <fieldset style="border:1px solid #ddd;padding:0.5rem 1rem;margin:0.75rem 0;border-radius:4px">
     <legend style="font-weight:500">{{ attribute.name }}</legend>
 
-    {{ value_field.label_tag }}
+    {% comment %}Kein eigenes Feld-Label: es wäre identisch zur Rahmen-Überschrift
+       (legend). Bei Name/E-Mail bleibt das Label, weil es dort erläuternden Text gibt.{% endcomment %}
     {{ value_field }}
     {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
 
     {% if vis_field %}
-      <p style="font-size:0.85rem;color:#555;margin:0.5rem 0 0.25rem">Sichtbar für:</p>
-      <div>{{ vis_field }}</div>
+      <div class="vis-row"><span class="vis-label">Sichtbar für:</span>{{ vis_field }}</div>
     {% else %}
       <p style="font-size:0.85rem;color:#555">Dieses Feld ist immer öffentlich (Vorlage erzwingt das).</p>
     {% endif %}

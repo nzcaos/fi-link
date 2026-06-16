@@ -2567,6 +2567,18 @@ class ComposedRowTests(TestCase):
             "+49 999",
         )
 
+    def test_record_edit_form_filters_attributes_by_role(self):
+        # Each record's form offers only the attributes of its own role: the
+        # child (member) edits member attributes, a parent (associate) edits
+        # associate attributes. Without this the parent sections wrongly showed
+        # the child's member attributes (e.g. the address grid).
+        child_form = RecordEditForm(record=self.child_rec, user=self.mom)
+        self.assertIn(f"attr_{self.attr_notes.pk}", child_form.fields)   # member
+        self.assertNotIn(f"attr_{self.attr_phone.pk}", child_form.fields)  # associate
+        mom_form = RecordEditForm(record=self.mom_rec, user=self.mom)
+        self.assertIn(f"attr_{self.attr_phone.pk}", mom_form.fields)     # associate
+        self.assertNotIn(f"attr_{self.attr_notes.pk}", mom_form.fields)  # member
+
 
 class Phase3b2E2ETests(TestCase):
     """Phase 3b-2 / End-to-end Smoke: drive a visitor through more than one

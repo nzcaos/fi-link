@@ -166,6 +166,16 @@
     .icon { width: .85rem; height: .85rem; fill: none; stroke: currentColor; stroke-width: 2;
              stroke-linecap: round; stroke-linejoin: round; }
 
+    /* Visibility ("Sichtbar für:") checkbox group laid out horizontally, the
+       label inline before the checkboxes (record-edit dialog). Overrides the
+       global block-level label so the options sit on one wrapping row. */
+    .vis-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .85rem;
+               margin: .45rem 0 .25rem; }
+    .vis-row .vis-label { font-size: .85rem; color: #555; }
+    .vis-row > div { display: flex; flex-wrap: wrap; gap: .1rem .85rem; }
+    .vis-row label { display: inline-flex; align-items: center; gap: .3rem; margin: 0;
+               font-weight: 400; font-size: .92rem; }
+
     .passkey-row { display: flex; justify-content: space-between; align-items: center;
                    gap: .75rem; padding: 0.7rem 0.25rem; border-bottom: 1px solid var(--border); }
     .passkey-row:last-child { border-bottom: 0; }

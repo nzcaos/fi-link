@@ -330,7 +330,20 @@ class RecordEditForm(forms.Form):
                 disabled=not self.user_can_edit_visibility,
             )
 
-        for attribute in record.list.template.attributes.all():
+        # Only the attributes that belong to THIS record's role are editable
+        # here: a member record (e.g. the child) edits member-role attributes, an
+        # associate record (e.g. a parent) edits associate-role ones. Without this
+        # the family dialog offered each parent the member attributes too (the
+        # child's address grid), which aren't shown for the parent in the list and
+        # are edited where that person is a member instead. For self-mode lists
+        # every attribute is member-role and the record is a member, so this is a
+        # no-op there.
+        self._role_attributes = [
+            a
+            for a in record.list.template.attributes.all()
+            if a.applies_to_role == record.role
+        ]
+        for attribute in self._role_attributes:
             value_key = f"{_ATTR_FIELD_PREFIX}{attribute.pk}"
             field = _build_field_for_attribute(attribute)
             initial_raw = values.get(attribute.pk, "")
@@ -358,7 +371,7 @@ class RecordEditForm(forms.Form):
 
     def iter_attribute_rows(self):
         """Render-helper: yields (attribute, value_field, visibility_field|None)."""
-        for attribute in self.record.list.template.attributes.all():
+        for attribute in self._role_attributes:
             value_field = self[f"{_ATTR_FIELD_PREFIX}{attribute.pk}"]
             vis_field = None
             vis_key = f"{_AUDIENCE_FIELD_PREFIX}{attribute.pk}"
