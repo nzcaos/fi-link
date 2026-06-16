@@ -39,8 +39,8 @@ attribute columns line up because `parent.cells` is positional over
               {% include "lists/_child_cell.html" with row=row show_actions=show_actions list_obj=list_obj member_col_count=member_col_count %}
             {% endif %}
             <td>
-              {# Bezugspersonen werden im Familien-Dialog des Kindes bearbeitet,
-                 daher hier kein eigenes Bearbeiten-Icon mehr. #}
+              {% comment %}Bezugspersonen werden im Familien-Dialog des Kindes
+                 bearbeitet, daher hier kein eigenes Bearbeiten-Icon mehr.{% endcomment %}
               <span class="parent-role">{{ parent.label }}</span>
               <span class="parent-name">{{ parent.subject_display }}</span>
             </td>
