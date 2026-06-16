@@ -213,8 +213,12 @@ def _audience_choices_for(list_obj: List) -> list[tuple[str, str]]:
     """Audience options offered on the visibility matrix for a record in
     `list_obj`. Format: (key, label). Key is "public" or "list-<id>".
     """
-    options: list[tuple[str, str]] = [("public", "Öffentlich")]
-    options.append((f"list-{list_obj.pk}", f'Mitglieder von „{list_obj.title}"'))
+    # "Alle in dieser Liste" is the public (audience NULL) catch-all — everyone
+    # who may see the list. The list's OWN Benutzergruppe is deliberately NOT a
+    # separate option: for the own list it is identical to "public" (a migration
+    # folds pre-existing own-list grants into NULL). The remaining options target
+    # DIFFERENT collectives in the hierarchy (parent list / sub-lists).
+    options: list[tuple[str, str]] = [("public", "Alle in dieser Liste")]
     if list_obj.parent_id:
         options.append(
             (f"list-{list_obj.parent_id}", f'Mitglieder von „{list_obj.parent.title}"')

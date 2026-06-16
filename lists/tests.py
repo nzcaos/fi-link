@@ -463,7 +463,7 @@ class RecordEditFormTests(TestCase):
             data={
                 f"attr_{self.attr_name.pk}": "Anna",
                 f"attr_{self.attr_phone.pk}": "111",
-                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+                f"vis_{self.attr_phone.pk}": ["public"],
             },
             record=self.record,
             user=self.owner,
@@ -472,7 +472,7 @@ class RecordEditFormTests(TestCase):
         form.save()
         rows = ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
         self.assertEqual(rows.count(), 1)
-        self.assertEqual(rows.first().audience_id, self.lst.pk)
+        self.assertIsNone(rows.first().audience_id)
 
     def test_n13_save_acquires_row_lock_on_record(self):
         """N13: save() must run inside a tx that holds a row-level lock on
@@ -488,7 +488,7 @@ class RecordEditFormTests(TestCase):
             data={
                 f"attr_{self.attr_name.pk}": "Anna",
                 f"attr_{self.attr_phone.pk}": "0",
-                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+                f"vis_{self.attr_phone.pk}": ["public"],
             },
             record=self.record,
             user=self.owner,
@@ -616,7 +616,7 @@ class B3VisibilityWriteGateTests(TestCase):
         form = RecordEditForm(
             data={
                 f"attr_{self.attr_phone.pk}": "0123 owner-edit",
-                f"vis_{self.attr_phone.pk}": [f"list-{self.lst.pk}"],
+                f"vis_{self.attr_phone.pk}": ["public"],
             },
             record=self.record,
             user=self.owner,
@@ -627,7 +627,7 @@ class B3VisibilityWriteGateTests(TestCase):
             ListRecordAccess.objects.filter(record=self.record, attribute=self.attr_phone)
         )
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].audience_id, self.lst.pk)
+        self.assertIsNone(rows[0].audience_id)
 
 
 class M8SubjectNameVisibilityTests(TestCase):
