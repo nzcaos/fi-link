@@ -319,18 +319,26 @@ class MatrixClient:
         )
         log.info("matrix: unbanned %s from %s", user_id, room_id)
 
-    def room_member_ids(self, access_token: str, room_id: str, memberships=("join", "invite")) -> set[str]:
-        """Return the set of user ids whose membership is in `memberships`.
-
-        Built from the room state (m.room.member events) — used by the reconcile
-        task to find list members who are missing from the room.
+    def room_memberships(self, access_token: str, room_id: str) -> dict[str, str]:
+        """Map user_id → membership ("join" | "invite" | "ban" | "leave") from
+        the room's m.room.member state events.
         """
-        present: set[str] = set()
+        result: dict[str, str] = {}
         for ev in self.get_room_state(access_token, room_id):
             if ev.get("type") != "m.room.member":
                 continue
-            if ev.get("content", {}).get("membership") in memberships:
-                state_key = ev.get("state_key")
-                if state_key:
-                    present.add(state_key)
-        return present
+            state_key = ev.get("state_key")
+            membership = ev.get("content", {}).get("membership")
+            if state_key and membership:
+                result[state_key] = membership
+        return result
+
+    def room_member_ids(self, access_token: str, room_id: str, memberships=("join", "invite")) -> set[str]:
+        """Set of user ids whose membership is in `memberships` (default the
+        "present" states). Used by the reconcile task to find missing members.
+        """
+        return {
+            uid
+            for uid, m in self.room_memberships(access_token, room_id).items()
+            if m in memberships
+        }

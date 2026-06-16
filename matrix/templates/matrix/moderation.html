@@ -5,39 +5,52 @@
   <h1>Klassenraum-Moderation „{{ list_obj.title }}"</h1>
   <p style="color:#666;max-width:42rem">
     Notfallwerkzeug: Ein Bann hält ein Mitglied aus dem Matrix-Raum fern, ohne es
-    aus der Liste zu entfernen. Wer die Liste verlässt, wird ohnehin automatisch
-    aus dem Raum entfernt — bann hier nur bei Störungen, die ein Fernhalten
-    erfordern. „Bann aufheben" macht ein erneutes Einladen wieder möglich.
+    aus der Liste zu entfernen. „Bann aufheben" hebt die Sperre auf und lädt die
+    Person zugleich wieder ein. Wer die Liste verlässt, wird ohnehin automatisch
+    aus dem Raum entfernt.
   </p>
+
+  {% if membership_unknown %}
+    <div class="error" style="max-width:42rem">
+      Der aktuelle Raum-Status konnte nicht abgerufen werden — die angezeigten
+      Aktionen sind daher nicht statusgenau.
+    </div>
+  {% endif %}
 
   {% if members %}
     <table style="border-collapse:collapse;font-size:0.95rem;margin-top:1rem">
       <thead>
         <tr style="background:#f4f4f4">
           <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Person</th>
-          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Matrix-ID</th>
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Status</th>
           <th style="border-bottom:1px solid #ddd"></th>
         </tr>
       </thead>
       <tbody>
-        {% for access in members %}
+        {% for m in members %}
           <tr>
-            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ access.user.person.full_name }}</td>
-            <td style="padding:0.4rem;border-bottom:1px solid #eee;font-family:monospace">{{ access.user.matrix_account.matrix_user_id }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">
+              {{ m.user.person.full_name }}
+              <div style="font-size:0.75rem;color:#888;font-family:monospace">{{ m.mxid }}</div>
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">
+              {% if m.state == "join" %}<span style="color:#064">im Raum</span>
+              {% elif m.state == "invite" %}<span style="color:#a60">eingeladen</span>
+              {% elif m.state == "ban" %}<strong style="color:#b00020">gebannt</strong>
+              {% else %}<span style="color:#888">nicht im Raum</span>{% endif %}
+            </td>
             <td style="padding:0.4rem;border-bottom:1px solid #eee;text-align:right;white-space:nowrap">
-              <form method="post" style="display:inline"
-                    onsubmit="return confirm('{{ access.user.person.full_name }} aus dem Klassenraum verbannen?');">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="ban">
-                <input type="hidden" name="user_id" value="{{ access.user.pk }}">
-                <button type="submit" class="secondary">Bannen</button>
-              </form>
-              <form method="post" style="display:inline">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="unban">
-                <input type="hidden" name="user_id" value="{{ access.user.pk }}">
-                <button type="submit" class="secondary">Bann aufheben</button>
-              </form>
+              {% if membership_unknown %}
+                {# Status unbekannt → alle Aktionen anbieten #}
+                {% include "matrix/_mod_button.html" with action="ban" user_id=m.user.pk label="Bannen" confirm=m.user.person.full_name %}
+                {% include "matrix/_mod_button.html" with action="unban" user_id=m.user.pk label="Bann aufheben & einladen" %}
+              {% elif m.state == "ban" %}
+                {% include "matrix/_mod_button.html" with action="unban" user_id=m.user.pk label="Bann aufheben & einladen" %}
+              {% elif m.state == "join" or m.state == "invite" %}
+                {% include "matrix/_mod_button.html" with action="ban" user_id=m.user.pk label="Bannen" confirm=m.user.person.full_name %}
+              {% else %}
+                {% include "matrix/_mod_button.html" with action="invite" user_id=m.user.pk label="Einladen" %}
+              {% endif %}
             </td>
           </tr>
         {% endfor %}

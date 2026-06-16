@@ -211,6 +211,17 @@ def unban_user_from_list(user, list_obj) -> None:
         _tolerate_logical(exc, f"unban {account.matrix_user_id} from {room.room_id}")
 
 
+def room_membership_for_list(list_obj) -> dict[str, str]:
+    """Map matrix_user_id → membership for the list's room (for the moderation
+    UI). Empty if the list has no room yet.
+    """
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if room is None:
+        return {}
+    client = MatrixClient.from_settings()
+    return client.room_memberships(_service_token(), room.room_id)
+
+
 def reconcile_list_room(list_obj) -> int:
     """Repair membership drift: invite every Benutzergruppe member (USER with a
     Matrix account) who is not currently joined/invited to the room. Returns the

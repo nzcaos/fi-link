@@ -101,22 +101,48 @@ def room_moderation(request: HttpRequest, pk: int) -> HttpResponse:
     if request.method == "POST":
         action = request.POST.get("action")
         target = User.objects.filter(pk=request.POST.get("user_id")).first()
-        if target and action in ("ban", "unban"):
+        if target and action in ("ban", "unban", "invite"):
             try:
                 if action == "ban":
                     service.ban_user_from_list(target, lst, reason="von Admin gebannt")
                     messages.success(request, f"{target.person.full_name} aus dem Klassenraum verbannt.")
-                else:
+                elif action == "unban":
+                    # Unban alone only lifts the block — Matrix does NOT re-invite.
+                    # Re-invite so the person actually comes back into the room.
                     service.unban_user_from_list(target, lst)
-                    messages.success(request, f"Bann für {target.person.full_name} aufgehoben.")
+                    service.sync_user_into_room(target, lst)
+                    messages.success(request, f"Bann für {target.person.full_name} aufgehoben und neu eingeladen.")
+                else:  # invite
+                    service.sync_user_into_room(target, lst)
+                    messages.success(request, f"{target.person.full_name} in den Klassenraum eingeladen.")
             except MatrixError as exc:
                 log.warning("matrix: %s on list %s failed: %s", action, lst.pk, exc)
                 messages.error(request, "Aktion fehlgeschlagen. Bitte später erneut versuchen.")
         return redirect("matrix:moderation", pk=lst.pk)
 
-    members = (
+    accesses = (
         ListAccess.objects.filter(list=lst, user__matrix_account__isnull=False)
         .select_related("user__person", "user__matrix_account")
         .order_by("user__person__family_name", "user__person__given_name")
     )
-    return render(request, "matrix/moderation.html", {"list_obj": lst, "members": members})
+    # Annotate each member with their current room membership so the UI shows
+    # the state and offers only the action that makes sense. If Synapse can't be
+    # reached, fall back to "unknown" (the template then offers all actions).
+    try:
+        membership = service.room_membership_for_list(lst)
+        membership_unknown = False
+    except MatrixError as exc:
+        log.warning("matrix: membership fetch for list %s failed: %s", lst.pk, exc)
+        membership = {}
+        membership_unknown = True
+
+    members = []
+    for access in accesses:
+        mxid = access.user.matrix_account.matrix_user_id
+        members.append({"user": access.user, "mxid": mxid, "state": membership.get(mxid)})
+
+    return render(
+        request,
+        "matrix/moderation.html",
+        {"list_obj": lst, "members": members, "membership_unknown": membership_unknown},
+    )

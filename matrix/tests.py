@@ -591,9 +591,23 @@ class RoomModerationViewTests(TestCase):
     @override_settings(MATRIX_ENABLED=True)
     def test_admin_get_lists_members(self):
         self.client.force_login(self.admin)
-        resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
+        with patch.object(service, "room_membership_for_list", return_value={}):
+            resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "@u-m:fichtelink.caos.cloud")
+        # no room membership → "nicht im Raum" + an invite action
+        self.assertContains(resp, "Einladen")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_get_shows_banned_state_and_unban_action(self):
+        self.client.force_login(self.admin)
+        with patch.object(
+            service, "room_membership_for_list",
+            return_value={"@u-m:fichtelink.caos.cloud": "ban"},
+        ):
+            resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
+        self.assertContains(resp, "gebannt")
+        self.assertContains(resp, "Bann aufheben")
 
     @override_settings(MATRIX_ENABLED=True)
     def test_admin_post_ban(self):
@@ -605,6 +619,19 @@ class RoomModerationViewTests(TestCase):
             )
         self.assertEqual(resp.status_code, 302)
         ban.assert_called_once_with(self.member, self.list, reason="von Admin gebannt")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_post_unban_also_reinvites(self):
+        self.client.force_login(self.admin)
+        with patch.object(service, "unban_user_from_list") as unban, \
+             patch.object(service, "sync_user_into_room") as reinvite:
+            resp = self.client.post(
+                reverse("matrix:moderation", args=[self.list.pk]),
+                {"action": "unban", "user_id": self.member.pk},
+            )
+        self.assertEqual(resp.status_code, 302)
+        unban.assert_called_once_with(self.member, self.list)
+        reinvite.assert_called_once_with(self.member, self.list)
 
     @override_settings(MATRIX_ENABLED=True)
     def test_non_admin_forbidden(self):

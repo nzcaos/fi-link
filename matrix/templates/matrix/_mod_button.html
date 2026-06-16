@@ -1,0 +1,8 @@
+{# Reusable moderation action button. Params: action, user_id, label, confirm (optional name). #}
+<form method="post" style="display:inline"
+      {% if confirm %}onsubmit="return confirm('{{ confirm }} aus dem Klassenraum verbannen?');"{% endif %}>
+  {% csrf_token %}
+  <input type="hidden" name="action" value="{{ action }}">
+  <input type="hidden" name="user_id" value="{{ user_id }}">
+  <button type="submit" class="secondary">{{ label }}</button>
+</form>
