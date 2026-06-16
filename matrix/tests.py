@@ -453,3 +453,79 @@ class MembershipSignalTests(TestCase):
             with self.captureOnCommitCallbacks(execute=True):
                 ListAccess.objects.create(list=self.room_list, user=self.user)
         defer.assert_not_called()
+
+
+@override_settings(MATRIX_ENABLED=True)
+class SendToListServiceTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        MatrixServiceAccount.objects.create(
+            matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc-token"
+        )
+        self.room = MatrixRoom.objects.create(list=self.list, room_id="!r:fichtelink.caos.cloud")
+
+    def test_sends_as_service_account(self):
+        with patch.object(MatrixClient, "send_message", return_value="$evt") as sm:
+            event_id = service.send_to_list(self.list, "Bus 5a: 45 Min Verspätung.")
+        self.assertEqual(event_id, "$evt")
+        sm.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "Bus 5a: 45 Min Verspätung.")
+
+    @override_settings(MATRIX_ENABLED=False)
+    def test_disabled_raises(self):
+        with self.assertRaises(MatrixError):
+            service.send_to_list(self.list, "hi")
+
+
+class SendMessageViewTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        self.plain_list = List.objects.create(title="VHS", email_alias="vhs", template=self.template)
+        admin_p = Person.objects.create(given_name="Ad", family_name="Min", email="admin@example.invalid")
+        self.admin = User.objects.create_user(person=admin_p, username="admin")
+        ListAdmin.objects.create(list=self.list, user=self.admin)
+        other_p = Person.objects.create(given_name="Ot", family_name="Her", email="other@example.invalid")
+        self.other = User.objects.create_user(person=other_p, username="other")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_admin_get_renders_form(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("matrix:send", args=[self.list.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Klassenraum")
+        self.assertContains(resp, "<textarea")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_admin_post_sends_and_redirects(self):
+        self.client.force_login(self.admin)
+        with patch.object(service, "send_to_list", return_value="$evt") as send:
+            resp = self.client.post(reverse("matrix:send", args=[self.list.pk]), {"body": "Ausflug abgesagt."})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("lists:detail", args=[self.list.pk]))
+        send.assert_called_once_with(self.list, "Ausflug abgesagt.")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_empty_body_does_not_send(self):
+        self.client.force_login(self.admin)
+        with patch.object(service, "send_to_list") as send:
+            resp = self.client.post(reverse("matrix:send", args=[self.list.pk]), {"body": "   "})
+        self.assertEqual(resp.status_code, 200)
+        send.assert_not_called()
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_non_admin_forbidden(self):
+        self.client.force_login(self.other)
+        resp = self.client.get(reverse("matrix:send", args=[self.list.pk]))
+        self.assertEqual(resp.status_code, 403)
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_forbidden_when_room_not_enabled(self):
+        ListAdmin.objects.create(list=self.plain_list, user=self.admin)
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("matrix:send", args=[self.plain_list.pk]))
+        self.assertEqual(resp.status_code, 403)

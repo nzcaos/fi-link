@@ -184,3 +184,17 @@ def rename_room(list_obj) -> None:
         return
     client = MatrixClient.from_settings()
     client.set_room_name(_service_token(), room.room_id, list_obj.title)
+
+
+def send_to_list(list_obj, body: str) -> str:
+    """Post a message to the list's room as the service account (PL 100, so it
+    sends in chat *and* broadcast mode). Creates the room if eligible and not
+    yet present. Returns the event id.
+    """
+    if not settings.MATRIX_ENABLED:
+        raise MatrixError("Matrix-Integration ist deaktiviert (MATRIX_ENABLED=False).")
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if room is None:
+        room = ensure_room_for_list(list_obj)
+    client = MatrixClient.from_settings()
+    return client.send_message(_service_token(), room.room_id, body)

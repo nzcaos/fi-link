@@ -82,3 +82,19 @@ def sync_room_name(list_id: int) -> None:
     lst = List.objects.filter(pk=list_id).first()
     if lst:
         service.rename_room(lst)
+
+
+@app.task(name="matrix.send_broadcast", pass_context=False)
+def send_matrix_broadcast(list_id: int, body: str) -> None:
+    """Programmatic / retryable send path. The admin UI sends inline for
+    immediate feedback; this exists for callers that prefer fire-and-forget.
+    """
+    if not settings.MATRIX_ENABLED:
+        return
+    from lists.models import List
+
+    from . import service
+
+    lst = List.objects.filter(pk=list_id).first()
+    if lst:
+        service.send_to_list(lst, body)

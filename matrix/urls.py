@@ -6,4 +6,5 @@ app_name = "matrix"
 
 urlpatterns = [
     path("zugang/", views.messenger_access, name="access"),
+    path("liste/<int:pk>/senden/", views.send_message, name="send"),
 ]

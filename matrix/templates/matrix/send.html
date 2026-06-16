@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Nachricht an Klassenraum — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Nachricht an den Klassenraum „{{ list_obj.title }}"</h1>
+  <p style="color:#666;max-width:42rem">
+    Die Nachricht erscheint sofort im Matrix-Klassenraum bei allen Mitgliedern,
+    die Element verbunden haben — gedacht für kurzfristige Infos (z. B. „Ausflug
+    wegen Wetter abgesagt", „Bus verspätet sich um 45 Minuten"). Sie wird im
+    Namen des Systems gesendet, nicht unter deinem Klarnamen.
+  </p>
+
+  <form method="post" style="margin:1rem 0;max-width:42rem">
+    {% csrf_token %}
+    <textarea name="body" rows="4" required
+              style="width:100%;font-size:1rem;padding:0.5rem"
+              placeholder="Kurze Nachricht an die Klasse …"></textarea>
+    <div style="margin-top:0.75rem">
+      <button type="submit">Senden</button>
+      <a href="{% url 'lists:detail' pk=list_obj.pk %}" class="secondary" style="margin-left:0.5rem">Abbrechen</a>
+    </div>
+  </form>
+{% endblock %}
