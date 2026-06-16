@@ -2523,6 +2523,50 @@ class ComposedRowTests(TestCase):
         self.assertContains(resp, "+49 111")
         self.assertContains(resp, "+49 222")
 
+    def test_record_edit_renders_family_dialog(self):
+        # Regression: editing a child opens the combined family dialog (child +
+        # each editable parent). A misplaced @login_required on the helper once
+        # made this 500 ("'User' object has no attribute 'user'").
+        client = Client()
+        client.force_login(self.mom)
+        resp = client.get(
+            reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": self.child_rec.pk})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Schulkind")        # child section heading
+        self.assertContains(resp, "Lina Mueller")     # child
+        self.assertContains(resp, "Mutter")           # role-derived parent heading
+        self.assertContains(resp, "Eva Mueller")      # mom's own associate record
+        self.assertContains(resp, "Vater")
+        self.assertContains(resp, "Olaf Mueller")     # dad's associate record
+
+    def test_record_edit_family_save_updates_all_sections(self):
+        # One submit saves the child and every parent section. Parent fields are
+        # namespaced `a<pk>-…` so they don't collide with the unprefixed anchor.
+        client = Client()
+        client.force_login(self.mom)
+        ap = f"a{self.dad_rec.pk}-"
+        resp = client.post(
+            reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": self.child_rec.pk}),
+            {
+                "subject_given_name": "Lina",
+                "subject_family_name": "Mueller",
+                f"attr_{self.attr_notes.pk}": "mag Mathe und Physik",
+                f"{ap}subject_given_name": "Olaf",
+                f"{ap}subject_family_name": "Mueller",
+                f"{ap}attr_{self.attr_phone.pk}": "+49 999",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)  # redirect back to the list
+        self.assertEqual(
+            ListRecordValue.objects.get(record=self.child_rec, attribute=self.attr_notes).value,
+            "mag Mathe und Physik",
+        )
+        self.assertEqual(
+            ListRecordValue.objects.get(record=self.dad_rec, attribute=self.attr_phone).value,
+            "+49 999",
+        )
+
 
 class Phase3b2E2ETests(TestCase):
     """Phase 3b-2 / End-to-end Smoke: drive a visitor through more than one
