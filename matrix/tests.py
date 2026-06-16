@@ -15,7 +15,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import Person, User
-from lists.models import List, ListTemplate
+from lists.models import List, ListAccess, ListAdmin, ListTemplate
 from matrix import service
 from matrix.client import MatrixClient, MatrixError
 from matrix.models import MatrixAccount, MatrixRoom, MatrixServiceAccount
@@ -329,3 +329,127 @@ class RoomStateClientTests(TestCase):
         self.assertEqual(method, "GET")
         self.assertTrue(path.endswith("/state"))
         self.assertEqual(req.call_args.kwargs["access_token"], "tok")
+
+
+@override_settings(MATRIX_ENABLED=True)
+class MembershipSyncServiceTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        self.person = Person.objects.create(given_name="A", family_name="B", email="a@example.invalid")
+        self.user = User.objects.create_user(person=self.person, username="ab")
+        MatrixServiceAccount.objects.create(
+            matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc-token"
+        )
+        self.account = MatrixAccount.objects.create(
+            user=self.user, matrix_user_id="@u-x:fichtelink.caos.cloud", password="pw"
+        )
+        self.room = MatrixRoom.objects.create(list=self.list, room_id="!r:fichtelink.caos.cloud")
+
+    def test_member_invited_without_power_bump(self):
+        with patch.object(MatrixClient, "invite") as inv, patch.object(MatrixClient, "set_user_power_level") as pl:
+            service.sync_user_into_room(self.user, self.list)
+        inv.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-x:fichtelink.caos.cloud")
+        pl.assert_not_called()
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.onboarding_status, MatrixAccount.Status.INVITED)
+
+    def test_admin_invited_and_promoted(self):
+        ListAdmin.objects.create(list=self.list, user=self.user)
+        with patch.object(MatrixClient, "invite"), patch.object(MatrixClient, "set_user_power_level") as pl:
+            service.sync_user_into_room(self.user, self.list)
+        pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-x:fichtelink.caos.cloud", 50)
+
+    def test_invite_tolerates_logical_error(self):
+        with patch.object(
+            MatrixClient, "invite",
+            side_effect=MatrixError("already in the room", errcode="M_FORBIDDEN", status=403),
+        ), patch.object(MatrixClient, "set_user_power_level"):
+            service.sync_user_into_room(self.user, self.list)  # must not raise
+
+    def test_invite_reraises_transport_error(self):
+        with patch.object(MatrixClient, "invite", side_effect=MatrixError("boom")):
+            with self.assertRaises(MatrixError):
+                service.sync_user_into_room(self.user, self.list)
+
+    def test_remove_kicks(self):
+        with patch.object(MatrixClient, "kick") as kick:
+            service.remove_user_from_room(self.user, self.list)
+        kick.assert_called_once()
+
+    def test_remove_noop_without_room(self):
+        other = List.objects.create(
+            title="X", email_alias="x", template=self.template, matrix_room_enabled=True
+        )
+        with patch.object(MatrixClient, "kick") as kick:
+            service.remove_user_from_room(self.user, other)
+        kick.assert_not_called()
+
+    def test_sync_power_demote(self):
+        with patch.object(MatrixClient, "set_user_power_level") as pl:
+            service.sync_user_power(self.user, self.list, is_admin=False)
+        pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-x:fichtelink.caos.cloud", 0)
+
+    def test_rename_room(self):
+        with patch.object(MatrixClient, "set_room_name") as sn:
+            service.rename_room(self.list)
+        sn.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "Klasse 5a")
+
+
+@override_settings(MATRIX_ENABLED=True)
+class MembershipSignalTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.room_list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        self.plain_list = List.objects.create(title="VHS", email_alias="vhs", template=self.template)
+        self.person = Person.objects.create(given_name="A", family_name="B", email="a@example.invalid")
+        self.user = User.objects.create_user(person=self.person, username="ab")
+
+    def test_join_enqueues_for_enabled_list(self):
+        from matrix import tasks
+        with patch.object(tasks.sync_membership_join, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                ListAccess.objects.create(list=self.room_list, user=self.user)
+        defer.assert_called_once_with(user_id=self.user.id, list_id=self.room_list.id)
+
+    def test_join_skipped_for_plain_list(self):
+        from matrix import tasks
+        with patch.object(tasks.sync_membership_join, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                ListAccess.objects.create(list=self.plain_list, user=self.user)
+        defer.assert_not_called()
+
+    def test_leave_enqueues_kick(self):
+        from matrix import tasks
+        access = ListAccess.objects.create(list=self.room_list, user=self.user)
+        with patch.object(tasks.sync_membership_leave, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                access.delete()
+        defer.assert_called_once_with(user_id=self.user.id, list_id=self.room_list.id)
+
+    def test_admin_add_enqueues_power(self):
+        from matrix import tasks
+        with patch.object(tasks.sync_admin_power, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                ListAdmin.objects.create(list=self.room_list, user=self.user)
+        defer.assert_called_once_with(user_id=self.user.id, list_id=self.room_list.id, is_admin=True)
+
+    def test_rename_enqueued_on_title_change(self):
+        from matrix import tasks
+        with patch.object(tasks.sync_room_name, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.room_list.title = "Klasse 6a"
+                self.room_list.save(update_fields=["title"])
+        defer.assert_called_once_with(list_id=self.room_list.id)
+
+    @override_settings(MATRIX_ENABLED=False)
+    def test_disabled_enqueues_nothing(self):
+        from matrix import tasks
+        with patch.object(tasks.sync_membership_join, "defer") as defer:
+            with self.captureOnCommitCallbacks(execute=True):
+                ListAccess.objects.create(list=self.room_list, user=self.user)
+        defer.assert_not_called()

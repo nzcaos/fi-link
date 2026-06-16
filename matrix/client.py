@@ -242,6 +242,19 @@ class MatrixClient:
         )
         log.info("matrix: set power level %s for %s in %s", level, user_id, room_id)
 
+    def set_room_name(self, access_token: str, room_id: str, name: str) -> None:
+        """Set m.room.name — used to keep the room title in sync on rollover."""
+        from urllib.parse import quote
+
+        rid = quote(room_id, safe="")
+        self._request(
+            "PUT",
+            f"/_matrix/client/v3/rooms/{rid}/state/m.room.name/",
+            json={"name": name},
+            access_token=access_token,
+        )
+        log.info("matrix: set room name %r for %s", name, room_id)
+
     def invite(self, access_token: str, room_id: str, user_id: str) -> None:
         from urllib.parse import quote
 

@@ -104,3 +104,83 @@ def ensure_room_for_list(list_obj) -> MatrixRoom:
     room = MatrixRoom.objects.create(list=list_obj, room_id=room_id)
     log.info("matrix: created room %s for list %s", room_id, list_obj.pk)
     return room
+
+
+# ---------------------------------------------------------------------------
+# Membership sync (Phase 4) — orchestration called from the procrastinate tasks
+# that the ListAccess / ListAdmin / List signals enqueue.
+# ---------------------------------------------------------------------------
+
+
+def _service_token() -> str:
+    svc = MatrixServiceAccount.get()
+    if svc is None:
+        raise MatrixError("Kein Matrix-Service-Konto vorhanden — matrix_bootstrap_service_account.")
+    return svc.access_token
+
+
+def _is_list_admin(user, list_obj) -> bool:
+    from lists.models import ListAdmin
+
+    return ListAdmin.objects.filter(list=list_obj, user=user).exists()
+
+
+def _tolerate_logical(exc: MatrixError, what: str) -> None:
+    """A 4xx with an errcode is a logical state (already in room, not in room,
+    …) — log and move on. A transport error (no errcode) is transient, so it
+    re-raises and the procrastinate task retries it.
+    """
+    if exc.errcode is None:
+        raise exc
+    log.info("matrix: %s skipped (%s)", what, exc)
+
+
+def sync_user_into_room(user, list_obj) -> None:
+    """Ensure the user's account + the list's room exist, invite them, and set
+    their power level (admin → 50, member stays at users_default 0). Idempotent.
+    """
+    account = ensure_matrix_account(user)
+    room = ensure_room_for_list(list_obj)
+    client = MatrixClient.from_settings()
+    token = _service_token()
+    try:
+        client.invite(token, room.room_id, account.matrix_user_id)
+    except MatrixError as exc:
+        _tolerate_logical(exc, f"invite {account.matrix_user_id} to {room.room_id}")
+    if _is_list_admin(user, list_obj):
+        client.set_user_power_level(token, room.room_id, account.matrix_user_id, 50)
+    if account.onboarding_status != MatrixAccount.Status.INVITED:
+        account.onboarding_status = MatrixAccount.Status.INVITED
+        account.save(update_fields=["onboarding_status", "updated_at"])
+
+
+def remove_user_from_room(user, list_obj) -> None:
+    """Kick the user from the list's room (on self-removal / list leave)."""
+    account = MatrixAccount.objects.filter(user=user).first()
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if not account or not room:
+        return
+    client = MatrixClient.from_settings()
+    try:
+        client.kick(_service_token(), room.room_id, account.matrix_user_id, reason="aus Liste entfernt")
+    except MatrixError as exc:
+        _tolerate_logical(exc, f"kick {account.matrix_user_id} from {room.room_id}")
+
+
+def sync_user_power(user, list_obj, is_admin: bool) -> None:
+    """Promote/demote a user's power level (list-admin change → 50 / 0)."""
+    account = MatrixAccount.objects.filter(user=user).first()
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if not account or not room:
+        return
+    client = MatrixClient.from_settings()
+    client.set_user_power_level(_service_token(), room.room_id, account.matrix_user_id, 50 if is_admin else 0)
+
+
+def rename_room(list_obj) -> None:
+    """Sync the room name to the list title (rollover renames 5a → 6a)."""
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if not room:
+        return
+    client = MatrixClient.from_settings()
+    client.set_room_name(_service_token(), room.room_id, list_obj.title)

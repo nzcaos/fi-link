@@ -26,3 +26,59 @@ def provision_matrix_account(user_id: int) -> None:
 
     user = User.objects.get(pk=user_id)
     ensure_matrix_account(user)
+
+
+def _resolve(user_id: int, list_id: int):
+    from accounts.models import User
+    from lists.models import List
+
+    return (
+        User.objects.filter(pk=user_id).first(),
+        List.objects.filter(pk=list_id).first(),
+    )
+
+
+@app.task(name="matrix.sync_membership_join", pass_context=False)
+def sync_membership_join(user_id: int, list_id: int) -> None:
+    if not settings.MATRIX_ENABLED:
+        return
+    from . import service
+
+    user, lst = _resolve(user_id, list_id)
+    if user and lst:
+        service.sync_user_into_room(user, lst)
+
+
+@app.task(name="matrix.sync_membership_leave", pass_context=False)
+def sync_membership_leave(user_id: int, list_id: int) -> None:
+    if not settings.MATRIX_ENABLED:
+        return
+    from . import service
+
+    user, lst = _resolve(user_id, list_id)
+    if user and lst:
+        service.remove_user_from_room(user, lst)
+
+
+@app.task(name="matrix.sync_admin_power", pass_context=False)
+def sync_admin_power(user_id: int, list_id: int, is_admin: bool) -> None:
+    if not settings.MATRIX_ENABLED:
+        return
+    from . import service
+
+    user, lst = _resolve(user_id, list_id)
+    if user and lst:
+        service.sync_user_power(user, lst, is_admin)
+
+
+@app.task(name="matrix.sync_room_name", pass_context=False)
+def sync_room_name(list_id: int) -> None:
+    if not settings.MATRIX_ENABLED:
+        return
+    from lists.models import List
+
+    from . import service
+
+    lst = List.objects.filter(pk=list_id).first()
+    if lst:
+        service.rename_room(lst)
