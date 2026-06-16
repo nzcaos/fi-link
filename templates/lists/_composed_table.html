@@ -7,9 +7,9 @@ actions are wanted — `show_actions` + `list_obj`.
 
 One <tr> per linked parent. The child's name + member attributes
 (lists/_child_cell.html) span the parents via rowspan: the name column
-auto-sizes to the longest name; the member attributes render as one horizontal,
-comma-separated row of values per `display_row`, content-sized (so "Adresse"
-gets more room than "PLZ"). The labels live once in the column header
+auto-sizes to the longest name; the member attributes render as one horizontal
+row of values per `display_row` (separated by spacing, no commas), content-sized
+(so "Adresse" gets more room than "PLZ"). The labels live once in the column header
 (`member_header_lines`), one comma-separated line per display_row in the same
 order — they line up with the values by order, not by column. The parent
 attribute columns line up because `parent.cells` is positional over

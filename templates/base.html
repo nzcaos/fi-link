@@ -128,15 +128,16 @@
              letter-spacing: -0.01em; line-height: 1.25; }
     /* Member attributes: the labels live once in the column header (.mhead-row,
        one comma-separated line per display_row, in position order). Each child
-       shows only the values, one comma-separated line per display_row in the
-       same order, content-width — so "Adresse" takes the room it needs and a
-       short "PLZ" wastes none. Header and values line up by order, not by column
-       (no fixed grid), hence the comma separators rather than aligned columns. */
+       shows only the values, one row per display_row in the same order, the
+       values separated by spacing (no commas — those stay in the header).
+       Content-width — so "Adresse" takes the room it needs and a short "PLZ"
+       wastes none. Header and values line up by order, not by column. */
     .class-list .col-member { vertical-align: middle; }
     .class-list .mhead-row { font-size: .68rem; color: var(--muted); font-weight: 600;
              text-transform: uppercase; letter-spacing: .03em; line-height: 1.35; }
     .class-list .mhead-row + .mhead-row { margin-top: .15rem; }
-    .class-list .mrow { font-size: .9rem; color: var(--text-soft); line-height: 1.35; }
+    .class-list .mrow { display: flex; flex-wrap: wrap; gap: .1rem 1.1rem;
+             font-size: .9rem; color: var(--text-soft); line-height: 1.35; }
     .class-list .mrow + .mrow { margin-top: .25rem; }
     .class-list .child-actions { margin-top: .4rem; display: flex; flex-wrap: wrap;
              gap: .35rem; align-items: center; white-space: normal; }
