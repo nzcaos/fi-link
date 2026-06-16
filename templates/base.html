@@ -142,8 +142,9 @@
     .class-list .child-actions { margin-top: .4rem; display: flex; flex-wrap: wrap;
              gap: .35rem; align-items: center; white-space: normal; }
     .class-list .parent-name { font-weight: 600; }
-    .class-list .parent-role { display: block; font-size: .76rem; color: var(--muted);
-             text-transform: uppercase; letter-spacing: .03em; }
+    /* Role label sits inline before the name (compact), not stacked above it. */
+    .class-list .parent-role { font-size: .76rem; color: var(--muted);
+             text-transform: uppercase; letter-spacing: .03em; margin-right: .4rem; }
     .class-list .muted-cell { color: var(--muted); }
 
     /* Compact icon button (used for row actions: edit / move / remove). Works
