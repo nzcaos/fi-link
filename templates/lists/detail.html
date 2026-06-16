@@ -56,7 +56,7 @@
   <h2>Einträge</h2>
   {% if rows %}
     {% if composed %}
-      {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj associate_attrs=associate_attrs member_col_count=member_col_count %}
+      {% include "lists/_composed_table.html" with rows=rows show_actions=True list_obj=list_obj associate_attrs=associate_attrs member_header_lines=member_header_lines member_col_count=member_col_count %}
     {% else %}
     <div class="table-wrap">
     <table class="data-table">

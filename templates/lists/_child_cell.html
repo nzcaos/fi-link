@@ -5,13 +5,13 @@ child's parent rows via rowspan (CLAUDE.md / *List display defaults*):
   1. col-name — the child's name, vertically centred; the column auto-sizes to
      the longest name in the list (white-space:nowrap). Carries the child
      actions below the name when `show_actions`.
-  2. col-member — the child's member attributes, one horizontal row per
-     `display_row` (`.mrow`), the attributes in `position` order. Each cell
-     (`.mcell`) carries its own label and sizes to its content, so a long value
-     like "Adresse" gets more width than a short one like "PLZ". `cell` is None
-     for padding slots (skipped here — padding only matters to the data shape,
-     not this content-sized layout); a real cell's value is None when hidden
-     (→ "—"). The column is omitted entirely when there are no member attributes.
+  2. col-member — the child's member attribute *values*, one horizontal row per
+     `display_row` (`.mrow`), the attributes in `position` order, comma-
+     separated. The labels are not repeated here — they live once in the column
+     header (`member_header_lines`); reader maps value→label by order. `cell` is
+     None for padding slots (skipped — padding only matters to the data shape);
+     a real cell's value is None when hidden (→ "—"). The column is omitted
+     entirely when there are no member attributes.
 
 Context: `row`, `show_actions`, `list_obj`, `member_col_count`.
 {% endcomment %}
@@ -38,14 +38,7 @@ Context: `row`, `show_actions`, `list_obj`, `member_col_count`.
 {% if member_col_count %}
   <td class="col-member" rowspan="{{ row.parents|length|default:1 }}">
     {% for grid_row in row.member_grid %}
-      <div class="mrow">
-        {% for cell in grid_row %}{% if cell %}
-          <div class="mcell">
-            <span class="mcell-label">{{ cell.attr.name }}</span>
-            <span class="mcell-value">{% if cell.value %}{{ cell.value }}{% else %}<span class="muted-cell">—</span>{% endif %}</span>
-          </div>
-        {% endif %}{% endfor %}
-      </div>
+      <div class="mrow">{% for cell in grid_row %}{% if cell %}{% if not forloop.first %}, {% endif %}{% if cell.value %}{{ cell.value }}{% else %}<span class="muted-cell">—</span>{% endif %}{% endif %}{% endfor %}</div>
     {% endfor %}
   </td>
 {% endif %}

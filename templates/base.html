@@ -126,19 +126,18 @@
              border-right: 1px solid var(--border); white-space: nowrap; }
     .class-list .col-name .child-name { font-size: 1.15rem; font-weight: 650;
              letter-spacing: -0.01em; line-height: 1.25; }
-    /* Member attributes: one horizontal flex row per display_row, the attributes
-       in `position` order. Each cell sizes to its own content (label/value),
-       so "Adresse" gets more width than "PLZ" — no fixed equal-width grid. Each
-       cell carries its own label, so no shared column header is needed. */
+    /* Member attributes: the labels live once in the column header (.mhead-row,
+       one comma-separated line per display_row, in position order). Each child
+       shows only the values, one comma-separated line per display_row in the
+       same order, content-width — so "Adresse" takes the room it needs and a
+       short "PLZ" wastes none. Header and values line up by order, not by column
+       (no fixed grid), hence the comma separators rather than aligned columns. */
     .class-list .col-member { vertical-align: middle; }
-    .class-list .mrow { display: flex; flex-wrap: wrap; gap: .25rem 1.1rem;
-             align-items: baseline; }
-    .class-list .mrow + .mrow { margin-top: .35rem; }
-    .class-list .mcell { display: flex; flex-direction: column; min-width: 0;
-             flex: 0 1 auto; }
-    .class-list .mcell-label { font-size: .68rem; color: var(--muted); font-weight: 600;
-             text-transform: uppercase; letter-spacing: .03em; line-height: 1.25; }
-    .class-list .mcell-value { font-size: .9rem; color: var(--text-soft); line-height: 1.3; }
+    .class-list .mhead-row { font-size: .68rem; color: var(--muted); font-weight: 600;
+             text-transform: uppercase; letter-spacing: .03em; line-height: 1.35; }
+    .class-list .mhead-row + .mhead-row { margin-top: .15rem; }
+    .class-list .mrow { font-size: .9rem; color: var(--text-soft); line-height: 1.35; }
+    .class-list .mrow + .mrow { margin-top: .25rem; }
     .class-list .child-actions { margin-top: .4rem; display: flex; flex-wrap: wrap;
              gap: .35rem; align-items: center; white-space: normal; }
     .class-list .parent-name { font-weight: 600; }

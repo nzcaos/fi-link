@@ -181,7 +181,7 @@ def list_detail(request, pk: int):
     # Member-role attributes form the child grid; its header (rows × columns)
     # must line up with each child's value grid — same helper, no drift.
     associate_attrs = []
-    member_header = []
+    member_header_lines = []
     member_col_count = 0
     if composed:
         rows = build_composed_rows(request.user, lst)
@@ -196,7 +196,14 @@ def list_detail(request, pk: int):
             for a in lst.template.attributes.all()
             if a.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE
         ]
+        # The shared column header: one comma-separated line of labels per
+        # display_row (in position order), mirroring the value rows. Header and
+        # values line up by order, not by column (the value cells are content-
+        # sized), so the labels within a line are comma-separated.
         member_header, member_col_count = member_grid_header(lst.template)
+        member_header_lines = [
+            ", ".join(a.name for a in hrow if a is not None) for hrow in member_header
+        ]
     else:
         rows = build_visible_rows(request.user, lst)
         for row in rows:
@@ -217,7 +224,7 @@ def list_detail(request, pk: int):
             "rows": rows,
             "composed": composed,
             "associate_attrs": associate_attrs,
-            "member_header": member_header,
+            "member_header_lines": member_header_lines,
             "member_col_count": member_col_count,
             "own_record": own_record,
         },
