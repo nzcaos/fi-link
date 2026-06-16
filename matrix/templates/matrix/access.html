@@ -15,27 +15,33 @@
       wenden.
     </p>
   {% else %}
+    <style>
+      .copy-btn { margin-left: 0.5rem; font-size: 0.8rem; }
+      .qr-handoff { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; max-width: 26rem; }
+      /* The QR only helps on a desktop/laptop (scan to continue on the phone).
+         Hide it on touch / small screens — there you're already on the phone. */
+      @media (pointer: coarse), (max-width: 700px) { .qr-handoff { display: none; } }
+    </style>
+
     <p style="color:#666;max-width:42rem">
       Mit diesen Zugangsdaten meldest du dich in der App <strong>Element</strong>
-      an, um Klassen-Nachrichten zu empfangen. Installiere Element, wähle
-      „Anmelden" → „Anderer Server" und gib die Daten unten ein. Der QR-Code
-      hilft nur beim Ablesen auf dem Handy — eine Anmeldung per QR gibt es in
-      dieser Ausbaustufe noch nicht.
+      an, um Klassen-Nachrichten zu empfangen. Installiere Element und wähle
+      „Anmelden". Im Feld <em>Benutzername</em> die Matrix-ID unten eingeben — den
+      Server erkennt Element dann automatisch (falls Element vorab nach dem
+      Server fragt: <code>{{ server_name }}</code> eingeben). Danach das Passwort.
     </p>
 
     <table style="border-collapse:collapse;font-size:0.95rem;margin:1rem 0">
       <tbody>
         <tr>
-          <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Server</th>
-          <td style="padding:0.4rem 0;font-family:monospace">{{ homeserver_url }}</td>
-        </tr>
-        <tr>
           <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Benutzer</th>
           <td style="padding:0.4rem 0;font-family:monospace">{{ account.matrix_user_id }}</td>
+          <td><button type="button" class="copy-btn secondary" data-copy="{{ account.matrix_user_id }}">kopieren</button></td>
         </tr>
         <tr>
           <th style="text-align:left;padding:0.4rem 1rem 0.4rem 0;vertical-align:top">Passwort</th>
           <td style="padding:0.4rem 0;font-family:monospace;word-break:break-all">{{ account.password }}</td>
+          <td><button type="button" class="copy-btn secondary" data-copy="{{ account.password }}">kopieren</button></td>
         </tr>
       </tbody>
     </table>
@@ -45,17 +51,36 @@
       öffnen, um es wieder anzuzeigen.
     </p>
 
-    <div class="qr-target" data-text="{{ qr_text }}" style="width:200px;height:200px;margin-top:1rem"></div>
+    <div class="qr-handoff">
+      <strong>Auf dem Laptop?</strong>
+      <p style="color:#666;font-size:0.9rem;margin:0.4rem 0">
+        Element läuft am besten auf dem Handy. Scanne diesen Code mit der
+        Handy-Kamera, um <em>diese Seite</em> dort zu öffnen — dort kannst du die
+        Zugangsdaten direkt in Element kopieren. (Beim Öffnen meldest du dich
+        ggf. mit deinem Passkey an.)
+      </p>
+      <div class="qr-target" data-url="{{ page_url }}" style="width:160px;height:160px"></div>
+    </div>
 
     <script src="{% static 'vendor/qrcodejs-1.0.0.umd.min.js' %}"></script>
     <script>
       (function () {
-        var el = document.querySelector(".qr-target");
-        if (el) {
+        document.querySelectorAll(".copy-btn").forEach(function (b) {
+          b.addEventListener("click", function () {
+            navigator.clipboard.writeText(b.dataset.copy).then(function () {
+              var prev = b.textContent;
+              b.textContent = "✓ kopiert";
+              setTimeout(function () { b.textContent = prev; }, 1500);
+            });
+          });
+        });
+        // Only render the QR when its container is actually visible (desktop).
+        var el = document.querySelector(".qr-handoff .qr-target");
+        if (el && el.offsetParent !== null) {
           new QRCode(el, {
-            text: el.dataset.text,
-            width: 200,
-            height: 200,
+            text: el.dataset.url,
+            width: 160,
+            height: 160,
             correctLevel: QRCode.CorrectLevel.M
           });
         }

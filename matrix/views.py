@@ -36,14 +36,11 @@ def messenger_access(request: HttpRequest) -> HttpResponse:
         log.warning("matrix: provisioning failed for user %s: %s", request.user.pk, exc)
         return render(request, "matrix/access.html", {"matrix_enabled": True, "provision_error": True})
 
-    # The QR is a convenience to read the credentials onto a phone — Weg A has
-    # no one-tap QR login (that is Weg C/MSC4108, a later expansion). Real
-    # password login in Element still means picking the homeserver + typing.
-    qr_text = (
-        f"Homeserver: {settings.RP_ORIGIN}\n"
-        f"Benutzer: {account.matrix_user_id}\n"
-        f"Passwort: {account.password}"
-    )
+    # The QR encodes THIS page's URL (not the credentials): on a laptop, the
+    # parent scans it to reopen the page on their phone, where the copy buttons
+    # are actually useful for pasting into Element. Weg A has no one-tap QR
+    # login (that is Weg C/MSC4108, a later expansion).
+    page_url = request.build_absolute_uri()
     return render(
         request,
         "matrix/access.html",
@@ -52,7 +49,7 @@ def messenger_access(request: HttpRequest) -> HttpResponse:
             "account": account,
             "homeserver_url": settings.RP_ORIGIN,
             "server_name": settings.MATRIX_SERVER_NAME,
-            "qr_text": qr_text,
+            "page_url": page_url,
         },
     )
 

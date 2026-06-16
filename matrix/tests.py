@@ -256,6 +256,7 @@ class MessengerAccessViewTests(TestCase):
             resp = self.client.get(reverse("matrix:access"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "@u-abc123:fichtelink.caos.cloud")
+        self.assertContains(resp, "copy-btn")  # copy buttons present
         self.assertTrue(MatrixAccount.objects.filter(user=self.user).exists())
 
     @override_settings(MATRIX_ENABLED=False)
