@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Klassenraum-Moderation — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  <h1>Klassenraum-Moderation „{{ list_obj.title }}"</h1>
+  <p style="color:#666;max-width:42rem">
+    Notfallwerkzeug: Ein Bann hält ein Mitglied aus dem Matrix-Raum fern, ohne es
+    aus der Liste zu entfernen. Wer die Liste verlässt, wird ohnehin automatisch
+    aus dem Raum entfernt — bann hier nur bei Störungen, die ein Fernhalten
+    erfordern. „Bann aufheben" macht ein erneutes Einladen wieder möglich.
+  </p>
+
+  {% if members %}
+    <table style="border-collapse:collapse;font-size:0.95rem;margin-top:1rem">
+      <thead>
+        <tr style="background:#f4f4f4">
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Person</th>
+          <th style="text-align:left;padding:0.4rem;border-bottom:1px solid #ddd">Matrix-ID</th>
+          <th style="border-bottom:1px solid #ddd"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for access in members %}
+          <tr>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ access.user.person.full_name }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;font-family:monospace">{{ access.user.matrix_account.matrix_user_id }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;text-align:right;white-space:nowrap">
+              <form method="post" style="display:inline"
+                    onsubmit="return confirm('{{ access.user.person.full_name }} aus dem Klassenraum verbannen?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="ban">
+                <input type="hidden" name="user_id" value="{{ access.user.pk }}">
+                <button type="submit" class="secondary">Bannen</button>
+              </form>
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="unban">
+                <input type="hidden" name="user_id" value="{{ access.user.pk }}">
+                <button type="submit" class="secondary">Bann aufheben</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666;margin-top:1rem">Noch keine Mitglieder mit Messenger-Konto in dieser Liste.</p>
+  {% endif %}
+{% endblock %}

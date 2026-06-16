@@ -186,6 +186,65 @@ def rename_room(list_obj) -> None:
     client.set_room_name(_service_token(), room.room_id, list_obj.title)
 
 
+def ban_user_from_list(user, list_obj, reason: str = "") -> None:
+    """Emergency: ban a member's Matrix account from the list's room (they can
+    no longer rejoin until unbanned). No-op if no account/room.
+    """
+    account = MatrixAccount.objects.filter(user=user).first()
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if not account or not room:
+        return
+    client = MatrixClient.from_settings()
+    client.ban(_service_token(), room.room_id, account.matrix_user_id, reason=reason)
+
+
+def unban_user_from_list(user, list_obj) -> None:
+    """Lift a ban so the user can be (re-)invited."""
+    account = MatrixAccount.objects.filter(user=user).first()
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if not account or not room:
+        return
+    client = MatrixClient.from_settings()
+    try:
+        client.unban(_service_token(), room.room_id, account.matrix_user_id)
+    except MatrixError as exc:
+        _tolerate_logical(exc, f"unban {account.matrix_user_id} from {room.room_id}")
+
+
+def reconcile_list_room(list_obj) -> int:
+    """Repair membership drift: invite every Benutzergruppe member (USER with a
+    Matrix account) who is not currently joined/invited to the room. Returns the
+    number of repair invites issued. Extra room members are deliberately NOT
+    kicked (could be admins or the service account); only missing ones are added.
+    """
+    from lists.models import ListAccess
+
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if room is None:
+        return 0
+    client = MatrixClient.from_settings()
+    token = _service_token()
+    present = client.room_member_ids(token, room.room_id)
+
+    expected = (
+        MatrixAccount.objects.filter(
+            user__in=ListAccess.objects.filter(list=list_obj).values("user")
+        ).values_list("matrix_user_id", flat=True)
+    )
+    repaired = 0
+    for mxid in expected:
+        if mxid in present:
+            continue
+        try:
+            client.invite(token, room.room_id, mxid)
+            repaired += 1
+        except MatrixError as exc:
+            _tolerate_logical(exc, f"reconcile invite {mxid} to {room.room_id}")
+    if repaired:
+        log.info("matrix: reconcile list %s issued %d repair invites", list_obj.pk, repaired)
+    return repaired
+
+
 def send_to_list(list_obj, body: str) -> str:
     """Post a message to the list's room as the service account (PL 100, so it
     sends in chat *and* broadcast mode). Creates the room if eligible and not

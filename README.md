@@ -164,6 +164,46 @@ the **"Als Vorlage klonen (ohne Eintragungen)"** action. It deep-copies the part
 slots, asset images, and texts but drops all signups, access grants, and the share
 token, and reopens signups — last year's form stays intact for reference.
 
+## Matrix messenger (class chats)
+
+Optional Synapse-backed class chats run **alongside** email, for time-critical
+notices ("Bus verspätet sich", "Ausflug abgesagt"). Each matrix-enabled class
+list gets one invite-only Matrix room; parents join with Element. The whole
+feature is gated by `MATRIX_ENABLED` — off, nothing in the app touches Matrix.
+
+**Setup** is a one-time operator procedure (Synapse container, separate `synapse`
+database, Apache routes, `.well-known` delegation, federation test): see
+[`docs/matrix-phase0-operator.md`](docs/matrix-phase0-operator.md). Architecture
+and rationale: [`docs/matrix-architecture.md`](docs/matrix-architecture.md) and
+[`docs/matrix-implementation-plan.md`](docs/matrix-implementation-plan.md).
+
+**How it works once enabled:**
+
+- Accounts are provisioned lazily (Weg A — server-assigned password). A parent
+  opens *Messenger-Zugang* in the menu to see their homeserver / Matrix-ID /
+  password + a QR, and enters them in Element. Display names are pseudonymous
+  (`Elternteil <id>`) — real contact data stays in the encrypted app DB, never
+  in Matrix profiles.
+- Membership is mirrored automatically: joining a class list → room invite,
+  leaving → kick, becoming list-admin → room power level 50. No manual step.
+- Admins send to a class room via *Nachricht an Klassenraum* (sent as the
+  service account, so it also posts in broadcast-only rooms). *Klassenraum-
+  Moderation* bans/unbans a member from the room in an emergency.
+
+**Operator commands** (run in the `web` container):
+
+```
+python manage.py matrix_healthcheck                 # probe Synapse
+python manage.py matrix_bootstrap_service_account   # one-time, after enabling
+python manage.py matrix_create_rooms --verify        # create rooms for class lists
+python manage.py matrix_reconcile                    # repair membership drift
+```
+
+A daily periodic task (`matrix.tasks.reconcile_all_rooms`) re-invites members
+missing from their room. **Back up the `synapse` database and the `./synapse`
+volume** (the signing key — losing it changes the server identity and breaks
+federation + existing rooms); see the operator checklist.
+
 ## Development
 
 Local dev requires Python 3.12+ and PostgreSQL. WebAuthn accepts `localhost` as a non-HTTPS origin, so dev does not need a TLS cert. The compose stack can be used locally too — point `MAIL_DOMAIN` at a throwaway domain or a test catch-all.

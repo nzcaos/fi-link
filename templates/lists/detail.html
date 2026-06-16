@@ -22,6 +22,7 @@
     <div class="menu-label">Administration</div>
     {% if matrix_enabled and list_obj.matrix_room_enabled %}
       <a href="{% url 'matrix:send' pk=list_obj.pk %}">Nachricht an Klassenraum</a>
+      <a href="{% url 'matrix:moderation' pk=list_obj.pk %}">Klassenraum-Moderation</a>
     {% endif %}
     {% if is_admin %}
       <a href="{% url 'lists:invite' pk=list_obj.pk %}">Mitglied einladen</a>

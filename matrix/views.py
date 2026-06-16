@@ -14,7 +14,8 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
-from lists.models import List
+from accounts.models import User
+from lists.models import List, ListAccess
 from lists.permissions import can_user_admin_list
 
 from . import service
@@ -83,3 +84,39 @@ def send_message(request: HttpRequest, pk: int) -> HttpResponse:
                 return redirect("lists:detail", pk=lst.pk)
 
     return render(request, "matrix/send.html", {"list_obj": lst})
+
+
+@login_required
+def room_moderation(request: HttpRequest, pk: int) -> HttpResponse:
+    """Emergency moderation: ban/unban a member's Matrix account from the room.
+    Kicking happens automatically on list-leave; ban is the tool to keep a
+    disruptive member out without removing them from the list itself.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    if not settings.MATRIX_ENABLED or not lst.matrix_room_enabled:
+        return HttpResponseForbidden("Für diese Liste ist kein Matrix-Klassenraum aktiv.")
+    if not (request.user.is_superuser or can_user_admin_list(request.user, lst)):
+        return HttpResponseForbidden("Nur Admins dürfen den Klassenraum moderieren.")
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        target = User.objects.filter(pk=request.POST.get("user_id")).first()
+        if target and action in ("ban", "unban"):
+            try:
+                if action == "ban":
+                    service.ban_user_from_list(target, lst, reason="von Admin gebannt")
+                    messages.success(request, f"{target.person.full_name} aus dem Klassenraum verbannt.")
+                else:
+                    service.unban_user_from_list(target, lst)
+                    messages.success(request, f"Bann für {target.person.full_name} aufgehoben.")
+            except MatrixError as exc:
+                log.warning("matrix: %s on list %s failed: %s", action, lst.pk, exc)
+                messages.error(request, "Aktion fehlgeschlagen. Bitte später erneut versuchen.")
+        return redirect("matrix:moderation", pk=lst.pk)
+
+    members = (
+        ListAccess.objects.filter(list=lst, user__matrix_account__isnull=False)
+        .select_related("user__person", "user__matrix_account")
+        .order_by("user__person__family_name", "user__person__given_name")
+    )
+    return render(request, "matrix/moderation.html", {"list_obj": lst, "members": members})

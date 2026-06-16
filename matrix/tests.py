@@ -529,3 +529,85 @@ class SendMessageViewTests(TestCase):
         self.client.force_login(self.admin)
         resp = self.client.get(reverse("matrix:send", args=[self.plain_list.pk]))
         self.assertEqual(resp.status_code, 403)
+
+
+@override_settings(MATRIX_ENABLED=True)
+class BanAndReconcileServiceTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        MatrixServiceAccount.objects.create(
+            matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc-token"
+        )
+        self.room = MatrixRoom.objects.create(list=self.list, room_id="!r:fichtelink.caos.cloud")
+        self.p1 = Person.objects.create(given_name="A", family_name="A", email="a@example.invalid")
+        self.u1 = User.objects.create_user(person=self.p1, username="u1")
+        self.a1 = MatrixAccount.objects.create(user=self.u1, matrix_user_id="@u-1:fichtelink.caos.cloud", password="x")
+        ListAccess.objects.create(list=self.list, user=self.u1)
+        self.p2 = Person.objects.create(given_name="B", family_name="B", email="b@example.invalid")
+        self.u2 = User.objects.create_user(person=self.p2, username="u2")
+        self.a2 = MatrixAccount.objects.create(user=self.u2, matrix_user_id="@u-2:fichtelink.caos.cloud", password="x")
+        ListAccess.objects.create(list=self.list, user=self.u2)
+
+    def test_ban_calls_client(self):
+        with patch.object(MatrixClient, "ban") as ban:
+            service.ban_user_from_list(self.u1, self.list, reason="r")
+        ban.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-1:fichtelink.caos.cloud", reason="r")
+
+    def test_reconcile_invites_only_missing(self):
+        # u1 already present in the room, u2 missing → only u2 gets invited.
+        with patch.object(MatrixClient, "room_member_ids", return_value={"@u-1:fichtelink.caos.cloud"}), \
+             patch.object(MatrixClient, "invite") as inv:
+            repaired = service.reconcile_list_room(self.list)
+        self.assertEqual(repaired, 1)
+        inv.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-2:fichtelink.caos.cloud")
+
+    def test_reconcile_noop_when_all_present(self):
+        with patch.object(
+            MatrixClient, "room_member_ids",
+            return_value={"@u-1:fichtelink.caos.cloud", "@u-2:fichtelink.caos.cloud"},
+        ), patch.object(MatrixClient, "invite") as inv:
+            repaired = service.reconcile_list_room(self.list)
+        self.assertEqual(repaired, 0)
+        inv.assert_not_called()
+
+
+class RoomModerationViewTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=self.template, matrix_room_enabled=True
+        )
+        admin_p = Person.objects.create(given_name="Ad", family_name="Min", email="admin@example.invalid")
+        self.admin = User.objects.create_user(person=admin_p, username="admin")
+        ListAdmin.objects.create(list=self.list, user=self.admin)
+        member_p = Person.objects.create(given_name="Me", family_name="Mber", email="m@example.invalid")
+        self.member = User.objects.create_user(person=member_p, username="member")
+        MatrixAccount.objects.create(user=self.member, matrix_user_id="@u-m:fichtelink.caos.cloud", password="x")
+        ListAccess.objects.create(list=self.list, user=self.member)
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_admin_get_lists_members(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "@u-m:fichtelink.caos.cloud")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_admin_post_ban(self):
+        self.client.force_login(self.admin)
+        with patch.object(service, "ban_user_from_list") as ban:
+            resp = self.client.post(
+                reverse("matrix:moderation", args=[self.list.pk]),
+                {"action": "ban", "user_id": self.member.pk},
+            )
+        self.assertEqual(resp.status_code, 302)
+        ban.assert_called_once_with(self.member, self.list, reason="von Admin gebannt")
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_non_admin_forbidden(self):
+        self.client.force_login(self.member)
+        resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
+        self.assertEqual(resp.status_code, 403)

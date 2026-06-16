@@ -318,6 +318,16 @@ The forms module is for **people signing themselves up for activities** (e.g. an
 
 **Frontend**: forms render on the wide page layout (`page-wide`); the shared body is `templates/forms/_form_body.html`, included by both `detail.html` and `shared.html`.
 
+### Matrix messenger integration (`matrix` app)
+
+Optional Synapse-backed class chats run **alongside** email for time-critical notices. Full architecture and rationale live in `docs/matrix-architecture.md`, `docs/matrix-implementation-plan.md` and the operator runbook `docs/matrix-phase0-operator.md`. Key decisions, so they aren't re-derived:
+
+- **Decoupled app**: all Matrix logic is in the `matrix` app; the only touch-points in `lists` are two flag columns on `List` (`matrix_room_enabled`, `matrix_broadcast_only`) and the membership-sync **signals** (`matrix/signals.py`, connected in `apps.ready`). Everything is gated by `MATRIX_ENABLED` — off, no code path touches Matrix, and the signal handlers short-circuit before any query.
+- **Transport**: `matrix/client.py` is a thin **synchronous httpx** wrapper (no matrix-nio — E2EE is off; Weg B/C is about the *parents'* login, not our service account). `matrix/service.py` holds the policy (idempotent provisioning, pseudonymous ids, membership orchestration); `matrix/tasks.py` are procrastinate tasks the signals enqueue via `transaction.on_commit`.
+- **Identities**: one server-provisioned Matrix account per USER (Weg A password, encrypted at rest), **pseudonymous** display name (`Elternteil <id>` — A1; Klarname-bei-Zustimmung deferred). One invite-only room per matrix-enabled class list; the **service account** (bootstrapped once) holds the sole invite right (PL 100) and is the identity for createRoom/invite/kick/ban/send.
+- **Sync**: `ListAccess` add/remove → room invite/kick; `ListAdmin` → power level 50/0; `List` title change → room rename. Because every join path funnels through `ListAccess`, transfer/rollover are covered without lists-side changes. A daily reconcile task repairs drift.
+- **Send**: admins post to a room as the service account (also works in broadcast-only rooms, `events_default=50`); ban/unban is the emergency moderation surface.
+
 ## Architecture decisions (authentication)
 
 This section draws on the `Fi-Planer` sibling project (also volunteer-run, also school-context, also Passkey-only), which runs the same flow in production. Where this section overlaps with Fi-Planer's `CLAUDE.md`, that's deliberate — same operational lessons apply.

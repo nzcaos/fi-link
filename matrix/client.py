@@ -306,3 +306,31 @@ class MatrixClient:
             access_token=access_token,
         )
         log.info("matrix: banned %s from %s", user_id, room_id)
+
+    def unban(self, access_token: str, room_id: str, user_id: str) -> None:
+        from urllib.parse import quote
+
+        rid = quote(room_id, safe="")
+        self._request(
+            "POST",
+            f"/_matrix/client/v3/rooms/{rid}/unban",
+            json={"user_id": user_id},
+            access_token=access_token,
+        )
+        log.info("matrix: unbanned %s from %s", user_id, room_id)
+
+    def room_member_ids(self, access_token: str, room_id: str, memberships=("join", "invite")) -> set[str]:
+        """Return the set of user ids whose membership is in `memberships`.
+
+        Built from the room state (m.room.member events) — used by the reconcile
+        task to find list members who are missing from the room.
+        """
+        present: set[str] = set()
+        for ev in self.get_room_state(access_token, room_id):
+            if ev.get("type") != "m.room.member":
+                continue
+            if ev.get("content", {}).get("membership") in memberships:
+                state_key = ev.get("state_key")
+                if state_key:
+                    present.add(state_key)
+        return present

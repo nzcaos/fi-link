@@ -16,6 +16,30 @@ from procrastinate.contrib.django import app
 log = logging.getLogger(__name__)
 
 
+@app.periodic(cron="30 4 * * *")
+@app.task(queueing_lock="matrix_reconcile_rooms", pass_context=False)
+def reconcile_all_rooms(timestamp: int) -> None:
+    """Daily drift repair: re-invite Benutzergruppe members who are missing from
+    their class room (e.g. an invite that failed transiently and exhausted its
+    retries). One bad room must not abort the sweep, so failures are logged
+    per-list, not raised.
+    """
+    if not settings.MATRIX_ENABLED:
+        return
+    from lists.models import List
+
+    from . import service
+
+    lists = List.objects.filter(
+        matrix_room_enabled=True, archived_at__isnull=True, matrix_room__isnull=False
+    )
+    for lst in lists:
+        try:
+            service.reconcile_list_room(lst)
+        except Exception:  # pragma: no cover - defensive sweep guard
+            log.exception("matrix: reconcile failed for list %s", lst.pk)
+
+
 @app.task(name="matrix.provision_account", pass_context=False)
 def provision_matrix_account(user_id: int) -> None:
     if not settings.MATRIX_ENABLED:
