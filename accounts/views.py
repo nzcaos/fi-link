@@ -13,6 +13,7 @@ import smtplib
 import time
 from datetime import timedelta
 
+from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
@@ -344,6 +345,35 @@ def login_finish(request: HttpRequest) -> JsonResponse:
 def logout_view(request: HttpRequest) -> HttpResponse:
     auth_logout(request)
     return redirect(settings.LOGOUT_REDIRECT_URL)
+
+
+# ---------------------------------------------------------------------------
+# Profile (own PERSON: name editable, email read-only)
+# ---------------------------------------------------------------------------
+
+
+class ProfileForm(forms.ModelForm):
+    class Meta:
+        model = Person
+        fields = ["given_name", "family_name"]
+
+
+@login_required
+def profile(request: HttpRequest) -> HttpResponse:
+    """Edit the logged-in user's own PERSON name. Email is the addressable
+    identifier (activation links, mail routing) and is shown read-only — changes
+    to it go through an admin until a verify-on-change flow exists.
+    """
+    person = request.user.person
+    if request.method == "POST":
+        form = ProfileForm(request.POST, instance=person)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Profil gespeichert.")
+            return redirect("accounts:profile")
+    else:
+        form = ProfileForm(instance=person)
+    return render(request, "auth/profile.html", {"form": form, "email": person.email})
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import time
 from datetime import timedelta
 
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from .models import ActivationToken, Passkey, Person, User, WebAuthnChallenge
@@ -262,3 +263,54 @@ class N15RegisterRateLimitTests(TestCase):
             HTTP_X_FORWARDED_FOR="203.0.113.99",
         )
         self.assertEqual(resp.status_code, 200)
+
+
+class ProfileViewTests(TestCase):
+    def setUp(self):
+        self.person = Person.objects.create(
+            given_name="Erwin", family_name="Familie E", email="erwin@example.invalid"
+        )
+        self.user = User.objects.create_user(person=self.person, username="erwin")
+
+    def test_requires_login(self):
+        resp = self.client.get(reverse("accounts:profile"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/auth/login/", resp["Location"])
+
+    def test_get_shows_name_and_readonly_email(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("accounts:profile"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Erwin")
+        self.assertContains(resp, "erwin@example.invalid")
+        self.assertContains(resp, "nicht geändert werden")  # email read-only note
+
+    def test_post_updates_name(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("accounts:profile"),
+            {"given_name": "Erwin", "family_name": "Müller-Lüdenscheidt"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.family_name, "Müller-Lüdenscheidt")
+
+    def test_post_does_not_change_email(self):
+        self.client.force_login(self.user)
+        # Even if an email field is smuggled into the POST, it must be ignored.
+        self.client.post(
+            reverse("accounts:profile"),
+            {"given_name": "Erwin", "family_name": "Familie E", "email": "attacker@evil.invalid"},
+        )
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.email, "erwin@example.invalid")
+
+    def test_empty_name_rejected(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(
+            reverse("accounts:profile"),
+            {"given_name": "", "family_name": ""},
+        )
+        self.assertEqual(resp.status_code, 200)  # re-rendered with errors
+        self.person.refresh_from_db()
+        self.assertEqual(self.person.given_name, "Erwin")

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Mein Profil — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Mein Profil</h1>
+  <p style="color:#666;max-width:42rem">
+    Hier ändern Sie Ihren Namen, wie er in Listen angezeigt wird (sofern Sie ihn
+    pro Liste freigeben). Ob und wem Ihr Name angezeigt wird, legen Sie weiterhin
+    pro Liste im jeweiligen Eintrag fest.
+  </p>
+
+  <form method="post" style="margin:1rem 0;max-width:32rem">
+    {% csrf_token %}
+
+    <div style="margin:0.75rem 0">
+      <label for="id_given_name" style="display:block;font-weight:600;margin-bottom:0.2rem">Vorname</label>
+      {{ form.given_name }}
+      {% if form.given_name.errors %}<div class="error">{{ form.given_name.errors|join:", " }}</div>{% endif %}
+    </div>
+
+    <div style="margin:0.75rem 0">
+      <label for="id_family_name" style="display:block;font-weight:600;margin-bottom:0.2rem">Nachname</label>
+      {{ form.family_name }}
+      {% if form.family_name.errors %}<div class="error">{{ form.family_name.errors|join:", " }}</div>{% endif %}
+    </div>
+
+    <div style="margin:0.75rem 0">
+      <label style="display:block;font-weight:600;margin-bottom:0.2rem">E-Mail-Adresse</label>
+      <div style="font-family:monospace">{{ email|default:"—" }}</div>
+      <div style="color:#888;font-size:0.85rem;margin-top:0.2rem">
+        Die E-Mail-Adresse kann hier nicht geändert werden. Sie ist Ihre
+        Zustell- und Anmeldeadresse — wenden Sie sich für eine Änderung an die
+        Listen-Leitung.
+      </div>
+    </div>
+
+    <div style="margin-top:1rem">
+      <button type="submit">Speichern</button>
+    </div>
+  </form>
+{% endblock %}

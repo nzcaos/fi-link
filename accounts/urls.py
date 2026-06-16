@@ -18,6 +18,9 @@ urlpatterns = [
     path("login-finish", views.login_finish, name="login_finish"),
     path("logout", views.logout_view, name="logout"),
 
+    # Profile (own person)
+    path("profil/", views.profile, name="profile"),
+
     # Passkey management
     path("passkeys/", views.passkeys_index, name="passkeys"),
     path("passkeys/list", views.passkeys_list_fragment, name="passkey_list_fragment"),
