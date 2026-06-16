@@ -214,16 +214,18 @@
     /* Title that doubles as a Gefäß-switcher (CLAUDE.md / list+form switching).
        The <summary> is styled exactly like the <h1> it replaces, so the page
        reads identically whether or not switching is available — only the small ▾
-       marks it interactive. Reuses .menu / .menu-panel for the dropdown itself. */
-    .title-switcher { display: inline-block; margin: 0 0 .85rem; max-width: 100%; }
-    .title-switcher > summary { padding: 0; border: 0; background: none; box-shadow: none;
+       marks it interactive. Reuses .menu / .menu-panel for the dropdown itself.
+       Selectors qualified with `details` to out-specify `details.menu > summary`,
+       which otherwise wins and shrinks the title back to menu-font size. */
+    details.title-switcher { display: inline-block; margin: 0 0 .85rem; max-width: 100%; }
+    details.title-switcher > summary { padding: 0; border: 0; background: none; box-shadow: none;
               max-width: none; white-space: normal; overflow: visible; gap: .3rem;
               font-size: 1.6rem; line-height: 1.2; font-weight: 680;
               letter-spacing: -0.02em; color: var(--text); }
-    .title-switcher > summary:hover { border: 0; color: var(--brand-strong); }
-    .title-switcher > summary::after { content: "▾"; color: var(--muted); font-size: .55em;
+    details.title-switcher > summary:hover { border: 0; color: var(--brand-strong); }
+    details.title-switcher > summary::after { content: "▾"; color: var(--muted); font-size: .55em;
               align-self: center; }
-    .title-switcher .menu-panel { left: 0; right: auto; min-width: 18rem;
+    details.title-switcher .menu-panel { left: 0; right: auto; min-width: 18rem;
               max-width: min(90vw, 26rem); max-height: 70vh; overflow-y: auto; }
     .title-switcher .menu-panel a[aria-current="page"] { background: var(--surface-2);
               color: var(--brand-strong); font-weight: 650; }
@@ -231,7 +233,7 @@
     @media (max-width: 560px) {
       .page { padding: 1rem .75rem 3rem; }
       .card { padding: 1.25rem 1.1rem 1.5rem; border-radius: 12px; }
-      h1 { font-size: 1.4rem; }
+      h1, details.title-switcher > summary { font-size: 1.4rem; }
     }
   </style>
   <script src="{% static 'vendor/simplewebauthn-browser-9.0.1.umd.min.js' %}"></script>
