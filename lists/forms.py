@@ -267,6 +267,15 @@ class RecordEditForm(forms.Form):
             self.fields["subject_family_name"] = forms.CharField(
                 label="Nachname", max_length=200, initial=record.subject.family_name
             )
+            # Same gate as the name: a USER-less subject's email is not yet a
+            # login identifier, only a delivery address (e.g. the eltern@ alias)
+            # that the manager entered — so the manager may correct it too.
+            self.fields["subject_email"] = forms.EmailField(
+                label="E-Mail",
+                required=False,
+                initial=record.subject.email,
+                help_text="Leer lassen, wenn nicht bekannt. Wird z. B. für den eltern@-Verteiler genutzt.",
+            )
 
         values = {
             v.attribute_id: v.value
@@ -444,7 +453,10 @@ class RecordEditForm(forms.Form):
             person = self.record.subject
             person.given_name = self.cleaned_data["subject_given_name"].strip()
             person.family_name = self.cleaned_data["subject_family_name"].strip()
-            person.save(update_fields=["given_name", "family_name", "updated_at"])
+            # Normalise blank to NULL so the eltern@ resolver (PERSON.email IS
+            # NOT NULL) doesn't pick up an empty address.
+            person.email = (self.cleaned_data.get("subject_email") or "").strip() or None
+            person.save(update_fields=["given_name", "family_name", "email", "updated_at"])
 
         # 3) RecordManager: ensure the saving user is registered as a manager
         # (basis depends on context; default to SELF_REGISTERED if this is the

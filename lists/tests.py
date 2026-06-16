@@ -5154,6 +5154,31 @@ class RecordSubjectNameEditTests(TestCase):
         form = RecordEditForm(record=own_rec, user=self.manager)
         self.assertFalse(form.name_editable)
         self.assertNotIn("subject_given_name", form.fields)
+        self.assertNotIn("subject_email", form.fields)
+
+    def test_manager_can_set_userless_subject_email(self):
+        form = RecordEditForm(
+            {"subject_given_name": "Lina", "subject_family_name": "Mueller",
+             "subject_email": "lina@example.invalid", "vis_name": []},
+            record=self.child_rec, user=self.manager,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.child.refresh_from_db()
+        self.assertEqual(self.child.email, "lina@example.invalid")
+
+    def test_blank_subject_email_stored_as_null(self):
+        self.child.email = "old@example.invalid"
+        self.child.save(update_fields=["email"])
+        form = RecordEditForm(
+            {"subject_given_name": "Lina", "subject_family_name": "Mueller",
+             "subject_email": "", "vis_name": []},
+            record=self.child_rec, user=self.manager,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.child.refresh_from_db()
+        self.assertIsNone(self.child.email)
 
     def test_tampered_name_post_ignored_when_not_editable(self):
         own_rec = ListRecord.objects.create(
