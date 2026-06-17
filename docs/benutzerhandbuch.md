@@ -344,24 +344,33 @@ Beides finden Sie **unten im Bearbeiten-Dialog** des Eintrags:
 
 ## 12. Konto-Wiederherstellung bei Geräteverlust
 
-Es gibt **keine automatische „Passwort vergessen"-Mail** — das wäre ein
-Einfallstor bei gekapertem Postfach. Stattdessen läuft die Wiederherstellung
-**über Menschen, entlang der Admin-Hierarchie**:
+Haben Sie Ihren Passkey verloren (z. B. auf dem Smartphone oder im
+Geräte-Schlüsselbund gelöscht), können Sie sich **selbst** wieder Zugang
+verschaffen — ohne Admin:
 
-```
-Normales Mitglied        → wendet sich an den Listen-Admin (z. B. Elternvertreter)
-Admin einer Unterliste   → wendet sich an den Admin der übergeordneten Liste
-Admin einer obersten Liste → wendet sich an den Super-Admin
-Super-Admin              → stellt den Zugang direkt wieder her
-```
+1. Auf der Anmeldeseite **„Passkey verloren? Zugang wiederherstellen"** wählen
+   (oder direkt `/auth/recover/`).
+2. Ihre **hinterlegte E-Mail-Adresse** eingeben.
+3. Sie erhalten eine Mail mit einem **Link zum Einrichten eines neuen
+   Passkeys** — auf diesem oder einem anderen Gerät.
+4. Link öffnen, neuen Passkey anlegen, fertig. Sie sind angemeldet.
 
-Der zuständige Admin schickt — nachdem er Sie als die berechtigte Person erkannt
-hat — den Aktivierungs-Link erneut an Ihre hinterlegte Adresse. Ihre Daten,
-Mitgliedschaften und Familienbeziehungen bleiben erhalten; Sie müssen nur einen
-**neuen Passkey** anlegen.
+Ihre Daten, Mitgliedschaften und Familienbeziehungen bleiben dabei vollständig
+erhalten. **Bestehende Passkeys bleiben ebenfalls erhalten** — einen nicht mehr
+funktionierenden (z. B. den des alten Handys) können Sie nach der Anmeldung unter
+*Mein Profil → Passkeys* selbst entfernen.
 
-> Deshalb ist es so wertvoll, frühzeitig einen **zweiten Passkey** einzurichten —
-> dann brauchen Sie diesen Weg gar nicht erst.
+> **Gemeinsame Familien-Mailadresse:** Sind unter Ihrer Adresse mehrere Konten
+> registriert (z. B. beide Elternteile), enthält die Mail je einen Link pro
+> Konto, mit Namen beschriftet — wählen Sie den für Ihr Konto.
+
+> **Noch besser:** Richten Sie frühzeitig einen **zweiten Passkey** auf einem
+> anderen Gerät ein. Dann melden Sie sich bei Verlust einfach dort an und legen
+> einen neuen an — ganz ohne Wiederherstellungs-Mail.
+
+Falls Sie **auch keinen Zugriff mehr auf Ihr E-Mail-Postfach** haben oder die
+Wiederherstellung nicht klappt, hilft Ihr Listen-Admin (bei Schulklassen die
+Elternvertreter) bzw. — in letzter Instanz — der Super-Admin weiter.
 
 ---
 
@@ -428,9 +437,11 @@ Nur, wenn Sie das Feld freigeben. Standardmäßig ist die E-Mail verborgen. Die
 Sichtbarkeit stellen Sie pro Feld im Bearbeiten-Dialog ein
 ([Abschnitt 7](#7-wer-sieht-was-die-sichtbarkeit-steuern)).
 
-**Ich habe mein Handy verloren.**
+**Ich habe mein Handy verloren / den Passkey gelöscht.**
 Wenn Sie einen zweiten Passkey haben (anderes Gerät), melden Sie sich einfach
-damit an und löschen den alten. Sonst hilft Ihr Listen-Admin
+damit an und löschen den alten. Sonst fordern Sie über **„Passkey verloren?
+Zugang wiederherstellen"** auf der Anmeldeseite selbst einen neuen
+Einrichtungs-Link an Ihre hinterlegte E-Mail-Adresse an
 ([Abschnitt 12](#12-konto-wiederherstellung-bei-geräteverlust)).
 
 **Warum muss ich meine eigene Mail an die Liste erst per Link freigeben?**

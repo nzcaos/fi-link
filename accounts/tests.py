@@ -314,3 +314,88 @@ class ProfileViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)  # re-rendered with errors
         self.person.refresh_from_db()
         self.assertEqual(self.person.given_name, "Erwin")
+
+
+class RecoverViewTests(TestCase):
+    """Self-service passkey recovery: a fresh enrollment link is mailed to the
+    on-file address, no admin involved. The endpoint is enumeration-resistant
+    and additive (it must not delete existing passkeys).
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+
+    def test_get_renders_form(self):
+        resp = self.client.get(reverse("accounts:recover"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Zugang wiederherstellen")
+
+    def test_known_email_issues_recover_token_and_mails_link(self):
+        from django.core import mail
+
+        user = _make_user(email="locked@example.org")
+        resp = self.client.post(reverse("accounts:recover"), {"email": "locked@example.org"})
+        self.assertEqual(resp.status_code, 200)
+        token = ActivationToken.objects.get(user=user)
+        self.assertEqual(token.purpose, ActivationToken.Purpose.RECOVER)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(token.token, mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].to, ["locked@example.org"])
+
+    def test_recovery_does_not_delete_existing_passkeys(self):
+        """The lost-on-phone case leaves a stale Passkey row; recovery is
+        additive, so we must not wipe it (the user prunes it after signing in).
+        """
+        user = _make_user(email="stale@example.org")
+        _make_passkey(user, label="altes-handy")
+        self.client.post(reverse("accounts:recover"), {"email": "stale@example.org"})
+        self.assertEqual(user.passkeys.count(), 1)
+
+    def test_unknown_email_is_enumeration_resistant(self):
+        from django.core import mail
+
+        resp = self.client.post(reverse("accounts:recover"), {"email": "nobody@example.org"})
+        self.assertEqual(resp.status_code, 200)
+        # Same confirmation copy as the known case…
+        self.assertContains(resp, "Falls ein Konto")
+        # …but nothing was created or sent.
+        self.assertEqual(ActivationToken.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_inactive_account_is_not_recoverable(self):
+        """A never-activated stub (registration not finished) is not a recovery
+        target — that path is registration, not recovery.
+        """
+        from django.core import mail
+
+        person = Person.objects.create(given_name="Stub", family_name="X", email="stub@example.org")
+        User.objects.create_user(person=person, username=random_username(), is_active=False)
+        self.client.post(reverse("accounts:recover"), {"email": "stub@example.org"})
+        self.assertEqual(ActivationToken.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_shared_family_email_gets_one_link_per_account(self):
+        from django.core import mail
+
+        mother = _make_user(email="family@example.org", given="Anna")
+        father = _make_user(email="family@example.org", given="Bernd")
+        resp = self.client.post(reverse("accounts:recover"), {"email": "family@example.org"})
+        self.assertEqual(resp.status_code, 200)
+        # One RECOVER token per account, both links in a single mail.
+        self.assertEqual(ActivationToken.objects.filter(user=mother).count(), 1)
+        self.assertEqual(ActivationToken.objects.filter(user=father).count(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+        body = mail.outbox[0].body
+        for token in ActivationToken.objects.all():
+            self.assertIn(token.token, body)
+
+    def test_rate_limited(self):
+        from accounts.views import _REG_RATE_LIMIT
+
+        for _ in range(_REG_RATE_LIMIT):
+            resp = self.client.post(reverse("accounts:recover"), {"email": "x@example.org"})
+            self.assertEqual(resp.status_code, 200)
+        resp = self.client.post(reverse("accounts:recover"), {"email": "x@example.org"})
+        self.assertEqual(resp.status_code, 429)

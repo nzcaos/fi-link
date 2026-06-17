@@ -15,6 +15,9 @@
       <button type="submit">Ja, weiteres Konto anlegen</button>
       <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Abbrechen</button></a>
     </form>
+    <p style="margin-top:1rem">
+      Passkey verloren? <a href="{% url 'accounts:recover' %}">Zugang zu bestehendem Konto wiederherstellen</a>.
+    </p>
   {% else %}
     <form method="post" action="{% url 'accounts:register_start' %}">
       {% csrf_token %}

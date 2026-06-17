@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Zugang wiederherstellen — Fichtelink{% endblock %}
+{% block content %}
+<h1>Zugang wiederherstellen</h1>
+{% if sent %}
+  {% comment %}
+    Identical confirmation regardless of whether an account exists — the view
+    is enumeration-resistant, so this page never reveals it either.
+  {% endcomment %}
+  <div class="info">
+    Falls ein Konto mit dieser Adresse existiert, haben wir einen Link zum
+    Einrichten eines neuen Passkeys an <strong>{{ email }}</strong> gesendet.
+    Bitte prüfen Sie Ihr E-Mail-Postfach (auch den Spam-Ordner). Der Link ist
+    sieben Tage gültig.
+  </div>
+  <p style="margin-top:1rem"><a href="{% url 'accounts:login' %}">← Zur Anmeldung</a></p>
+{% else %}
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <p>
+    Haben Sie Ihren Passkey verloren (z. B. auf dem Smartphone oder im
+    Geräte-Schlüsselbund gelöscht)? Geben Sie Ihre hinterlegte E-Mail-Adresse
+    ein — wir senden Ihnen einen Link, mit dem Sie auf diesem oder einem anderen
+    Gerät einen neuen Passkey einrichten. <strong>Bestehende Passkeys bleiben
+    erhalten</strong>; einen nicht mehr funktionierenden können Sie nach der
+    Anmeldung selbst entfernen.
+  </p>
+  <form method="post" action="{% url 'accounts:recover' %}">
+    {% csrf_token %}
+    <label for="email">E-Mail-Adresse</label>
+    <input type="email" id="email" name="email" autocomplete="email" required
+           value="{{ email|default_if_none:'' }}">
+    <p style="margin-top:1rem">
+      <button type="submit">Wiederherstellungs-Link anfordern</button>
+    </p>
+  </form>
+  <p style="margin-top:1.5rem;font-size:0.85rem;color:#555">
+    Tipp: Richten Sie nach der Anmeldung einen <strong>zweiten Passkey</strong>
+    auf einem anderen Gerät ein — dann kommen Sie bei Verlust eines Geräts ohne
+    diesen Weg wieder hinein.
+  </p>
+  <p style="margin-top:1rem"><a href="{% url 'accounts:login' %}">← Zur Anmeldung</a></p>
+{% endif %}
+{% endblock %}

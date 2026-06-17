@@ -225,27 +225,36 @@ Weitere Punkte:
 
 ## 9. Konto-Wiederherstellung
 
-Der Super-Admin ist die **letzte Stufe** der menschlich vermittelten
-Wiederherstellung (siehe Benutzerhandbuch, Abschnitt 12). Hat ein Nutzer alle
-Passkeys verloren und die Hierarchie ist bis zum Super-Admin eskaliert:
+**Der Normalfall läuft als Selbstbedienung, ohne Sie:** Ein ausgesperrter Nutzer
+fordert über *„Passkey verloren? Zugang wiederherstellen"* auf der Anmeldeseite
+selbst einen Einrichtungs-Link an seine hinterlegte E-Mail-Adresse an (siehe
+Benutzerhandbuch, Abschnitt 12). Der Super-Admin wird dafür **nicht** mehr
+benötigt.
+
+Das Management-Kommando bleibt als **Fallback** für die Fälle, die die
+Selbstbedienung nicht abdeckt — der Nutzer hat **auch keinen Zugriff mehr aufs
+Postfach**, oder ein geteiltes Familienpostfach muss eindeutig zugeordnet werden:
 
 ```bash
 docker compose exec web python manage.py reset_passkeys --email <user-email>
 ```
 
-Das Kommando löscht die bestehenden Passkeys und **gibt einen frischen
-Enrollment-Link auf stdout aus**. Diesen Link reichen Sie dem Nutzer
-**out-of-band** weiter (Telefon, persönlich, separate E-Mail). Der Nutzer öffnet
-ihn und legt einen neuen Passkey an — Daten, Mitgliedschaften und
+Das Kommando **löscht** die bestehenden Passkeys (anders als die Selbstbedienung,
+die nur additiv einen neuen hinzufügt) und **gibt einen frischen Enrollment-Link
+auf stdout aus**. Diesen Link reichen Sie dem Nutzer **out-of-band** weiter
+(Telefon, persönlich, separate E-Mail). Daten, Mitgliedschaften und
 Familienbeziehungen bleiben erhalten.
 
 > Passt die E-Mail auf **mehrere** Konten (geteiltes Familienpostfach),
 > verweigert das Kommando die Ausführung und listet die Kandidaten auf —
 > erneut mit `--user-id` ausführen.
 
-Dieser Ablauf entfernt bewusst das Risiko „gekapertes Postfach = Konto­übernahme":
-Ein gestohlener Mail-Zugang allein verschafft keinen Systemzugriff; ein Angreifer
-müsste zusätzlich einen Menschen täuschen, der den Berechtigten kennt.
+> **Sicherheits-Hinweis:** Die Selbstbedienungs-Wiederherstellung bedeutet, dass
+> wer Zugriff auf das Postfach eines Nutzers hat, einen neuen Passkey einrichten
+> kann („gekapertes Postfach = möglicher Zugriff"). Das ist eine bewusste
+> Produktentscheidung zugunsten der Bedienbarkeit. Die Offenlegung
+> personenbezogener Daten an andere bleibt davon unberührt — sie ist weiterhin
+> pro Liste opt-in.
 
 ---
 

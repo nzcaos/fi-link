@@ -12,6 +12,9 @@ urlpatterns = [
     path("register/passkey-begin", views.register_passkey_begin, name="register_passkey_begin"),
     path("register/passkey-finish", views.register_passkey_finish, name="register_passkey_finish"),
 
+    # Self-service passkey recovery (fresh enrollment link to the on-file email)
+    path("recover/", views.recover_start, name="recover"),
+
     # Login / logout
     path("login/", views.login_start, name="login"),
     path("login-begin", views.login_begin, name="login_begin"),

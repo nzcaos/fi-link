@@ -121,15 +121,17 @@ Restore a dump onto a fresh stack:
 gunzip -c fichtelink-2026-05-29T03-30-00.sql.gz | docker compose exec -T db psql -U fichtelink fichtelink
 ```
 
-### Account recovery (super-admin)
+### Account recovery
 
-If a user has lost all their passkeys and the list-admin recovery chain (see *Account recovery* in CLAUDE.md) has escalated to the super-admin:
+**Primary path is self-service** (no admin needed): a locked-out user requests a fresh passkey-enrollment link to their on-file email at `/auth/recover/` (linked from the login page). It is additive (keeps existing passkeys), enumeration-resistant, rate-limited, and handles the shared-family-mailbox case with one labelled link per account. See *Account recovery* in CLAUDE.md.
+
+**Operator fallback (super-admin)** — only when the mailbox itself is lost, or a shared-mailbox account needs disambiguation:
 
 ```bash
 docker compose exec web python manage.py reset_passkeys --email <user-email>
 ```
 
-The command deletes the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
+The command **deletes** the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
 
 ## Forms (event signups)
 

@@ -386,19 +386,22 @@ The usernameless flow combined with `user.displayName` cleanly handles the share
 
 ### Account recovery
 
-There is **no automated email-based recovery** (no "forgot password" mail link). Recovery is **human-mediated** and walks up the list-admin hierarchy:
+**Self-service, email-based.** A locked-out USER (e.g. they deleted their passkey on the phone / in the OS keychain) requests recovery themselves at `/auth/recover/`: they enter their on-file email and the server mails a fresh passkey-enrollment link (a `RECOVER`-purpose `ActivationToken`). Clicking it runs the normal enrollment ceremony and signs them in. No admin or super-admin is involved in the common case. Implementation: `accounts.views.recover_start` + `templates/auth/recover.html`, linked from the login and registration pages.
+
+Properties of the self-service flow:
+
+- **Additive, never destructive.** Recovery does *not* delete existing passkeys (unlike `reset_passkeys`). The enrollment excludes already-registered credential ids and adds a new one; a stale Passkey row left behind by an out-of-app deletion is pruned by the user from the Passkeys page after signing in. Targeting is by *activated account* (`is_active=True`), not by passkey count, precisely because a stale row may linger.
+- **Enumeration-resistant.** The response is identical whether or not an account exists, and whether or not the mail actually went out (failures are logged, never surfaced). This is stricter than `register_start`, which is deliberately *not* enumeration-resistant.
+- **Shared family mailbox.** An address resolving to several activated USERs gets one `RECOVER` token per account, all links in a single mail, each labelled by the person's name — the recipient picks their own (mirrors the login credential-picker logic).
+- **Rate-limited** per-IP via the same bucket as registration (`_check_registration_rate_limit`).
 
 ```
-Regular USER             → contacts their list admin (e.g. Elternvertreter)
-List admin (sub-list)    → contacts the parent-list admin (e.g. Vorsitz Elternbeirat)
-Top-level list admin     → contacts the Super-Admin
-Super-Admin              → out-of-band recovery via shell
-                           (e.g. `manage.py reset-passkeys --user <email>`)
+Locked-out USER → /auth/recover/ → enrollment link to on-file email → new passkey → signed in
 ```
 
-The admin one level above triggers (manually, after recognizing the requester as the legitimate person) a resend of the activation link to the on-file email. Because the requester's data, list memberships, and family relationships are all retained, re-onboarding reduces to enrolling a new passkey — nothing else.
+**Security trade-off (changed decision).** Earlier design forbade automated email recovery to remove the "compromised mailbox = account takeover" risk and routed recovery through a human admin chain. That has been **deliberately overridden by the product owner** in favour of self-service: the on-file email is already the verified channel for activation/invitation links, and requiring admin availability for every lost phone was judged too costly for the volunteer-run context. The accepted consequence is that someone with access to a USER's mailbox can enrol a new passkey for that account. Mitigations that remain: disclosure of personal data to other members is still opt-in per list (a takeover does not auto-reveal others' data), multi-device passkeys avoid the recovery path entirely, and the flow is rate-limited and enumeration-resistant.
 
-This model deliberately removes the standard "compromised mailbox = account takeover" recovery risk: a stolen email account alone does not yield system access; an attacker would additionally need to socially engineer a human admin who knows the legitimate user. Trade-off: recovery is asynchronous and requires admin availability — accepted given the volunteer/social context this system runs in.
+**Operator fallback retained.** `manage.py reset_passkeys --email <…>` (super-admin, shell) still exists for the edge cases self-service can't cover: the mailbox itself is lost, or a shared-mailbox account needs disambiguation (`--user-id`). Unlike self-service it *deletes* the existing passkeys before issuing the link.
 
 ### HTTPS, RP config, and the Apache proxy
 

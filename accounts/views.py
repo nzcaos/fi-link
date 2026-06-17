@@ -147,8 +147,9 @@ def register_start(request: HttpRequest) -> HttpResponse:
                 "info": (
                     "Mit dieser Adresse ist bereits mindestens ein Konto verknüpft. "
                     "Falls Sie ein weiteres anlegen wollen (z.B. zweiter Elternteil), "
-                    "fahren Sie unten fort. Wenn Sie Ihr Konto wiederherstellen wollen, "
-                    "wenden Sie sich an Ihren Listen-Admin."
+                    "fahren Sie unten fort. Wenn Sie nur wieder Zugang zu Ihrem "
+                    "bestehenden Konto brauchen (z.B. Passkey verloren), nutzen Sie "
+                    "die Zugang-wiederherstellen-Funktion."
                 ),
                 "email": email,
                 "given_name": given_name,
@@ -211,6 +212,108 @@ def _create_stub_and_send(
         "auth/register_check_email.html",
         {"email": email, "mail_failed": mail_failed},
     )
+
+
+# ---------------------------------------------------------------------------
+# Self-service passkey recovery: mail a fresh enrollment link to the address
+# already on file. No admin or super-admin involved. See CLAUDE.md /
+# "Account recovery".
+# ---------------------------------------------------------------------------
+
+
+def recover_start(request: HttpRequest) -> HttpResponse:
+    """Email-entry form that mails a fresh passkey-enrollment link to the
+    address on file. For users who lost their passkey(s) — e.g. deleted them
+    on the phone or in the OS keychain (the in-app delete already refuses to
+    drop the last one, so a lockout only happens outside the app).
+
+    Enumeration-resistant: the response is identical whether or not an account
+    exists, so the endpoint can't probe which addresses are registered. The
+    link is *additive* — existing passkeys are kept; the user prunes the stale
+    one after signing in. Targeting is by activated account, not by passkey
+    count, because a stale Passkey row may linger after an out-of-app deletion.
+    """
+    if request.user.is_authenticated:
+        return redirect(settings.LOGIN_REDIRECT_URL)
+    if request.method == "GET":
+        return render(request, "auth/recover.html", {})
+
+    email = (request.POST.get("email") or "").strip().lower()
+    if not email:
+        return render(
+            request,
+            "auth/recover.html",
+            {"error": "Bitte geben Sie Ihre E-Mail-Adresse an."},
+            status=400,
+        )
+    if not _check_registration_rate_limit(request):
+        return _rate_limited_response(request)
+
+    # One link per activated account on this address (shared family mailbox →
+    # a link per parent, each labelled by name; the recipient picks their own).
+    users = list(
+        User.objects.select_related("person").filter(
+            person__email__iexact=email, is_active=True
+        )
+    )
+    if users:
+        links: list[tuple[str, str]] = []
+        with transaction.atomic():
+            for user in users:
+                token = ActivationToken.issue(
+                    person=user.person,
+                    email=user.person.email or email,
+                    user=user,
+                    purpose=ActivationToken.Purpose.RECOVER,
+                )
+                links.append(
+                    (
+                        user.person.full_name,
+                        request.build_absolute_uri(
+                            reverse("accounts:activate", args=[token.token])
+                        ),
+                    )
+                )
+        _send_recovery_mail(email, links)
+
+    # Identical response whether or not an account was found (enumeration
+    # resistance) and whether or not the mail actually went out.
+    return render(request, "auth/recover.html", {"sent": True, "email": email})
+
+
+def _send_recovery_mail(email: str, links: list[tuple[str, str]]) -> None:
+    if len(links) == 1:
+        name, link = links[0]
+        body = (
+            f"Hallo {name},\n\n"
+            f"Sie haben angefordert, einen neuen Passkey für Ihr Fichtelink-Konto "
+            f"einzurichten. Öffnen Sie dazu den folgenden Link:\n\n{link}\n\n"
+            f"Der Link ist sieben Tage gültig. Bestehende Passkeys bleiben erhalten. "
+            f"Wenn Sie das nicht waren, ignorieren Sie diese Mail — es wird nichts "
+            f"verändert."
+        )
+    else:
+        lines = "\n".join(f"  - {name}: {link}" for name, link in links)
+        body = (
+            f"Hallo,\n\n"
+            f"unter dieser E-Mail-Adresse sind mehrere Fichtelink-Konten registriert. "
+            f"Wählen Sie den Link für Ihr Konto, um einen neuen Passkey einzurichten:\n\n"
+            f"{lines}\n\n"
+            f"Die Links sind sieben Tage gültig. Bestehende Passkeys bleiben erhalten. "
+            f"Wenn Sie das nicht waren, ignorieren Sie diese Mail — es wird nichts "
+            f"verändert."
+        )
+    try:
+        send_mail(
+            subject="Fichtelink — neuen Passkey einrichten",
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+        )
+    except (smtplib.SMTPException, OSError) as exc:
+        # Never surface the failure to the caller (enumeration resistance);
+        # log it so the operator can spot mail-server trouble.
+        log.error("recovery mail to %s failed: %s", email, exc)
 
 
 @ensure_csrf_cookie
