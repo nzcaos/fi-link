@@ -210,5 +210,7 @@ Local dev requires Python 3.12+ and PostgreSQL. WebAuthn accepts `localhost` as 
 
 ## Documentation
 
+- [`docs/benutzerhandbuch.md`](docs/benutzerhandbuch.md) — **user manual** (German) for end users and list admins (Elternvertreter / list creators); also served in-app at **`/hilfe`**
+- [`docs/superadmin-handbuch.md`](docs/superadmin-handbuch.md) — **super-admin manual** (German): templates, top-level lists, aggregate aliases, school-year rollover, recovery; served in-app at **`/hilfe/superadmin`** (super-admins only)
 - [`filink.md`](filink.md) — product specification (German, original)
 - [`CLAUDE.md`](CLAUDE.md) — architecture decisions and implementation guidance

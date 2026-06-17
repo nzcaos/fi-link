@@ -288,6 +288,8 @@
             {% block menu_user %}{% endblock %}
             <a href="{% url 'lists:index' %}">Meine Listen &amp; Formulare</a>
             <a href="{% url 'accounts:profile' %}">Mein Profil</a>
+            <a href="{% url 'hilfe' %}">Hilfe</a>
+            {% if request.user.is_superuser %}<a href="{% url 'hilfe_superadmin' %}">Hilfe (Super-Admin)</a>{% endif %}
             {# Admin functions, visually set off — pages fill this only for admins. #}
             {% block menu_admin %}{% endblock %}
             <div class="menu-sep"></div>

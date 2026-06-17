@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% comment %}
+HTML-Fassung von docs/superadmin-handbuch.md, ausgeliefert unter
+/hilfe/superadmin (nur Super-Admins). Beide Fassungen synchron halten.
+{% endcomment %}
+{% block title %}Hilfe — Super-Admin-Handbuch — Fichtelink{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+{% block content %}
+<style>
+  .help h1 { margin-bottom: .25rem; }
+  .help .lead { color: var(--text-soft); font-size: 1.05rem; max-width: 48rem; }
+  .help h2 { margin-top: 2.25rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+  .help h3 { margin-top: 1.5rem; }
+  .help .toc { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem 1.25rem; max-width: 48rem; }
+  .help .toc ol { margin: .25rem 0 0; padding-left: 1.4rem; }
+  .help .toc li { margin: .15rem 0; }
+  .help .note { background: var(--info-bg); border-left: 3px solid var(--info); padding: .6rem .9rem; border-radius: 6px; margin: 1rem 0; color: var(--text-soft); max-width: 48rem; }
+  .help .warn { background: var(--warn-bg); border-left: 3px solid var(--warn); padding: .6rem .9rem; border-radius: 6px; margin: 1rem 0; color: var(--text-soft); max-width: 48rem; }
+  .help p, .help li { max-width: 48rem; }
+  .help pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .9rem 1.1rem; overflow-x: auto; }
+  .help code { background: var(--surface-2); padding: .05rem .35rem; border-radius: 4px; }
+  .help pre code { background: none; padding: 0; }
+</style>
+
+<div class="help">
+<h1>Fichtelink — Super-Admin-Handbuch</h1>
+<p class="lead">
+  Dieses Handbuch beschreibt die Funktionen, die <strong>dem Super-Admin der
+  Installation vorbehalten</strong> sind — in der Regel betrifft das eine
+  <strong>einzige Person</strong> je Installation.
+</p>
+<p>
+  Alle übrigen Funktionen — einschließlich der Admin-Aufgaben für Elternvertreter
+  bzw. Listen-Ersteller — stehen im
+  <a href="{% url 'hilfe' %}">Benutzerhandbuch</a>. Der Super-Admin ist die
+  oberste Instanz: Er richtet die strukturelle Spitze der Installation ein
+  (Vorlagen, oberste Listen, Aggregat-Aliase), führt den Schuljahres-Übergang aus
+  und ist letzte Stufe der Konto-Wiederherstellung.
+</p>
+
+<nav class="toc">
+  <strong>Inhalt</strong>
+  <ol>
+    <li><a href="#bootstrap">Wer ist Super-Admin? Erstinbetriebnahme</a></li>
+    <li><a href="#django-admin">Die Django-Administration</a></li>
+    <li><a href="#vorlagen">Vorlagen (LISTTEMPLATE)</a></li>
+    <li><a href="#oberste-listen">Oberste Listen anlegen</a></li>
+    <li><a href="#aggregat">Aggregat-Aliase (<code>eltern@…</code>)</a></li>
+    <li><a href="#rollover">Schuljahres-Übergang (Rollover)</a></li>
+    <li><a href="#testmail">Test-Mail senden</a></li>
+    <li><a href="#formulare">Formulare anlegen und klonen</a></li>
+    <li><a href="#recovery">Konto-Wiederherstellung</a></li>
+    <li><a href="#sonderrechte">Sonderrechte gegenüber regulären Admins</a></li>
+  </ol>
+</nav>
+
+<section id="bootstrap">
+<h2>1. Wer ist Super-Admin? Erstinbetriebnahme</h2>
+<p>
+  Der erste Super-Admin wird einmalig bei der Installation per
+  Management-Kommando auf dem Server angelegt:
+</p>
+<pre><code>docker compose exec web python manage.py bootstrap_super_admin</code></pre>
+<p>
+  Das Kommando fragt nach einer E-Mail-Adresse, legt eine Person + ein als
+  Super-Admin markiertes Konto an und versendet einen
+  <strong>Passkey-Aktivierungs-Link</strong>. Es gibt kein Passwort — die
+  Aktivierung erfolgt ausschließlich über den Link, identisch zum regulären
+  Einladungsablauf.
+</p>
+<p>
+  Super-Admin-Funktionen erscheinen an den passenden Stellen automatisch, sobald
+  Sie als Super-Admin angemeldet sind (z. B. der Eintrag
+  <strong>„Schuljahres-Übergang"</strong> und <strong>„Test-Mail senden"</strong>
+  im Admin-Menü einer Liste).
+</p>
+</section>
+
+<section id="django-admin">
+<h2>2. Die Django-Administration</h2>
+<p>
+  Strukturelle Konfiguration läuft über die <strong>Django-Administration</strong>
+  unter <strong><code>/admin/</code></strong>. Dort verwalten Sie, was es im
+  normalen Nutzer-UI bewusst <em>nicht</em> gibt:
+</p>
+<ul>
+  <li><strong>Vorlagen</strong> (LISTTEMPLATE) inkl. Attribute und
+    Rollen-Taxonomie,</li>
+  <li><strong>Aggregat-Aliase</strong> (<code>eltern@…</code>),</li>
+  <li><strong>Formulare</strong> (Aufbau aus Teilen, Slots, Bild-Assets),</li>
+  <li>direkte Korrekturen an Datensätzen, wenn nötig.</li>
+</ul>
+<div class="note">
+  <code>/admin/</code> ist nur für Super-Admins gedacht. Reguläre Listen-Admins
+  erledigen ihre Aufgaben vollständig über das normale UI.
+</div>
+</section>
+
+<section id="vorlagen">
+<h2>3. Vorlagen (LISTTEMPLATE)</h2>
+<p>
+  Vorlagen bestimmen, <strong>welche Felder eine Liste hat</strong> und
+  <strong>wie sie angezeigt werden</strong>. Sie sind <strong>Super-Admin-only</strong>
+  und werden in der Django-Administration gepflegt. Eine Vorlage legt fest:
+</p>
+<ul>
+  <li>die <strong>Attribute</strong> (Text, E-Mail, Telefon, Zahl, Auswahl mit
+    optionaler Nutzungsobergrenze, Checkbox, Personen-Beziehung),</li>
+  <li>ob ein Feld <strong>immer öffentlich</strong> sein muss
+    (<code>Must_be_public</code>),</li>
+  <li>die <strong>Rolle</strong> eines Attributs: gehört es zum
+    <strong>Mitglied</strong> (z. B. dem Kind) oder zur
+    <strong>Bezugsperson</strong> (<code>applies_to_role</code>),</li>
+  <li>den <strong>Onboarding-Modus</strong> (<code>member_subject_mode</code>):
+    <code>self</code> (die registrierende Person ist selbst das Mitglied, z. B.
+    VHS-Kurs) oder <code>via_associate</code> (sie meldet ein anderes Mitglied an,
+    z. B. Schulklasse),</li>
+  <li>die <strong>Rollen-Taxonomie</strong> für Beziehungen („Mutter von", „Vater
+    von", „Erziehungsberechtigte von", …) — konfigurierbar <strong>je
+    Vorlage</strong>,</li>
+  <li>die <strong>Anzeige-Voreinstellung</strong>: welche Felder in welcher
+    Zeile/Reihenfolge erscheinen (Mehr-Personen-Zeile bei Schulklassen).</li>
+</ul>
+<div class="warn">
+  Wer Vorlagen ändert, ändert die Struktur <strong>aller Listen</strong>, die sie
+  nutzen. Änderungen an Attributen produktiver Vorlagen mit Bedacht vornehmen.
+</div>
+</section>
+
+<section id="oberste-listen">
+<h2>4. Oberste Listen anlegen</h2>
+<p>
+  <strong>Oberste Listen</strong> (ohne übergeordnete Liste) — z. B.
+  <code>Elternbeirat</code>, <code>Lehrerkollegium</code> — dürfen <strong>nur
+  Super-Admins</strong> anlegen. Das Aufsetzen der strukturellen Spitze einer
+  Installation ist ein administrativer Akt, keine Selbstbedienung.
+</p>
+<p>
+  Reguläre Nutzer können darunter <strong>Unterlisten</strong> erstellen (z. B.
+  einzelne Klassen) und werden deren Admin. Die Hierarchie ist ein
+  <strong>expliziter Baum</strong> über die „übergeordnete Liste":
+</p>
+<pre><code>Elternbeirat
+├── Klasse 5a
+│   ├── Klassenfeier-Planung
+│   └── Umfrage: Pizza-Wahl
+├── Klasse 5b
+└── …
+Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
+<p>
+  Die Hierarchie steuert u. a. das <strong>Senderecht</strong>: Mitglieder einer
+  übergeordneten Liste dürfen automatisch an die Unterlisten senden (z. B. der
+  Elternbeirat an eine Klassenliste).
+</p>
+</section>
+
+<section id="aggregat">
+<h2>5. Aggregat-Aliase (<code>eltern@…</code>)</h2>
+<p>
+  Ein <strong>Aggregat-Alias</strong> ist eine E-Mail-Adresse, die über
+  <strong>mehrere Listen hinweg</strong> nach Beziehungsrolle ausfächert — z. B.
+  <code>eltern@&lt;domain&gt;</code> erreicht alle Personen mit Rolle „Mutter",
+  „Vater" oder „Erziehungsberechtigte" innerhalb eines konfigurierten Teilbaums.
+  Konfiguration ist <strong>Super-Admin-only</strong> (Django-Administration).
+</p>
+<p>Felder eines Alias:</p>
+<ul>
+  <li><strong><code>email_alias</code></strong> — z. B. <code>eltern@&lt;domain&gt;</code></li>
+  <li><strong><code>title</code></strong> — Anzeigename</li>
+  <li><strong><code>scope_list_id</code></strong> — beschränkt auf den Teilbaum
+    dieser Liste (optional)</li>
+  <li><strong><code>included_roles</code></strong> — die Beziehungsrollen, die
+    einbezogen werden</li>
+</ul>
+<p>Eigenschaften:</p>
+<ul>
+  <li><strong>Keine Mitgliederliste</strong>, nur eine Abfrage: Empfänger werden
+    <strong>zum Sendezeitpunkt</strong> ermittelt (nicht zwischengespeichert),
+    entlang der Beziehungsrollen und des Teilbaums, dedupliziert, beschränkt auf
+    Personen mit hinterlegter E-Mail.</li>
+  <li><strong>Senderecht</strong> leitet sich aus dem bestehenden
+    Senderecht-Graphen ab: Senden darf, wer auf <strong>jeder</strong> betroffenen
+    Liste Senderecht hat (z. B. der Vorsitz des Elternbeirats). Andernfalls landet
+    die Mail in der <strong>Super-Admin-Freigabe</strong> — Aggregat-Aliase haben
+    keinen Listen-Admin, sie gehören dem Super-Admin.</li>
+</ul>
+</section>
+
+<section id="rollover">
+<h2>6. Schuljahres-Übergang (Rollover)</h2>
+<p>
+  Eine <strong>Stapeloperation für Schulklassen</strong>, üblicherweise in der
+  letzten Woche der Sommerferien. Aufruf über das Admin-Menü einer Liste →
+  <strong>„Schuljahres-Übergang"</strong> (oder <code>/lists/rollover/</code>).
+</p>
+<p>Ablauf:</p>
+<ol>
+  <li>Fichtelink zeigt eine <strong>Vorschau aller Klassenlisten</strong> mit
+    gesetztem Schulzweig (G8/G9) und der geplanten Aktion (hochstufen,
+    <code>K1 → K2</code>, <code>K2 endet → archivieren</code>).</li>
+  <li><strong>Titel und E-Mail-Alias</strong> der neuen Klasse sind editierbar —
+    prüfen, anpassen.</li>
+  <li><strong>Ausführen.</strong></li>
+</ol>
+<p>Standardregeln:</p>
+<ul>
+  <li><code>Na → (N+1)a</code> für <code>N ∈ {5, …, 9}</code> (beide Züge)</li>
+  <li><strong>G8:</strong> <code>10a..10d → K1</code> (Zusammenführung),
+    <code>K1 → K2</code>, <code>K2 → archiviert</code></li>
+  <li><strong>G9:</strong> <code>10a → 11a</code>, …, <code>11a..11d → K1</code>,
+    <code>K1 → K2</code>, <code>K2 → archiviert</code></li>
+</ul>
+<p>Wichtig:</p>
+<ul>
+  <li>Listen werden <strong>nicht gelöscht</strong> — sie behalten ihre Identität,
+    nur Titel und Kohorten-Felder ändern sich. Nutzer und ihre Einträge bleiben
+    verknüpft.</li>
+  <li>Bei Zusammenführungen wird eine neue K1-Liste angelegt und alle Einträge der
+    Quelllisten umgehängt; die Quelllisten werden <strong>archiviert</strong>
+    (schreibgeschützt).</li>
+  <li>Der <strong>E-Mail-Alias rollt sofort mit</strong> (<code>5a@…</code> →
+    <code>6a@…</code>). <strong>Keine Übergangsfrist:</strong> ab Tag 1
+    funktioniert nur die neue Adresse, Mail an die alte bekommt eine
+    Unzustellbarkeitsmeldung.</li>
+</ul>
+<div class="warn">
+  <strong>Die Aktion ist nicht automatisiert reversibel.</strong> Vorher unbedingt
+  ein <strong>Backup</strong> ziehen (siehe README → <em>Backups</em>).
+</div>
+<p>
+  Voraussetzung: Die teilnehmenden Klassen brauchen gepflegte
+  <strong>Kohorten-Daten</strong> (Jahrgang, Zug, G8/G9) — diese setzen die
+  jeweiligen Listen-Admins über <strong>„Kohorten-Daten"</strong> (siehe
+  Benutzerhandbuch, Abschnitt 13). Ohne gesetzten Schulzweig nimmt eine Liste
+  nicht am Übergang teil.
+</p>
+</section>
+
+<section id="testmail">
+<h2>7. Test-Mail senden</h2>
+<p>
+  Über das Admin-Menü einer Liste → <strong>„Test-Mail senden"</strong>
+  (<code>/lists/&lt;id&gt;/send-test/</code>) versenden Sie eine Nachricht
+  <strong>direkt an die Benutzergruppe</strong> der Liste — unter Umgehung des
+  regulären Inbound-/Freigabe-Pfads. Die Seite zeigt vorab die
+  <strong>Empfängerliste</strong> (nur Mitglieder mit hinterlegter
+  E-Mail-Adresse). Nützlich, um nach Einrichtung oder Konfigurationsänderung den
+  Mailversand einer Liste zu prüfen.
+</p>
+</section>
+
+<section id="formulare">
+<h2>8. Formulare anlegen und klonen</h2>
+<p>
+  Formulare (Helfer-/Spendenlisten für Aktionen) werden <strong>ausschließlich in
+  der Django-Administration</strong> aufgebaut — es gibt bewusst keinen
+  Self-Service-Baukasten. Die Endnutzer-Seite ist nur der Eintrage-Ablauf (siehe
+  Benutzerhandbuch, Abschnitt 9).
+</p>
+<p>
+  Ein Formular besteht aus <strong>Teilen</strong> (<code>FORM_PART</code>) in
+  frei wählbarer Reihenfolge:
+</p>
+<ul>
+  <li><strong><code>html</code></strong> — statischer, vertrauenswürdig
+    gerenderter HTML-Text mit Bild-Assets (Super-Admin-autorisiert),</li>
+  <li><strong><code>slots</code></strong> — Positionen mit Kapazität (z. B.
+    „Aufbau Freitag, 2 Plätze"),</li>
+  <li><strong><code>contributions</code></strong> — offene Freitext-Beiträge
+    (z. B. „Wer bringt was mit?").</li>
+</ul>
+<p>Weitere Punkte:</p>
+<ul>
+  <li><strong>Broadcast-Link:</strong> Pro Formular gibt es <strong>genau
+    einen</strong> Teilen-Link (<code>/forms/s/&lt;token&gt;/</code>). Er wird beim
+    ersten Öffnen der Detailseite durch einen Formular-Admin automatisch erzeugt
+    und dort zum Kopieren angezeigt. Ansehen braucht keine Anmeldung, Eintragen
+    schon.</li>
+  <li><strong><code>is_open</code>:</strong> Eintragungen schließen, ohne die
+    Ansicht zu entfernen.</li>
+  <li><strong>Klonen:</strong> Die Admin-Aktion <code>Form.clone()</code> kopiert
+    ein Formular für wiederkehrende Anlässe (jährliches Schulfest) — mit Teilen,
+    Slots, Bild-Assets und Texten, aber <strong>ohne</strong> Eintragungen,
+    Zugriffe und Teilen-Token; die Eintragung wird wieder geöffnet.</li>
+</ul>
+</section>
+
+<section id="recovery">
+<h2>9. Konto-Wiederherstellung</h2>
+<p>
+  Der Super-Admin ist die <strong>letzte Stufe</strong> der menschlich
+  vermittelten Wiederherstellung (siehe Benutzerhandbuch, Abschnitt 12). Hat ein
+  Nutzer alle Passkeys verloren und die Hierarchie ist bis zum Super-Admin
+  eskaliert:
+</p>
+<pre><code>docker compose exec web python manage.py reset_passkeys --email &lt;user-email&gt;</code></pre>
+<p>
+  Das Kommando löscht die bestehenden Passkeys und <strong>gibt einen frischen
+  Enrollment-Link auf stdout aus</strong>. Diesen Link reichen Sie dem Nutzer
+  <strong>out-of-band</strong> weiter (Telefon, persönlich, separate E-Mail). Der
+  Nutzer öffnet ihn und legt einen neuen Passkey an — Daten, Mitgliedschaften und
+  Familienbeziehungen bleiben erhalten.
+</p>
+<div class="note">
+  Passt die E-Mail auf <strong>mehrere</strong> Konten (geteiltes
+  Familienpostfach), verweigert das Kommando die Ausführung und listet die
+  Kandidaten auf — erneut mit <code>--user-id</code> ausführen.
+</div>
+<p>
+  Dieser Ablauf entfernt bewusst das Risiko „gekapertes Postfach =
+  Kontoübernahme": Ein gestohlener Mail-Zugang allein verschafft keinen
+  Systemzugriff; ein Angreifer müsste zusätzlich einen Menschen täuschen, der den
+  Berechtigten kennt.
+</p>
+</section>
+
+<section id="sonderrechte">
+<h2>10. Sonderrechte gegenüber regulären Admins</h2>
+<p>
+  Als Super-Admin haben Sie über die normalen Listen-Admin-Rechte hinaus:
+</p>
+<ul>
+  <li><strong>Globale Sicht:</strong> Sie sehen <strong>Namen und E-Mail-Adressen
+    immer</strong>, unabhängig von der Sichtbarkeits-Matrix — nötig für Moderation
+    und Wiederherstellung.</li>
+  <li><strong>Umzüge und Austritte ohne Zustimmung:</strong> Sie können Personen
+    ohne die sonst nötige Zustimmung der Zielliste verschieben oder entfernen.</li>
+  <li><strong>Verwaltung von Vorlagen, obersten Listen und
+    Aggregat-Aliasen</strong> (siehe oben).</li>
+</ul>
+<div class="note">
+  Eine Grenze bleibt auch für den Super-Admin selten nötig zu überschreiten: Die
+  Sichtbarkeits-Einstellungen einer Person gehören der Person. Greifen Sie nur
+  korrigierend ein, wenn es betrieblich unumgänglich ist.
+</div>
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,530 @@
+{% extends "base.html" %}
+{% comment %}
+HTML-Fassung von docs/benutzerhandbuch.md, ausgeliefert unter /hilfe.
+Beim Pflegen bitte beide Fassungen synchron halten.
+{% endcomment %}
+{% block title %}Hilfe — Benutzerhandbuch — Fichtelink{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+{% block content %}
+<style>
+  .help h1 { margin-bottom: .25rem; }
+  .help .lead { color: var(--text-soft); font-size: 1.05rem; max-width: 48rem; }
+  .help h2 { margin-top: 2.25rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+  .help h3 { margin-top: 1.5rem; }
+  .help section:target > h2,
+  .help section:target > h3 { scroll-margin-top: 1rem; }
+  .help .toc { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem 1.25rem; max-width: 48rem; }
+  .help .toc ol { margin: .25rem 0 0; padding-left: 1.4rem; }
+  .help .toc li { margin: .15rem 0; }
+  .help .note { background: var(--info-bg); border-left: 3px solid var(--info); padding: .6rem .9rem; border-radius: 6px; margin: 1rem 0; color: var(--text-soft); max-width: 48rem; }
+  .help p, .help li { max-width: 48rem; }
+  .help pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .9rem 1.1rem; overflow-x: auto; }
+  .help code { background: var(--surface-2); padding: .05rem .35rem; border-radius: 4px; }
+  .help pre code { background: none; padding: 0; }
+</style>
+
+<div class="help">
+<h1>Fichtelink — Benutzerhandbuch</h1>
+<p class="lead">
+  Fichtelink ist ein selbstverwalteter Mailinglisten- und Kontaktdienst für
+  Elterngruppen, Fördervereine und Kurse. Sie verwalten Ihre Daten selbst und
+  entscheiden <strong>pro Liste und pro Feld</strong>, wer was sieht. Wer an eine
+  Listenadresse schreibt, erreicht alle Mitglieder — ohne dass die einzelnen
+  Adressen offengelegt werden müssen.
+</p>
+<p>
+  Dieses Handbuch richtet sich an Endnutzer. Der letzte Abschnitt beschreibt die
+  zusätzlichen Funktionen für Listen-Admins (z. B. Elternvertreter). Funktionen,
+  die ausschließlich der Super-Admin der Installation benötigt, stehen im
+  Super-Admin-Handbuch{% if request.user.is_superuser %} (<a href="{% url 'hilfe_superadmin' %}">öffnen</a>){% endif %}.
+</p>
+
+<nav class="toc">
+  <strong>Inhalt</strong>
+  <ol>
+    <li><a href="#voraussetzungen">Voraussetzungen</a></li>
+    <li><a href="#anmelden">Registrieren und Anmelden</a></li>
+    <li><a href="#passkeys">Passkeys verwalten</a></li>
+    <li><a href="#startseite">Die Startseite: Meine Listen &amp; Formulare</a></li>
+    <li><a href="#beitreten">Einer Liste beitreten</a></li>
+    <li><a href="#eintrag">Mein Eintrag: Daten erfassen und pflegen</a></li>
+    <li><a href="#sichtbarkeit">Wer sieht was? Die Sichtbarkeit steuern</a></li>
+    <li><a href="#mail">E-Mail an eine Liste senden und empfangen</a></li>
+    <li><a href="#formulare">Formulare: sich für Aktionen eintragen</a></li>
+    <li><a href="#messenger">Messenger (Matrix-Klassenraum)</a></li>
+    <li><a href="#umzug">Eintrag umziehen oder löschen</a></li>
+    <li><a href="#wiederherstellung">Konto-Wiederherstellung bei Geräteverlust</a></li>
+    <li><a href="#admins">Für Listen-Admins</a></li>
+    <li><a href="#faq">Häufige Fragen</a></li>
+  </ol>
+</nav>
+
+<section id="voraussetzungen">
+<h2>1. Voraussetzungen</h2>
+<p>
+  Fichtelink nutzt <strong>Passkeys statt Passwörter</strong>. Sie melden sich mit
+  Face&nbsp;ID, Touch&nbsp;ID, Windows&nbsp;Hello oder einem Sicherheits-Schlüssel
+  an — es gibt kein Passwort, das man vergessen oder das geleakt werden könnte.
+</p>
+<p>Sie brauchen ein Gerät, das Passkeys unterstützt:</p>
+<ul>
+  <li>iPhone/iPad ab <strong>iOS 16</strong></li>
+  <li>Android ab <strong>Version 9</strong></li>
+  <li>aktuelles <strong>macOS / Windows / Linux</strong> mit modernem Browser</li>
+</ul>
+<p>
+  Außerdem läuft Fichtelink ausschließlich über <strong>HTTPS</strong> — das ist
+  für Passkeys technisch zwingend und unter der gewohnten Adresse Ihrer
+  Installation bereits eingerichtet.
+</p>
+<div class="note">
+  <strong>Geräte ohne Passkey-Unterstützung</strong> (z. B. sehr alte
+  Windows-Rechner ohne Smartphone) können Fichtelink nicht nutzen. Das ist
+  bewusst so gewählt.
+</div>
+</section>
+
+<section id="anmelden">
+<h2>2. Registrieren und Anmelden</h2>
+<h3>Konto anlegen</h3>
+<ol>
+  <li>Auf der Startseite <strong>„Registrieren"</strong> wählen.</li>
+  <li><strong>Vorname</strong>, <strong>Nachname</strong> und
+    <strong>E-Mail-Adresse</strong> eingeben und
+    <strong>„Aktivierungs-Link anfordern"</strong> klicken.</li>
+  <li>Sie erhalten eine E-Mail mit einem <strong>Aktivierungs-Link</strong>.
+    Diesen Link öffnen.</li>
+  <li>Auf der Seite <strong>„Passkey einrichten"</strong> klicken Sie auf
+    <em>„Passkey einrichten"</em>; Ihr Gerät fragt nach Face&nbsp;ID /
+    Touch&nbsp;ID / Windows&nbsp;Hello / Sicherheits-Schlüssel. Optional können
+    Sie dem Passkey eine <strong>Bezeichnung</strong> geben (z. B. „iPhone",
+    „Arbeit-Laptop").</li>
+  <li>Fertig — Sie sind angemeldet.</li>
+</ol>
+<div class="note">
+  Die <strong>E-Mail-Adresse ist Pflicht</strong>: Fichtelink lebt von der
+  Kommunikation per Mail (Listenpost, Bestätigungslinks, Einladungen). Ihre
+  Adresse ist aber <strong>nur sichtbar, wenn Sie sie pro Liste ausdrücklich
+  freigeben</strong> (siehe Abschnitt 7).
+</div>
+<p>
+  <strong>Sie haben eine Einladung erhalten?</strong> Dann ist der
+  Einladungs-Link gleichzeitig Ihr Aktivierungs-Link — ein Klick aktiviert das
+  Konto, richtet den Passkey ein und trägt Sie direkt in die Liste ein. Siehe
+  Abschnitt 5.
+</p>
+<h3>Anmelden</h3>
+<ol>
+  <li><strong>„Anmelden"</strong> wählen.</li>
+  <li>Klicken Sie auf den Anmelde-Button — der Browser zeigt Ihnen die
+    verfügbaren Passkeys an (beschriftet mit Ihrem Namen).</li>
+  <li>Den eigenen Passkey auswählen und mit Face&nbsp;ID / Touch&nbsp;ID / o. ä.
+    bestätigen.</li>
+</ol>
+<p>
+  Eine E-Mail-Eingabe ist in der Regel <strong>nicht</strong> nötig — der Browser
+  bietet Ihre Passkeys direkt an.
+</p>
+<div class="note">
+  <strong>Gemeinsame Familien-Mailadresse:</strong> Wenn beide Elternteile
+  dieselbe E-Mail-Adresse nutzen, hat jede Person ein eigenes Konto mit eigenem
+  Passkey. Beim Anmelden zeigt der Browser beide Passkeys mit Namen an — jeder
+  wählt seinen eigenen, auch auf einem gemeinsam genutzten Gerät.
+</div>
+<p>
+  Nach dem Anmelden landen Sie <strong>direkt in einer Listenansicht</strong> —
+  es gibt keine zusätzliche Startseite. Welche Liste angezeigt wird, ist die
+  zuletzt geöffnete (oder die erste Ihrer Listen).
+</p>
+</section>
+
+<section id="passkeys">
+<h2>3. Passkeys verwalten</h2>
+<p>
+  Über das Menü oben rechts → <strong>Mein Profil</strong> → Passkeys (bzw.
+  direkt <strong>„Passkeys"</strong>) können Sie:
+</p>
+<ul>
+  <li><strong>weitere Passkeys hinzufügen</strong> (z. B. zusätzlich zum iPhone
+    noch den Laptop). Mehrere Passkeys sind ausdrücklich erwünscht — sie sind Ihr
+    Schutz gegen Geräteverlust.</li>
+  <li><strong>einzelne Passkeys löschen</strong> (z. B. bei einem abgegebenen
+    Altgerät).</li>
+</ul>
+<div class="note">
+  <strong>Tipp:</strong> Richten Sie von Anfang an einen Passkey auf einem
+  <strong>zweiten Gerät</strong> ein. Verlieren Sie eines, kommen Sie mit dem
+  anderen weiterhin hinein, ohne einen Admin um Hilfe bitten zu müssen.
+</div>
+</section>
+
+<section id="startseite">
+<h2>4. Die Startseite: Meine Listen &amp; Formulare</h2>
+<p>
+  Das Menü oben rechts (Ihr Name) führt zu
+  <strong>„Meine Listen &amp; Formulare"</strong>. Dort finden Sie:
+</p>
+<ul>
+  <li>alle <strong>Listen</strong>, in denen Sie Mitglied oder Admin sind,</li>
+  <li>alle <strong>Formulare</strong>, bei denen Sie eingetragen sind,</li>
+  <li>darunter ggf. <strong>öffentliche Listen</strong>, denen Sie noch nicht
+    beigetreten sind.</li>
+</ul>
+<p>
+  Über <strong>„Neue Liste anlegen"</strong> erstellen Sie eine eigene Unterliste
+  (sofern Sie dazu berechtigt sind — die obersten Listen einer Installation
+  richtet der Super-Admin ein).
+</p>
+<p>
+  Über das Menü erreichen Sie außerdem jederzeit <strong>Mein Profil</strong> und
+  die <strong>Abmelden</strong>-Funktion. Innerhalb einer Liste gibt es oben einen
+  <strong>Listen-Umschalter</strong>, um schnell zwischen Ihren Listen zu springen.
+</p>
+</section>
+
+<section id="beitreten">
+<h2>5. Einer Liste beitreten</h2>
+<p>Es gibt drei Wege in eine Liste:</p>
+<h3>a) Persönliche Einladung</h3>
+<p>Ein Admin lädt Sie per E-Mail ein. Sie erhalten einen Link:</p>
+<ul>
+  <li><strong>Sie haben noch kein Konto:</strong> Der Link führt durch
+    Registrierung (E-Mail-Bestätigung + Passkey). Die E-Mail-Adresse ist
+    vorausgefüllt, kann aber korrigiert werden (z. B. wenn Sie Ihre persönliche
+    statt der geteilten Familienadresse möchten). Danach werden Sie automatisch
+    in die Liste eingetragen.</li>
+  <li><strong>Sie haben bereits ein Konto:</strong> Ein Klick + Anmeldung mit dem
+    Passkey, und Sie landen direkt im <strong>Eintrag-Formular</strong> mit
+    bereits ausgefülltem Namen — nur noch speichern. Kein neuer Passkey, keine
+    Daten doppelt eingeben.</li>
+</ul>
+<h3>b) QR-Code</h3>
+<p>
+  Listen ohne persönliche Einladung können einen <strong>QR-Code</strong> haben —
+  z. B. ausgehängt beim Elternabend. Sie scannen ihn, registrieren sich (falls
+  nötig) und treten bei. QR-Codes laufen nach kurzer Zeit ab.
+</p>
+<h3>c) Öffentliche Listen</h3>
+<p>
+  Öffentliche Listen erscheinen in der Übersicht und können direkt geöffnet
+  werden.
+</p>
+<div class="note">
+  In allen Fällen gilt: <strong>Es wird nichts gespeichert, solange Sie nicht
+  ausdrücklich bestätigen.</strong> Eine unerwartete Einladungsseite können Sie
+  einfach schließen.
+</div>
+</section>
+
+<section id="eintrag">
+<h2>6. Mein Eintrag: Daten erfassen und pflegen</h2>
+<p>
+  Jede Person hat <strong>pro Liste höchstens einen Eintrag</strong>. Wie Sie sich
+  eintragen, hängt von der Art der Liste ab:
+</p>
+<h3>Listen „über sich selbst" (z. B. VHS-Kurs, Förderverein)</h3>
+<ul>
+  <li>In der Liste auf <strong>„Mich eintragen"</strong> klicken.</li>
+  <li>Ihre Felder ausfüllen (Name ist gesetzt, dazu z. B. Telefon, Adresse).</li>
+  <li>Speichern. Später bearbeiten Sie ihn über
+    <strong>„Mein Eintrag bearbeiten"</strong> im Menü.</li>
+</ul>
+<h3>Schulklassen-Listen (Sie tragen z. B. Ihr Kind ein)</h3>
+<p>
+  Hier ist das <strong>Mitglied</strong> das Kind, und Sie selbst (sowie ggf. ein
+  zweiter Elternteil) sind als <strong>zugehörige Bezugspersonen</strong>
+  hinterlegt.
+</p>
+<ol>
+  <li>Im Menü <strong>„Mitglied (z. B. Kind) hinzufügen"</strong> wählen.</li>
+  <li>Den Namen des <strong>Kindes</strong> und dessen Felder eintragen.</li>
+  <li>Sich selbst als <strong>Bezugsperson</strong> erfassen (Name, Rolle wie
+    „Mutter von" / „Vater von" / „Erziehungsberechtigte von", Telefon, Adresse,
+    E-Mail).</li>
+  <li>Optional eine <strong>zweite Bezugsperson</strong> (zweiter Elternteil)
+    gleich mit anlegen.</li>
+</ol>
+<p>
+  Die Klassenliste zeigt dann <strong>eine Zeile pro Kind</strong> mit den Daten
+  des Kindes und daneben pro Elternteil dessen Name, Adresse, Telefon und (falls
+  freigegeben) E-Mail — so wie die gewohnte Papier-Klassenliste, nur dass jeder
+  selbst bestimmt, was davon sichtbar ist.
+</p>
+<div class="note">
+  Der <strong>zweite Elternteil</strong> kann seinen Eintrag später selbst
+  übernehmen (per eigener Einladung) und dann seine Sichtbarkeit selbst einstellen.
+</div>
+<h3>Wer darf einen Eintrag bearbeiten?</h3>
+<ul>
+  <li><strong>Sie selbst</strong> Ihren eigenen Eintrag.</li>
+  <li><strong>Erziehungsberechtigte</strong> den Eintrag des von ihnen erfassten
+    Kindes.</li>
+  <li><strong>Listen-Admins</strong> dürfen Werte korrigieren (Moderation) — aber
+    <strong>nicht</strong> die Sichtbarkeits-Einstellungen ändern. Die gehören
+    immer der betroffenen Person.</li>
+</ul>
+</section>
+
+<section id="sichtbarkeit">
+<h2>7. Wer sieht was? Die Sichtbarkeit steuern</h2>
+<p>
+  Im <strong>Bearbeiten-Dialog</strong> eines Eintrags hat jedes Feld eine Zeile
+  <strong>„Sichtbar für:"</strong> mit Auswahlkästchen. Damit entscheiden Sie
+  <strong>pro Feld und pro Zielgruppe</strong>, wer den Wert sehen darf.
+  Zielgruppen sind z. B. „Mitglieder dieser Liste" oder „öffentlich".
+</p>
+<ul>
+  <li><strong>Der Name</strong> ist eine eigene Zeile ganz oben. Geben Sie ihn für
+    niemanden frei, erscheint statt des Namens ein <code>?N</code> (eine
+    Platzhalter-Nummer pro Listenansicht).</li>
+  <li><strong>Die E-Mail-Adresse</strong> ist standardmäßig
+    <strong>verborgen</strong> (Opt-in). Sie müssen sie ausdrücklich freigeben,
+    damit andere Mitglieder sie sehen.</li>
+  <li>Manche Felder sind durch die Vorlage <strong>immer öffentlich</strong> — das
+    steht dann direkt am Feld („Dieses Feld ist immer öffentlich").</li>
+  <li><strong>Listen-Admins und Super-Admins</strong> sehen Name und E-Mail
+    immer — das ist für Moderation, Mail-Freigaben und Verwaltung nötig.</li>
+</ul>
+<div class="note">
+  Auch wenn Sie Ihre E-Mail-Adresse <strong>nicht</strong> freigeben, erreichen
+  Sie Listen-Mails ganz normal — Fichtelink verschickt sie, ohne Ihre Adresse
+  offenzulegen (siehe nächster Abschnitt).
+</div>
+</section>
+
+<section id="mail">
+<h2>8. E-Mail an eine Liste senden und empfangen</h2>
+<p>
+  Jede Liste hat eine <strong>eigene E-Mail-Adresse</strong> (z. B.
+  <code>5a@…</code>). Wer dorthin schreibt, erreicht alle Mitglieder.
+</p>
+<h3>Als Mitglied an die Liste schreiben</h3>
+<ol>
+  <li>Sie schreiben ganz normal eine Mail an die Listenadresse.</li>
+  <li>Fichtelink sendet Ihnen eine <strong>Bestätigungs-Mail mit einem
+    Freigabe-Link</strong>.</li>
+  <li>Erst <strong>nach Ihrem Klick</strong> auf diesen Link wird die Mail an die
+    Mitglieder weitergeleitet.</li>
+</ol>
+<p>
+  Dieser Zwischenschritt ist der Schutz davor, dass jemand in Ihrem Namen an die
+  Liste schreibt. Auf der Freigabeseite können Sie zusätzlich wählen:
+</p>
+<div class="note">
+  ☑ <strong>„Meine Absender-Adresse nicht anzeigen (anonymisiert weiterleiten).
+  Antworten erreichen mich trotzdem."</strong>
+</div>
+<p>So bleibt Ihre Adresse verborgen, Antworten kommen aber dennoch bei Ihnen an.</p>
+<h3>Wenn jemand schreibt, der kein Mitglied ist</h3>
+<p>
+  Dann geht der Freigabe-Link an einen <strong>Listen-Admin</strong>, der
+  entscheidet, ob die Mail weitergeleitet wird.
+</p>
+<h3>Empfangen</h3>
+<p>
+  Listenpost landet automatisch in Ihrem Postfach. Antworten Sie wie auf jede
+  normale Mail — die Zustellung an den ursprünglichen Absender regelt Fichtelink.
+</p>
+<div class="note">
+  <strong>Abwesenheits-/Auto-Antworten</strong> und Bounces werden automatisch
+  erkannt und <strong>nicht</strong> an die Liste weitergeleitet, damit keine
+  Schleifen entstehen.
+</div>
+</section>
+
+<section id="formulare">
+<h2>9. Formulare: sich für Aktionen eintragen</h2>
+<p>
+  Formulare sind für <strong>Selbst-Eintragungen zu Aktionen</strong> gedacht —
+  etwa Helferlisten oder Kuchen-Spenden für ein Schulfest. Sie bekommen meist
+  einen <strong>Link</strong> zugeschickt (oder scannen einen QR-Code) und können
+  das Formular auch <strong>ohne Anmeldung ansehen</strong>. Zum
+  <strong>Eintragen</strong> ist eine Anmeldung nötig — beim ersten Klick werden
+  Sie durch Anmeldung/Registrierung geführt und landen danach wieder beim
+  Formular.
+</p>
+<p>Ein Formular kann zwei Arten von Mitmach-Teilen haben:</p>
+<h3>Positionen / Plätze (Slots)</h3>
+<p>
+  Eine Tabelle mit Positionen und Kapazität, z. B. „Aufbau Freitag 14–15 Uhr,
+  2 Plätze". Sie sehen pro Position <strong>„X/Y"</strong> belegt und „noch N
+  frei".
+</p>
+<ul>
+  <li><strong>„Eintragen"</strong> belegt einen freien Platz.</li>
+  <li><strong>„Sichtbarkeit ändern"</strong> stellt ein, ob Ihr Name/Ihre E-Mail
+    anderen angezeigt wird.</li>
+  <li><strong>„Austragen"</strong> gibt den Platz wieder frei.</li>
+</ul>
+<p>Ist Ihr Name verborgen, erscheint die Position als <strong>„vergeben"</strong>.</p>
+<h3>Freitext-Beiträge</h3>
+<p>
+  Eine offene Liste, z. B. „Wer bringt was mit?". Sie tragen einen Text ein
+  (z. B. „Apfelkuchen").
+</p>
+<ul>
+  <li><strong>„Beitrag eintragen"</strong> / <strong>„Meinen Beitrag
+    bearbeiten"</strong> / <strong>„Entfernen"</strong>.</li>
+  <li>Der <strong>Beitragstext ist immer sichtbar</strong>; Ihr Name erscheint als
+    <strong>„anonym"</strong>, wenn Sie ihn verbergen.</li>
+</ul>
+<div class="note">
+  Die Sichtbarkeit bei Formularen ist einfacher als bei Listen: Es gibt nur
+  „für alle sichtbar, die das Formular sehen" — ja oder nein. Standard: Name
+  sichtbar, E-Mail verborgen.
+</div>
+</section>
+
+<section id="messenger">
+<h2>10. Messenger (Matrix-Klassenraum)</h2>
+<p>
+  Optional bietet eine Installation pro Klasse einen
+  <strong>Matrix-Chatraum</strong> für kurzfristige Infos (z. B. „Ausflug wegen
+  Wetter abgesagt") — parallel zur E-Mail.
+</p>
+<p>So verbinden Sie sich (über <strong>Mein Profil → Messenger-Zugang</strong>):</p>
+<ol>
+  <li>Eine <strong>Matrix-App</strong> installieren (z. B. Element X, FluffyChat,
+    SchildiChat).</li>
+  <li>In der App „Anmelden" wählen.</li>
+  <li>Als <strong>Benutzername</strong> die angezeigte <strong>Matrix-ID</strong>
+    eintragen (falls nach dem Server gefragt: den angezeigten Servernamen
+    eingeben).</li>
+  <li>Das angezeigte <strong>Passwort</strong> eingeben.</li>
+</ol>
+<p>
+  Danach empfangen Sie die Klassen-Nachrichten in der App. Auf dem Desktop
+  erleichtert ein QR-Code das Weiterreichen an Ihr Handy.
+</p>
+<div class="note">
+  Der Messenger ist nur aktiv, wenn die Installation und die jeweilige Liste ihn
+  aktiviert haben. Ist er nicht verfügbar, sehen Sie einen entsprechenden Hinweis.
+</div>
+</section>
+
+<section id="umzug">
+<h2>11. Eintrag umziehen oder löschen</h2>
+<p>Beides finden Sie <strong>unten im Bearbeiten-Dialog</strong> des Eintrags:</p>
+<ul>
+  <li><strong>Umziehen</strong> („In eine andere Klasse/Liste umziehen"): Stellt
+    einen <strong>Umzugs-Antrag</strong>. Der Admin der <strong>Zielliste</strong>
+    muss zustimmen. Bei Schulkindern ziehen die zugehörigen Bezugspersonen
+    automatisch mit. Wird der Umzug angenommen, übernimmt die Zielliste Ihre Werte
+    1:1.</li>
+  <li><strong>Löschen</strong>: Entfernt Ihren Eintrag (nach Rückfrage). Sie
+    können sich — und von Ihnen verwaltete Personen — <strong>ohne
+    Zustimmung</strong> aus einer Liste austragen.</li>
+</ul>
+<div class="note">
+  <strong>Ausnahme:</strong> Würde Ihr Austritt eine Liste <strong>ohne
+  Admin</strong> zurücklassen, wird er blockiert — vorher muss eine Nachfolge
+  bestimmt werden (siehe Admin-Übergabe).
+</div>
+</section>
+
+<section id="wiederherstellung">
+<h2>12. Konto-Wiederherstellung bei Geräteverlust</h2>
+<p>
+  Es gibt <strong>keine automatische „Passwort vergessen"-Mail</strong> — das wäre
+  ein Einfallstor bei gekapertem Postfach. Stattdessen läuft die
+  Wiederherstellung <strong>über Menschen, entlang der Admin-Hierarchie</strong>:
+</p>
+<pre><code>Normales Mitglied          → wendet sich an den Listen-Admin (z. B. Elternvertreter)
+Admin einer Unterliste     → wendet sich an den Admin der übergeordneten Liste
+Admin einer obersten Liste → wendet sich an den Super-Admin
+Super-Admin                → stellt den Zugang direkt wieder her</code></pre>
+<p>
+  Der zuständige Admin schickt — nachdem er Sie als die berechtigte Person erkannt
+  hat — den Aktivierungs-Link erneut an Ihre hinterlegte Adresse. Ihre Daten,
+  Mitgliedschaften und Familienbeziehungen bleiben erhalten; Sie müssen nur einen
+  <strong>neuen Passkey</strong> anlegen.
+</p>
+<div class="note">
+  Deshalb ist es so wertvoll, frühzeitig einen <strong>zweiten Passkey</strong>
+  einzurichten — dann brauchen Sie diesen Weg gar nicht erst.
+</div>
+</section>
+
+<section id="admins">
+<h2>13. Für Listen-Admins</h2>
+<p>Jede Liste hat eine oder mehrere <strong>Admins</strong>. Wer das ist, hängt von der Art der Liste ab:</p>
+<ul>
+  <li>Bei <strong>Schulklassen-Listen</strong> sind das in der Regel die
+    <strong>Elternvertreter</strong>.</li>
+  <li>Bei <strong>anderen Listen</strong> (VHS-Kurs, Förderverein o. ä.) ist es
+    zunächst <strong>die Person, die die Liste ins Leben gerufen hat</strong> —
+    wer eine Liste erstellt, wird automatisch ihr Admin. Weitere Admins können
+    ergänzt werden.</li>
+</ul>
+<p>
+  Admin-Funktionen erscheinen im Menü oben rechts unter
+  <strong>„Administration"</strong> (nur sichtbar, wenn Sie Admin der jeweiligen
+  Liste sind). In der Liste sehen Sie außerdem den Hinweis <em>„Sie sind Admin
+  dieser Liste."</em>.
+</p>
+<h3>Mitglieder verwalten</h3>
+<ul>
+  <li><strong>Mitglied einladen:</strong> E-Mail-Adresse eingeben; optional eine
+    bereits registrierte Person per Auswahl direkt adressieren. Der/die
+    Eingeladene bekommt einen Link (Registrierung oder Ein-Klick-Beitritt).</li>
+  <li><strong>QR-Codes:</strong> Beitritts-QR-Codes erzeugen (z. B. für den
+    Elternabend). Jeder Code läuft nach <strong>48 Stunden</strong> ab und kann
+    jederzeit <strong>widerrufen</strong> werden.</li>
+  <li><strong>Admins:</strong> weitere Admins hinzufügen oder die Rolle übergeben
+    (Admin-Übergabe). Eine Liste darf nie ganz ohne Admin zurückbleiben — vor dem
+    eigenen Austritt zuerst eine Nachfolge bestimmen. Auch die Übergabe verlangt
+    zwingend eine Anmeldung des Nachfolgers.</li>
+</ul>
+<h3>E-Mail moderieren</h3>
+<ul>
+  <li>Schreibt ein <strong>Nicht-Mitglied</strong> an die Liste, erhalten Sie
+    einen <strong>Freigabe-Link</strong> und entscheiden über
+    <strong>Weiterleiten</strong> oder <strong>Ablehnen</strong>.</li>
+</ul>
+<h3>Schulklassen-spezifisch</h3>
+<ul>
+  <li><strong>Kohorten-Daten:</strong> Jahrgangsstufe, Klassenzug (a/b/c …) und
+    Bildungsgang (G8/G9) pflegen — Grundlage für den Schuljahres-Übergang.</li>
+  <li><strong>Umzugs-Anträge:</strong> Anträge von Schülern, die in
+    <strong>Ihre</strong> Klasse wechseln wollen, annehmen oder ablehnen.</li>
+</ul>
+<div class="note">
+  <strong>Sichtbarkeit bleibt Sache der Betroffenen:</strong> Als Admin dürfen Sie
+  zwar Werte korrigieren, aber <strong>nicht</strong> die
+  Sichtbarkeits-Einstellungen anderer Personen ändern. Deren Namen sehen Sie für
+  die Moderation trotzdem immer.
+</div>
+<h3>Funktionen, die dem Super-Admin vorbehalten sind</h3>
+<p>
+  Einige Funktionen erscheinen nur beim <strong>Super-Admin</strong> der
+  Installation — etwa das Senden von Test-Mails, der
+  <strong>Schuljahres-Übergang (Rollover)</strong> und die Verwaltung von
+  Vorlagen, obersten Listen und Aggregat-Aliasen (<code>eltern@…</code>). Diese
+  sind im Super-Admin-Handbuch beschrieben{% if request.user.is_superuser %}
+  (<a href="{% url 'hilfe_superadmin' %}">öffnen</a>){% endif %}.
+</p>
+</section>
+
+<section id="faq">
+<h2>14. Häufige Fragen</h2>
+<p><strong>Ich habe kein Passwort bekommen — wie melde ich mich an?</strong><br>
+  Fichtelink hat keine Passwörter. Sie melden sich mit Ihrem Passkey an
+  (Face&nbsp;ID, Touch&nbsp;ID, Windows&nbsp;Hello oder Sicherheits-Schlüssel).</p>
+<p><strong>Sehen jetzt alle meine Telefonnummer / E-Mail?</strong><br>
+  Nur, wenn Sie das Feld freigeben. Standardmäßig ist die E-Mail verborgen. Die
+  Sichtbarkeit stellen Sie pro Feld im Bearbeiten-Dialog ein (Abschnitt 7).</p>
+<p><strong>Ich habe mein Handy verloren.</strong><br>
+  Wenn Sie einen zweiten Passkey haben (anderes Gerät), melden Sie sich einfach
+  damit an und löschen den alten. Sonst hilft Ihr Listen-Admin (Abschnitt 12).</p>
+<p><strong>Warum muss ich meine eigene Mail an die Liste erst per Link
+  freigeben?</strong><br>
+  Das verhindert, dass jemand in Ihrem Namen an die Liste schreibt (Abschnitt 8).</p>
+<p><strong>Kann ich aus einer Liste wieder austreten?</strong><br>
+  Ja — im Bearbeiten-Dialog über <strong>Löschen</strong>. Ausnahme: Sie sind der
+  einzige Admin (Abschnitt 11).</p>
+<p><strong>Beide Elternteile teilen sich eine E-Mail-Adresse — geht das?</strong><br>
+  Ja. Jeder legt ein eigenes Konto mit eigenem Passkey an; beim Anmelden wählt
+  jeder seinen eigenen Passkey aus, auch auf einem gemeinsamen Gerät.</p>
+</section>
+</div>
+{% endblock %}
