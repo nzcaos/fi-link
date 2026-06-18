@@ -40,6 +40,7 @@ from .models import (
     ListJoinToken,
     ListAttribute,
     ListRecord,
+    ListRecordAccess,
     ListRecordValue,
     ListTemplate,
     MailReleaseToken,
@@ -1138,29 +1139,66 @@ def transfers_pending(request, pk: int):
     )
 
 
-def _copy_record_to(src: ListRecord, dest_list: List, now) -> ListRecord | None:
-    """Copy one record (values + managers + manager access) into dest_list and
-    archive the source. Returns the new record, or None if the subject already
-    has an active record in dest (then the source is still archived).
+def _copy_record_access_to(src: ListRecord, new: ListRecord, dest_list: List) -> None:
+    """Carry the source record's visibility matrix (the LIST_RECORD_ACCESS rows)
+    onto the freshly-created destination record, so the subject's per-field
+    disclosure choices — and any anonymisation of their name — survive a class
+    transfer instead of silently resetting (review finding A).
+
+    Two adjustments:
+
+    * The ``ListRecord.post_save`` signal already wrote a default
+      ``(name → public)`` row on ``new``; drop the whole matrix on ``new`` first
+      so a copied (possibly anonymised) name-sentinel set fully replaces it and
+      no stray public name grant lingers.
+    * Audience rows pointing at the *source* list are remapped to ``dest_list``:
+      "visible to my class" must follow the record into its new class, since the
+      source class's Benutzergruppe no longer contains the new classmates. Public
+      (NULL) and unrelated-list audiences copy verbatim. ``get_or_create`` guards
+      the rare case where a remap collides with an already-present dest audience.
     """
+    ListRecordAccess.objects.filter(record=new).delete()
+    for acc in src.access.all():
+        audience_id = dest_list.id if acc.audience_id == src.list_id else acc.audience_id
+        ListRecordAccess.objects.get_or_create(
+            record=new,
+            attribute_id=acc.attribute_id,
+            sentinel=acc.sentinel,
+            audience_id=audience_id,
+        )
+
+
+def _copy_record_to(
+    src: ListRecord, dest_list: List, now, *, archive_source: bool = True
+) -> ListRecord | None:
+    """Copy one record (values + visibility matrix + managers + manager access)
+    into dest_list. Archives the source unless ``archive_source`` is False (see
+    finding B: a parent associate record stays in the source class while another
+    of their children remains there). Returns the new record, or None if the
+    subject already has an active record in dest.
+    """
+    def _maybe_archive_source():
+        if archive_source:
+            src.archived_at = now
+            src.save(update_fields=["archived_at"])
+
     if ListRecord.objects.filter(
         list=dest_list, subject=src.subject, archived_at__isnull=True
     ).exists():
-        src.archived_at = now
-        src.save(update_fields=["archived_at"])
+        _maybe_archive_source()
         return None
     new = ListRecord.objects.create(
         list=dest_list, subject=src.subject, role=src.role
     )
     for v in src.values.all():
         ListRecordValue.objects.create(record=new, attribute=v.attribute, value=v.value)
+    _copy_record_access_to(src, new, dest_list)
     for mgr in src.managers.all():
         RecordManager.objects.get_or_create(
             record=new, user=mgr.user, defaults={"basis": mgr.basis}
         )
         ListAccess.objects.get_or_create(list=dest_list, user=mgr.user)
-    src.archived_at = now
-    src.save(update_fields=["archived_at"])
+    _maybe_archive_source()
     return new
 
 
@@ -1199,20 +1237,37 @@ def transfer_decide(request, transfer_pk: int):
                     "related_person_id", flat=True
                 )
             )
-            to_move = list(
-                ListRecord.objects.filter(
-                    list=src, subject=person, archived_at__isnull=True
-                )
-            ) + list(
-                ListRecord.objects.filter(
-                    list=src,
-                    subject_id__in=parent_ids,
-                    role=ListRecord.Role.ASSOCIATE,
-                    archived_at__isnull=True,
-                )
-            )
-            for rec in to_move:
+            # The moving child's own member record always migrates + archives.
+            for rec in ListRecord.objects.filter(
+                list=src, subject=person, archived_at__isnull=True
+            ):
                 _copy_record_to(rec, dest, now)
+
+            # Parents (associates) migrate to the destination so the child keeps
+            # its parent columns there. A parent record stays in the source class
+            # if another of their children remains there: there is only one
+            # per-(list, subject) associate record, so archiving it would strip
+            # that parent from the remaining sibling's row (finding B). The
+            # destination copy is created either way; only the source archival is
+            # conditional.
+            for rec in ListRecord.objects.filter(
+                list=src,
+                subject_id__in=parent_ids,
+                role=ListRecord.Role.ASSOCIATE,
+                archived_at__isnull=True,
+            ):
+                other_child_ids = (
+                    PersonRelationship.objects.filter(related_person_id=rec.subject_id)
+                    .exclude(subject_person=person)
+                    .values_list("subject_person_id", flat=True)
+                )
+                parent_stays = ListRecord.objects.filter(
+                    list=src,
+                    subject_id__in=list(other_child_ids),
+                    role=ListRecord.Role.MEMBER,
+                    archived_at__isnull=True,
+                ).exists()
+                _copy_record_to(rec, dest, now, archive_source=not parent_stays)
             locked.status = PendingTransfer.Status.ACCEPTED
 
         locked.resolved_at = now

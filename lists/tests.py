@@ -4565,6 +4565,86 @@ class TransferFlowTests(TestCase):
         self.assertTrue(RecordManager.objects.filter(record=new_child, user=self.parent).exists())
         self.assertTrue(ListAccess.objects.filter(list=self.dest, user=self.parent).exists())
 
+    def test_accept_preserves_anonymised_name_and_remaps_field_audience(self):
+        # Finding A: the subject anonymised their name in the source class (no
+        # public name row) and disclosed the phone to the class. After transfer
+        # the name must stay anonymised and the phone audience must follow the
+        # record to the destination class.
+        ListRecordAccess.objects.filter(
+            record=self.rec_child,
+            attribute__isnull=True,
+            sentinel=ListRecordAccess.Sentinel.NAME,
+        ).delete()
+        ListRecordAccess.objects.create(
+            record=self.rec_child, attribute=self.attr, audience=self.src
+        )
+        transfer = PendingTransfer.objects.create(
+            from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
+        )
+        self.client.force_login(self.dest_admin)
+        self.client.post(
+            reverse("lists:transfer_decide", kwargs={"transfer_pk": transfer.pk}),
+            {"action": "accept"},
+        )
+        new_child = ListRecord.objects.get(
+            list=self.dest, subject=self.child, archived_at__isnull=True
+        )
+        # Name stays anonymised — the auto public name row must not leak back in.
+        self.assertFalse(
+            ListRecordAccess.objects.filter(
+                record=new_child,
+                attribute__isnull=True,
+                sentinel=ListRecordAccess.Sentinel.NAME,
+                audience__isnull=True,
+            ).exists()
+        )
+        # Phone audience remapped src → dest so the new class still sees it.
+        self.assertTrue(
+            ListRecordAccess.objects.filter(
+                record=new_child, attribute=self.attr, audience=self.dest
+            ).exists()
+        )
+        self.assertFalse(
+            ListRecordAccess.objects.filter(
+                record=new_child, attribute=self.attr, audience=self.src
+            ).exists()
+        )
+
+    def test_associate_stays_in_source_when_sibling_remains(self):
+        # Finding B: the parent has a second child in the SAME source class.
+        # Transferring the first child must not archive the parent's single
+        # source associate record (the remaining sibling needs it), yet the
+        # parent must also appear in the destination for the moved child.
+        sibling = Person.objects.create(given_name="Zwilling", family_name="Müller")
+        rec_sibling = ListRecord.objects.create(
+            list=self.src, subject=sibling, role=ListRecord.Role.MEMBER
+        )
+        PersonRelationship.objects.create(
+            subject_person=sibling, related_person=self.parent.person, role="Mutter von"
+        )
+        transfer = PendingTransfer.objects.create(
+            from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
+        )
+        self.client.force_login(self.dest_admin)
+        self.client.post(
+            reverse("lists:transfer_decide", kwargs={"transfer_pk": transfer.pk}),
+            {"action": "accept"},
+        )
+        # Parent stays in the source class for the remaining sibling ...
+        self.rec_parent.refresh_from_db()
+        self.assertIsNone(self.rec_parent.archived_at)
+        rec_sibling.refresh_from_db()
+        self.assertIsNone(rec_sibling.archived_at)
+        # ... and is also present in the destination for the moved child.
+        self.assertTrue(
+            ListRecord.objects.filter(
+                list=self.dest,
+                subject=self.parent.person,
+                role=ListRecord.Role.ASSOCIATE,
+                archived_at__isnull=True,
+            ).exists()
+        )
+
     def test_reject_keeps_source(self):
         transfer = PendingTransfer.objects.create(
             from_list=self.src, to_list=self.dest, person=self.child, requested_by=self.parent
