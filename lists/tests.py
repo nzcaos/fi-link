@@ -4344,6 +4344,28 @@ class MailReleaseViewTests(TestCase):
         resp = self.client.get(self._url())
         self.assertNotContains(resp, 'name="anonymize"')
 
+    def test_forward_losing_race_reports_actual_resolution(self):
+        """A forward click that lost a race against a concurrent reject must show
+        the *actual* outcome (rejected), not falsely claim the mail was
+        forwarded. Simulates the winner committing during the helper call.
+        """
+        from lists import views as lists_views
+
+        def _lost(rel, inbound, anonymize):
+            # The concurrent winner (a reject) commits while we hold no useful
+            # lock; the helper would see a consumed token and return False.
+            MailReleaseToken.objects.filter(pk=rel.pk).update(
+                consumed_at=timezone.now(),
+                resolution=MailReleaseToken.Resolution.REJECTED,
+            )
+            return False
+
+        with patch.object(lists_views, "_release_forward", side_effect=_lost):
+            resp = self.client.post(self._url(), data={"action": "approve"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "abgelehnt")
+        self.assertNotContains(resp, "wird an die Mitglieder weitergeleitet")
+
 
 class PeriodicMaintenanceTests(TestCase):
     def setUp(self):

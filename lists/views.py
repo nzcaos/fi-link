@@ -879,12 +879,16 @@ def list_send_test(request, pk: int):
 # ---------------------------------------------------------------------------
 
 
-def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: bool) -> None:
+def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: bool) -> bool:
     """Commit a forward: fan out the stored message to the token's source (a
     list, or an aggregate alias resolved to its send-time recipient set), flip
     the inbound to FORWARDED, consume the token. Re-locks the token under
     select_for_update so two concurrent clicks (e.g. two list admins) cannot
-    double-forward — the loser sees a consumed token and no-ops.
+    double-forward.
+
+    Returns ``True`` if this call performed the forward, ``False`` if a
+    concurrent click had already consumed the token — the caller then reports
+    the token's *actual* resolution rather than assuming this click won.
     """
     from .inbound_pipeline import extract_subject_and_body, parse_message
 
@@ -894,7 +898,7 @@ def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: 
     with transaction.atomic():
         locked = MailReleaseToken.objects.select_for_update().get(pk=rel.pk)
         if not locked.is_usable:
-            return
+            return False
         if locked.aggregate_id is not None:
             from .aggregates import aggregate_recipient_emails
 
@@ -920,19 +924,25 @@ def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: 
         locked.consumed_at = timezone.now()
         locked.resolution = MailReleaseToken.Resolution.FORWARDED
         locked.save(update_fields=["consumed_at", "resolution"])
+    return True
 
 
-def _release_reject(rel: MailReleaseToken, inbound: InboundMessage) -> None:
+def _release_reject(rel: MailReleaseToken, inbound: InboundMessage) -> bool:
+    """Reject the held mail and consume the token. Returns ``True`` if this call
+    performed the rejection, ``False`` if a concurrent click already consumed
+    the token (see `_release_forward`).
+    """
     with transaction.atomic():
         locked = MailReleaseToken.objects.select_for_update().get(pk=rel.pk)
         if not locked.is_usable:
-            return
+            return False
         inbound.decision = InboundMessage.Decision.REJECTED
         inbound.reason = "Über Freigabe-Link abgelehnt."
         inbound.save(update_fields=["decision", "reason"])
         locked.consumed_at = timezone.now()
         locked.resolution = MailReleaseToken.Resolution.REJECTED
         locked.save(update_fields=["consumed_at", "resolution"])
+    return True
 
 
 def mail_release(request, token: str):
@@ -970,18 +980,32 @@ def mail_release(request, token: str):
 
     if request.method == "POST":
         if request.POST.get("action") == "reject":
-            _release_reject(rel, inbound)
-            return render(
-                request,
-                "lists/mail_release_done.html",
-                {"list_obj": target, "rel": rel, "action": "rejected"},
+            did = _release_reject(rel, inbound)
+            anonymize = False
+        else:
+            anonymize = rel.offer_anonymize and bool(request.POST.get("anonymize"))
+            did = _release_forward(rel, inbound, anonymize)
+
+        # If this click lost a race against a concurrent admin/sender click, the
+        # token already carries the *winning* resolution — report that, not the
+        # action this request attempted, so the confirmation page never claims a
+        # forward that was actually a reject (or vice versa).
+        if not did:
+            rel.refresh_from_db()
+            action = (
+                "forwarded"
+                if rel.resolution == MailReleaseToken.Resolution.FORWARDED
+                else "rejected"
             )
-        anonymize = rel.offer_anonymize and bool(request.POST.get("anonymize"))
-        _release_forward(rel, inbound, anonymize)
+            # The winner's anonymisation choice isn't recorded on the token, so
+            # don't assert it for a race-loser's page.
+            anonymize = False
+        else:
+            action = "forwarded" if request.POST.get("action") != "reject" else "rejected"
         return render(
             request,
             "lists/mail_release_done.html",
-            {"list_obj": target, "rel": rel, "action": "forwarded", "anonymized": anonymize},
+            {"list_obj": target, "rel": rel, "action": action, "anonymized": anonymize},
         )
 
     return render(
