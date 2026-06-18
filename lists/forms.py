@@ -16,6 +16,7 @@ from accounts.models import Person, User
 
 from .models import (
     AdminInviteToken,
+    AggregateAlias,
     List,
     ListAccess,
     ListAttribute,
@@ -89,6 +90,20 @@ class ListCreateForm(forms.ModelForm):
         if not _ALIAS_RE.match(alias):
             raise ValidationError(
                 "Nur a–z, 0–9, '.', '-', '_'; muss mit Buchstabe/Ziffer anfangen und enden."
+            )
+        # Reserved routing prefixes: inbound.resolve_alias matches list aliases
+        # *before* the bounce-/alias- token routing, so a list named "bounce-…"
+        # would shadow DSN/reply correlation. Mirror the guard AggregateAlias.
+        # clean() already applies to itself.
+        if alias.startswith(("bounce-", "alias-")):
+            raise ValidationError("Reservierter Präfix (bounce-/alias-).")
+        # Lists and aggregate aliases share one local-part namespace, and lists
+        # win in resolve_alias — so an unchecked collision would silently break
+        # the aggregate's (super-admin-configured) inbound mail. AggregateAlias.
+        # clean() guards the other direction; this is its mirror.
+        if AggregateAlias.objects.filter(email_alias__iexact=alias).exists():
+            raise ValidationError(
+                "Kollidiert mit einem bestehenden Aggregat-Alias (Verteiler)."
             )
         return alias
 

@@ -128,6 +128,23 @@ class RolloverPlan:
         return not self.actions and not self.merges
 
 
+def _dedup_alias(base: str, taken: set[str]) -> str:
+    """Return ``base`` if free, else ``base-2`` / ``base-3`` / … — the first
+    that isn't in ``taken`` — and register the result in ``taken``. The suffix
+    keeps the alias valid (``k1-2`` still starts with a letter / ends with a
+    digit, per lists.forms._ALIAS_RE).
+    """
+    if base not in taken:
+        taken.add(base)
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    alias = f"{base}-{n}"
+    taken.add(alias)
+    return alias
+
+
 def plan_rollover(lists=None) -> RolloverPlan:
     """Compute the proposed rollover for the given lists (default: every
     non-archived list with a curriculum_track set). Side-effect free.
@@ -171,11 +188,44 @@ def plan_rollover(lists=None) -> RolloverPlan:
             )
         )
 
+    # Merge default aliases must not collide. Two merge buckets legitimately
+    # produce the same default: a G8 merge (grade 10 → K1) and a G9 merge
+    # (grade 11 → K1) both default to "k1", as do two independent subtrees of
+    # the same curriculum. execute_rollover creates each K1 with List.objects.
+    # create(email_alias=…) under the global-unique constraint, so colliding
+    # defaults would raise IntegrityError and atomically roll the whole rollover
+    # back. Disambiguate up front so the preview already shows distinct, valid
+    # aliases (the super-admin may still override). Seed the taken-set with every
+    # non-archived alias the rollover does *not* itself free, plus the advancing
+    # / k1→k2 target aliases, so a merge default can't collide with those either.
+    freed_ids = {a.list_id for a in actions}
+    for srcs in merge_buckets.values():
+        freed_ids.update(s.id for s in srcs)
+    taken_aliases = set(
+        List.objects.filter(archived_at__isnull=True)
+        .exclude(id__in=freed_ids)
+        .values_list("email_alias", flat=True)
+    )
+    taken_aliases.update(
+        a.default_alias for a in actions if a.kind in ("advance", "k1_to_k2")
+    )
+    # Parent titles for the disambiguating hint appended to a suffixed title.
+    parent_ids = {srcs[0].parent_id for srcs in merge_buckets.values() if srcs[0].parent_id}
+    parent_titles = dict(
+        List.objects.filter(id__in=parent_ids).values_list("id", "title")
+    )
+
     merges: list[MergeGroup] = []
     for key, srcs in merge_buckets.items():
         cur = srcs[0].curriculum_track
         new_grade = LAST_LETTERED_GRADE[cur] + 1
         dt, da = default_label(new_grade, None, cur)
+        unique_da = _dedup_alias(da, taken_aliases)
+        if unique_da != da:
+            # Make the suffixed alias legible in the preview: name the subtree
+            # (parent) it came from, falling back to the curriculum.
+            hint = parent_titles.get(srcs[0].parent_id) or cur
+            dt = f"{dt} ({hint})"
         merges.append(
             MergeGroup(
                 key=key,
@@ -185,7 +235,7 @@ def plan_rollover(lists=None) -> RolloverPlan:
                 source_labels=[_current_label(s) for s in srcs],
                 new_grade=new_grade,
                 default_title=dt,
-                default_alias=da,
+                default_alias=unique_da,
             )
         )
     return RolloverPlan(actions=actions, merges=merges)

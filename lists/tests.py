@@ -19,6 +19,7 @@ from . import lifecycle
 from .forms import AssociateWizardForm, ListCreateForm, ListInviteForm, RecordEditForm
 from .models import (
     AdminInviteToken,
+    AggregateAlias,
     List,
     ListAccess,
     ListAdmin,
@@ -1420,6 +1421,52 @@ class CriticalFindingFixesTests(TestCase):
         form = ListInviteForm(list_obj=self.lst, inviting_user=self.super_)
         self.assertNotIn(no_email_person, form.fields["target_person"].queryset)
         self.assertIn(self.user.person, form.fields["target_person"].queryset)
+
+
+class ListAliasCollisionTests(TestCase):
+    """The list local-part namespace is shared with aggregate aliases and with
+    the reserved bounce-/alias- routing prefixes; resolve_alias matches list
+    aliases first, so ListCreateForm must reject collisions (mirror of
+    AggregateAlias.clean(), which already guards the other direction)."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.super_ = _make_super(username="alias_super")
+
+    def _form(self, alias):
+        from .forms import ListCreateForm
+
+        return ListCreateForm(
+            data={
+                "title": "Eine Liste",
+                "email_alias": alias,
+                "template": self.template.pk,
+                "visibility": "private",
+                "parent": "",
+            },
+            user=self.super_,
+        )
+
+    def test_plain_alias_is_accepted(self):
+        self.assertTrue(self._form("5a").is_valid())
+
+    def test_reserved_bounce_prefix_rejected(self):
+        form = self._form("bounce-tok456")
+        self.assertFalse(form.is_valid())
+        self.assertIn("email_alias", form.errors)
+
+    def test_reserved_alias_prefix_rejected(self):
+        form = self._form("alias-tok456")
+        self.assertFalse(form.is_valid())
+        self.assertIn("email_alias", form.errors)
+
+    def test_collision_with_aggregate_alias_rejected(self):
+        AggregateAlias.objects.create(
+            email_alias="eltern", title="Eltern", created_by=self.super_
+        )
+        form = self._form("Eltern")  # case-insensitive collision
+        self.assertFalse(form.is_valid())
+        self.assertIn("email_alias", form.errors)
 
 
 class M11RecordCreateModeCheckTests(TestCase):
@@ -4322,6 +4369,28 @@ class RolloverPlanTests(TestCase):
             visibility=List.Visibility.PRIVATE,
         )
         self.assertTrue(lifecycle.plan_rollover().is_empty)
+
+    def test_colliding_merge_default_aliases_are_disambiguated(self):
+        # A G8 merge (grade 10 → K1) and a G9 merge (grade 11 → K1) both default
+        # to alias "k1". Without disambiguation execute_rollover would create two
+        # lists with email_alias="k1" and hit the unique constraint, rolling the
+        # whole rollover back. plan_rollover must hand back distinct, valid
+        # aliases up front.
+        self._mk("10a", 10, "a", "G8")
+        self._mk("11a", 11, "a", "G9")
+
+        plan = lifecycle.plan_rollover()
+        self.assertEqual(len(plan.merges), 2)
+        aliases = [m.default_alias for m in plan.merges]
+        self.assertEqual(len(set(aliases)), 2, aliases)
+        self.assertIn("k1", aliases)
+
+        # And it actually applies cleanly (no IntegrityError / rollback).
+        result = lifecycle.execute_rollover(plan)
+        self.assertEqual(len(result["merged_into"]), 2)
+        created = List.objects.filter(id__in=result["merged_into"])
+        self.assertEqual(created.filter(email_alias="k1").count(), 1)
+        self.assertEqual(created.count(), 2)
 
 
 class RolloverExecuteTests(TestCase):
