@@ -251,6 +251,48 @@ def _audience_key_to_list_id(key: str) -> int | None:
     raise ValueError(f"Unbekannter audience-Key: {key}")
 
 
+def _enforce_choice_cap(
+    attribute: ListAttribute,
+    list_obj: List,
+    chosen_value: str,
+    *,
+    exclude_record_pks: tuple[int, ...] = (),
+) -> None:
+    """Authoritative `choice_cap` check — the lists-module counterpart of the
+    forms module's `FormSlot.capacity` (forms/views.py).
+
+    Must be called from inside the surrounding save() transaction. It takes a
+    ``select_for_update`` lock on the ListAttribute row so concurrent saves
+    competing for the same value serialize: the per-record lock in
+    ``RecordEditForm.save()`` only serializes writers of the *same* record, not
+    two *different* records both grabbing the last free slot of a choice value.
+    The lock outlives this queryset and is held until the transaction commits.
+
+    Because ``LIST_RECORD_VALUE.value`` is Fernet-encrypted (non-deterministic
+    IV), a SQL ``WHERE value = …`` count is impossible — the active values are
+    loaded and decrypted/counted in Python. At class-list sizes (~30) this is
+    negligible. Raises ``ValidationError`` when the cap is already reached.
+    """
+    if attribute.type != ListAttribute.Type.CHOICE or not attribute.choice_cap:
+        return
+    if not chosen_value:
+        # Empty selection never consumes capacity.
+        return
+    # Serialize all writers of this attribute's capacity (lock held to commit).
+    ListAttribute.objects.select_for_update().get(pk=attribute.pk)
+    qs = ListRecordValue.objects.filter(
+        attribute=attribute,
+        record__list=list_obj,
+        record__archived_at__isnull=True,
+    ).exclude(record_id__in=list(exclude_record_pks))
+    held = sum(1 for v in qs if v.value == chosen_value)
+    if held >= attribute.choice_cap:
+        raise ValidationError(
+            f"„{chosen_value}“ ist bereits voll belegt "
+            f"(max. {attribute.choice_cap}). Bitte eine andere Option wählen."
+        )
+
+
 class RecordEditForm(forms.Form):
     """Dynamic form bound to a single ListRecord. Builds one field per
     ListAttribute of the record's template, plus a visibility-matrix section
@@ -417,6 +459,13 @@ class RecordEditForm(forms.Form):
                 value_str = ""
             else:
                 value_str = str(raw)
+            # Enforce the choice-value capacity under a serializing lock before
+            # writing (excludes this record so editing a record that already
+            # holds the value is a no-op against the cap).
+            _enforce_choice_cap(
+                attribute, self.record.list, value_str,
+                exclude_record_pks=(self.record.pk,),
+            )
             ListRecordValue.objects.update_or_create(
                 record=self.record,
                 attribute=attribute,
@@ -699,10 +748,21 @@ class AssociateWizardForm(forms.Form):
 
     def _write_values(self, record, attrs: dict, prefix: str) -> None:
         for pk, attribute in attrs.items():
+            value_str = _attr_value_str(attribute, self.cleaned_data.get(f"{prefix}{pk}"))
+            # Same choice-cap gate as RecordEditForm. The record was just
+            # created and holds no values yet, so excluding it is a no-op here,
+            # but it keeps the call shape identical and correct if re-run; when
+            # both parents pick the same capped value in one wizard submit, the
+            # first parent's freshly-written value is counted for the second
+            # (same transaction sees its own writes) → the second is rejected.
+            _enforce_choice_cap(
+                attribute, self.list_obj, value_str,
+                exclude_record_pks=(record.pk,),
+            )
             ListRecordValue.objects.create(
                 record=record,
                 attribute=attribute,
-                value=_attr_value_str(attribute, self.cleaned_data.get(f"{prefix}{pk}")),
+                value=value_str,
             )
             # School-class density: a via_associate list reproduces the paper
             # class list, where address/phone are visible to the class (see

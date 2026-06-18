@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.core.exceptions import ValidationError
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -505,6 +506,118 @@ class RecordEditFormTests(TestCase):
         self.assertTrue(
             locking,
             "expected a SELECT ... FOR UPDATE on lists_listrecord in save()",
+        )
+
+
+class ChoiceCapEnforcementTests(TestCase):
+    """A CHOICE attribute's `choice_cap` limits how many active records in the
+    list may hold the same value — enforced under a select_for_update lock at
+    save time (the column is Fernet-encrypted, so the count runs in Python).
+    """
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Kuchenliste")
+        self.attr = ListAttribute.objects.create(
+            template=self.template,
+            name="Mitbringsel",
+            type=ListAttribute.Type.CHOICE,
+            position=0,
+            choices=["Kuchen", "Muffins"],
+            choice_cap=2,
+        )
+        self.lst = List.objects.create(
+            title="Sommerfest",
+            email_alias="fest",
+            template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+
+    def _record_for(self, username):
+        user = _make_user(username=username)
+        rec = ListRecord.objects.create(list=self.lst, subject=user.person)
+        RecordManager.objects.create(
+            record=rec, user=user, basis=RecordManager.Basis.SELF_REGISTERED
+        )
+        return user, rec
+
+    def _save_choice(self, user, rec, value):
+        form = RecordEditForm(
+            data={f"attr_{self.attr.pk}": value}, record=rec, user=user
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+    def test_cap_blocks_third_pick(self):
+        u1, r1 = self._record_for("u1")
+        self._save_choice(u1, r1, "Kuchen")
+        u2, r2 = self._record_for("u2")
+        self._save_choice(u2, r2, "Kuchen")
+
+        u3, r3 = self._record_for("u3")
+        form = RecordEditForm(
+            data={f"attr_{self.attr.pk}": "Kuchen"}, record=r3, user=u3
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        with self.assertRaises(ValidationError):
+            form.save()
+        # Rolled back — no value written for the rejected record.
+        self.assertFalse(
+            ListRecordValue.objects.filter(record=r3, attribute=self.attr).exists()
+        )
+        # A different (uncapped) value is still allowed.
+        self._save_choice(u3, r3, "Muffins")
+
+    def test_editing_existing_holder_not_blocked(self):
+        u1, r1 = self._record_for("u1")
+        self._save_choice(u1, r1, "Kuchen")
+        u2, r2 = self._record_for("u2")
+        self._save_choice(u2, r2, "Kuchen")
+        # r1 re-saves the same value: excluded from its own count, so the cap
+        # of 2 is not considered exceeded.
+        self._save_choice(u1, r1, "Kuchen")
+
+    def test_archived_record_does_not_consume_capacity(self):
+        u1, r1 = self._record_for("u1")
+        self._save_choice(u1, r1, "Kuchen")
+        u2, r2 = self._record_for("u2")
+        self._save_choice(u2, r2, "Kuchen")
+        # Archiving r1 frees a slot.
+        r1.archived_at = timezone.now()
+        r1.save(update_fields=["archived_at"])
+        u3, r3 = self._record_for("u3")
+        self._save_choice(u3, r3, "Kuchen")  # must not raise
+
+    def test_no_cap_is_unlimited(self):
+        self.attr.choice_cap = None
+        self.attr.save(update_fields=["choice_cap"])
+        for i in range(4):
+            u, r = self._record_for(f"nocap{i}")
+            self._save_choice(u, r, "Kuchen")  # never raises
+
+    def test_save_locks_attribute_row(self):
+        """The cap check must take a SELECT ... FOR UPDATE on the ListAttribute
+        so concurrent saves competing for the same value serialize (the
+        record-level lock alone does not cover two *different* records).
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        u1, r1 = self._record_for("u1")
+        form = RecordEditForm(
+            data={f"attr_{self.attr.pk}": "Kuchen"}, record=r1, user=u1
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        with CaptureQueriesContext(connection) as ctx:
+            form.save()
+        locking = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if "lists_listattribute" in q["sql"].lower()
+            and "for update" in q["sql"].lower()
+        ]
+        self.assertTrue(
+            locking,
+            "expected a SELECT ... FOR UPDATE on lists_listattribute in save()",
         )
 
 

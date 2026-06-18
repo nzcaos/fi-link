@@ -393,6 +393,24 @@ class MembershipSyncServiceTests(TestCase):
             service.sync_user_power(self.user, self.list, is_admin=False)
         pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-x:fichtelink.caos.cloud", 0)
 
+    def test_promotion_invites_handover_admin_without_account(self):
+        # A handover admin (ADMIN_INVITE_TOKEN) gets a ListAdmin row but no
+        # ListAccess and never went through sync_user_into_room — so they have
+        # no Matrix account and no room invite. Promotion must provision and
+        # invite them (not silently no-op), then set power to 50.
+        person = Person.objects.create(given_name="H", family_name="O", email="h@example.invalid")
+        handover = User.objects.create_user(person=person, username="handover")
+        ListAdmin.objects.create(list=self.list, user=handover)
+        with patch.object(
+            MatrixClient, "register_user",
+            return_value={"user_id": "@u-h:fichtelink.caos.cloud"},
+        ), patch.object(MatrixClient, "invite") as inv, \
+                patch.object(MatrixClient, "set_user_power_level") as pl:
+            service.sync_user_power(handover, self.list, is_admin=True)
+        self.assertTrue(MatrixAccount.objects.filter(user=handover).exists())
+        inv.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-h:fichtelink.caos.cloud")
+        pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-h:fichtelink.caos.cloud", 50)
+
     def test_rename_room(self):
         with patch.object(MatrixClient, "set_room_name") as sn:
             service.rename_room(self.list)
@@ -573,6 +591,22 @@ class BanAndReconcileServiceTests(TestCase):
             repaired = service.reconcile_list_room(self.list)
         self.assertEqual(repaired, 0)
         inv.assert_not_called()
+
+    def test_reconcile_includes_admin_without_access(self):
+        # A handover admin holds a ListAdmin row but no ListAccess; reconcile
+        # must still repair them into the room if their promotion-time invite
+        # was lost (Benutzergruppe ∪ admins, not Benutzergruppe alone).
+        pa = Person.objects.create(given_name="Ad", family_name="Min", email="ad@example.invalid")
+        ua = User.objects.create_user(person=pa, username="adm")
+        MatrixAccount.objects.create(user=ua, matrix_user_id="@u-a:fichtelink.caos.cloud", password="x")
+        ListAdmin.objects.create(list=self.list, user=ua)
+        with patch.object(
+            MatrixClient, "room_member_ids",
+            return_value={"@u-1:fichtelink.caos.cloud", "@u-2:fichtelink.caos.cloud"},
+        ), patch.object(MatrixClient, "invite") as inv:
+            repaired = service.reconcile_list_room(self.list)
+        self.assertEqual(repaired, 1)
+        inv.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-a:fichtelink.caos.cloud")
 
 
 class RoomModerationViewTests(TestCase):

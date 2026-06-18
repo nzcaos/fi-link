@@ -168,13 +168,30 @@ def remove_user_from_room(user, list_obj) -> None:
 
 
 def sync_user_power(user, list_obj, is_admin: bool) -> None:
-    """Promote/demote a user's power level (list-admin change → 50 / 0)."""
+    """Promote/demote a user's power level (list-admin change → 50 / 0).
+
+    On *promotion* the new admin may not be in the list's Benutzergruppe at all:
+    an ADMIN_INVITE_TOKEN handover (lists.views.admin_invite_accept) creates a
+    `ListAdmin` row but no `ListAccess`, so the user never went through
+    `sync_user_into_room` — they have neither a provisioned Matrix account nor a
+    room invite, and a bare `set_user_power_level` here would either no-op (no
+    account) or set power for someone who isn't in the room. Promotion therefore
+    routes through `sync_user_into_room`, which provisions the account, invites
+    them, and (because the `ListAdmin` row now exists) sets power to 50.
+
+    *Demotion* only lowers the power level — the user may still be a plain member
+    via `ListAccess`, so they are never kicked here (room-leave is the
+    `ListAccess`-delete path).
+    """
+    if is_admin:
+        sync_user_into_room(user, list_obj)
+        return
     account = MatrixAccount.objects.filter(user=user).first()
     room = MatrixRoom.objects.filter(list=list_obj).first()
     if not account or not room:
         return
     client = MatrixClient.from_settings()
-    client.set_user_power_level(_service_token(), room.room_id, account.matrix_user_id, 50 if is_admin else 0)
+    client.set_user_power_level(_service_token(), room.room_id, account.matrix_user_id, 0)
 
 
 def rename_room(list_obj) -> None:
@@ -228,7 +245,9 @@ def reconcile_list_room(list_obj) -> int:
     number of repair invites issued. Extra room members are deliberately NOT
     kicked (could be admins or the service account); only missing ones are added.
     """
-    from lists.models import ListAccess
+    from django.db.models import Q
+
+    from lists.models import ListAccess, ListAdmin
 
     room = MatrixRoom.objects.filter(list=list_obj).first()
     if room is None:
@@ -237,9 +256,14 @@ def reconcile_list_room(list_obj) -> int:
     token = _service_token()
     present = client.room_member_ids(token, room.room_id)
 
+    # Expected room members are the Benutzergruppe (ListAccess) *plus* the list's
+    # admins — a handover admin may hold a ListAdmin row without ListAccess (see
+    # sync_user_power), and must still be repaired into the room if their
+    # promotion-time invite failed transiently.
     expected = (
         MatrixAccount.objects.filter(
-            user__in=ListAccess.objects.filter(list=list_obj).values("user")
+            Q(user__in=ListAccess.objects.filter(list=list_obj).values("user"))
+            | Q(user__in=ListAdmin.objects.filter(list=list_obj).values("user"))
         ).values_list("matrix_user_id", flat=True)
     )
     repaired = 0

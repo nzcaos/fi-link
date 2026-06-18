@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.db import transaction
 from django.http import HttpResponseForbidden
@@ -552,9 +553,19 @@ def record_edit(request, pk: int, record_pk: int):
     if request.method == "POST":
         # Validate every form (list comp forces evaluation so all errors show).
         if all([s["form"].is_valid() for s in sections]):
-            for s in sections:
-                s["form"].save()
-            return redirect("lists:detail", pk=lst.pk)
+            # Wrap all sections in one transaction so a choice-cap rejection in
+            # a later section rolls back the earlier ones (no partial save). The
+            # cap check is authoritative under a select_for_update lock inside
+            # save(); surface its rejection as a page message and re-render with
+            # the user's input intact.
+            try:
+                with transaction.atomic():
+                    for s in sections:
+                        s["form"].save()
+            except ValidationError as exc:
+                messages.error(request, " ".join(exc.messages))
+            else:
+                return redirect("lists:detail", pk=lst.pk)
 
     return render(
         request,
@@ -765,7 +776,18 @@ def record_create_associate(request, pk: int):
             request.POST, list_obj=lst, user=request.user
         )
         if form.is_valid():
-            record = form.save()
+            try:
+                record = form.save()
+            except ValidationError as exc:
+                # A choice-cap rejection (e.g. both parents picked a full
+                # option) rolls the whole wizard save back; show it and
+                # re-render so the parent can pick another value.
+                messages.error(request, " ".join(exc.messages))
+                return render(
+                    request,
+                    "lists/record_create_associate.html",
+                    {"list_obj": lst, "form": form},
+                )
             # One-shot session marker is now consumed.
             request.session.pop("wizard_grant_list_id", None)
             # If the wizard was reached via a LIST_INVITE_TOKEN (via_associate
@@ -1191,6 +1213,11 @@ def _copy_record_to(
         list=dest_list, subject=src.subject, role=src.role
     )
     for v in src.values.all():
+        # choice_cap is deliberately NOT enforced here: a transfer is an
+        # admin-approved 1:1 migration of an existing record (same template),
+        # not a self-service pick. Capacity is enforced where users choose
+        # (RecordEditForm / AssociateWizardForm); blocking an approved move on
+        # a full destination value would strand the moving person mid-transfer.
         ListRecordValue.objects.create(record=new, attribute=v.attribute, value=v.value)
     _copy_record_access_to(src, new, dest_list)
     for mgr in src.managers.all():
