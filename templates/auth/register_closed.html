@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Registrierung — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Registrierung nur mit Einladung</h1>
+  <div class="info">
+    Ein Fichtelink-Konto entsteht immer im Zusammenhang mit einer Liste oder
+    einem Formular. Eine Registrierung „auf Vorrat“ ist deshalb nicht möglich.
+  </div>
+  <p>So kommen Sie zu einem Konto:</p>
+  <ul>
+    <li><strong>Einladung per E-Mail</strong> — öffnen Sie den Link aus der
+      Einladungsmail. Er führt Sie durch Registrierung und Beitritt in einem
+      Schritt.</li>
+    <li><strong>QR-Code</strong> — scannen Sie den Code, den Sie z. B. beim
+      Elternabend erhalten haben.</li>
+    <li><strong>Formular-Link</strong> — wenn Sie sich für eine Aktion
+      eintragen wollen, nutzen Sie den geteilten Link zum Formular.</li>
+  </ul>
+  <p>
+    Haben Sie keinen dieser Links, wenden Sie sich bitte an die Person, die die
+    Liste betreut (z. B. die Elternvertretung).
+  </p>
+  <p style="margin-top:1.5rem">
+    Sie haben bereits ein Konto und nur Ihren Passkey verloren?
+    <a href="{% url 'accounts:recover' %}">Zugang wiederherstellen</a>.
+  </p>
+  <p><a href="{% url 'accounts:login' %}">← Zur Anmeldung</a></p>
+{% endblock %}

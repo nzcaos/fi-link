@@ -7,8 +7,11 @@
     oder seit über sieben Tagen unbenutzt.
   </div>
   <p>
-    Starten Sie die Registrierung neu, oder — falls Sie Ihr Konto wiederherstellen
-    wollen — wenden Sie sich an Ihren Listen-Admin.
+    Bitten Sie die Person, die Sie eingeladen hat, um eine neue Einladung —
+    oder öffnen Sie den QR-Code bzw. Formular-Link erneut.
   </p>
-  <p><a href="{% url 'accounts:register_start' %}"><button type="button">Neu registrieren</button></a></p>
+  <p>
+    Falls Sie Ihr Konto bereits aktiviert hatten und nur den Passkey verloren
+    haben: <a href="{% url 'accounts:recover' %}">Zugang wiederherstellen</a>.
+  </p>
 {% endblock %}

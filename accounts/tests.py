@@ -30,6 +30,27 @@ def _make_user(email: str, given: str = "Anna", family: str = "Müller") -> User
     return User.objects.create_user(person=person, username=random_username())
 
 
+def _grant_registration(client, *, is_open: bool = True):
+    """Open the registration gate for a test client by stashing a usable
+    invitation in the session — registration is invitation-only (see
+    `accounts.views._registration_grant`). A form's broadcast token is the
+    cheapest of the four accepted grants to construct.
+    """
+    from forms.models import Form
+
+    owner = _make_user(email="owner@example.org", given="Olga", family="Owner")
+    form = Form.objects.create(
+        title="Sommerfest",
+        created_by=owner,
+        share_token="share-token-for-tests",
+        is_open=is_open,
+    )
+    session = client.session
+    session["pending_form_token"] = form.share_token
+    session.save()
+    return form
+
+
 def _make_passkey(user: User, label: str = "test") -> Passkey:
     # Bytes don't need to be a real key — we never invoke py_webauthn in these tests.
     return Passkey.objects.create(
@@ -135,6 +156,11 @@ class ActivationTokenTests(TestCase):
 
 
 class RegisterStartViewTests(TestCase):
+    def setUp(self):
+        # Registration is invitation-only; these tests exercise what happens
+        # *after* the gate, so every client starts with a valid grant.
+        _grant_registration(self.client)
+
     def test_get_renders_form(self):
         resp = self.client.get("/auth/register/")
         self.assertEqual(resp.status_code, 200)
@@ -175,6 +201,7 @@ class N15RegisterRateLimitTests(TestCase):
         from django.core.cache import cache
 
         cache.clear()
+        _grant_registration(self.client)
 
     def _post_register(self, email: str, **kwargs):
         return self.client.post(
@@ -263,6 +290,146 @@ class N15RegisterRateLimitTests(TestCase):
             HTTP_X_FORWARDED_FOR="203.0.113.99",
         )
         self.assertEqual(resp.status_code, 200)
+
+
+class RegistrationGateTests(TestCase):
+    """Registration is invitation-only (CLAUDE.md / "Registration requires an
+    invitation"). Without a usable token no account is created and no mail is
+    sent — that combination is what the 2026-09-17 abuse exploited.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+
+    def _payload(self, email="stranger@example.org"):
+        return {"email": email, "given_name": "Anna", "family_name": "Müller"}
+
+    def _stash(self, key: str, value: str):
+        session = self.client.session
+        session[key] = value
+        session.save()
+
+    def _list(self):
+        from lists.models import List, ListTemplate
+
+        template = ListTemplate.objects.create(name="Schulklasse")
+        return List.objects.create(
+            title="Klasse 5a", email_alias="5a-gate", template=template
+        )
+
+    # --- closed ----------------------------------------------------------
+
+    def test_get_without_invitation_is_blocked(self):
+        resp = self.client.get("/auth/register/")
+        self.assertEqual(resp.status_code, 403)
+        self.assertContains(resp, "Registrierung nur mit Einladung", status_code=403)
+
+    def test_post_without_invitation_creates_nothing_and_sends_no_mail(self):
+        from django.core import mail
+
+        resp = self.client.post("/auth/register/", self._payload())
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(Person.objects.filter(email="stranger@example.org").exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_register_force_without_invitation_is_blocked(self):
+        from django.core import mail
+
+        resp = self.client.post("/auth/register/force/", self._payload())
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(Person.objects.filter(email="stranger@example.org").exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_unknown_token_value_does_not_open_gate(self):
+        """A guessed/stale session value must be checked against the DB, not
+        merely be present."""
+        self._stash("pending_invite_token", "does-not-exist")
+        self.assertEqual(self.client.get("/auth/register/").status_code, 403)
+
+    def test_expired_invite_does_not_open_gate(self):
+        from lists.models import ListInviteToken
+
+        inviter = _make_user(email="inviter@example.org")
+        invite = ListInviteToken.objects.create(
+            list=self._list(),
+            invited_by=inviter,
+            target_email="guest@example.org",
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+        self._stash("pending_invite_token", invite.token)
+        self.assertEqual(self.client.get("/auth/register/").status_code, 403)
+
+    def test_consumed_invite_does_not_open_gate(self):
+        from lists.models import ListInviteToken
+
+        inviter = _make_user(email="inviter@example.org")
+        invite = ListInviteToken.objects.create(
+            list=self._list(),
+            invited_by=inviter,
+            target_email="guest@example.org",
+            consumed_at=timezone.now(),
+        )
+        self._stash("pending_invite_token", invite.token)
+        self.assertEqual(self.client.get("/auth/register/").status_code, 403)
+
+    def test_closed_form_does_not_open_gate(self):
+        form = _grant_registration(self.client, is_open=False)
+        self.assertFalse(form.is_open)
+        self.assertEqual(self.client.get("/auth/register/").status_code, 403)
+
+    # --- open ------------------------------------------------------------
+
+    def test_valid_invite_opens_gate(self):
+        from lists.models import ListInviteToken
+
+        inviter = _make_user(email="inviter@example.org")
+        invite = ListInviteToken.objects.create(
+            list=self._list(),
+            invited_by=inviter,
+            target_email="guest@example.org",
+        )
+        self._stash("pending_invite_token", invite.token)
+        resp = self.client.get("/auth/register/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Konto anlegen")
+
+    def test_valid_qr_join_token_opens_gate_and_allows_signup(self):
+        from django.core import mail
+        from lists.models import ListJoinToken
+
+        creator = _make_user(email="creator@example.org")
+        join = ListJoinToken.objects.create(list=self._list(), created_by=creator)
+        self._stash("pending_join_token", join.token)
+        resp = self.client.post("/auth/register/", self._payload("qr@example.org"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Person.objects.filter(email="qr@example.org").exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_revoked_qr_join_token_does_not_open_gate(self):
+        from lists.models import ListJoinToken
+
+        creator = _make_user(email="creator@example.org")
+        join = ListJoinToken.objects.create(
+            list=self._list(), created_by=creator, revoked_at=timezone.now()
+        )
+        self._stash("pending_join_token", join.token)
+        self.assertEqual(self.client.get("/auth/register/").status_code, 403)
+
+    def test_form_share_token_opens_gate(self):
+        _grant_registration(self.client)
+        resp = self.client.get("/auth/register/")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_gate_does_not_consume_the_session_key(self):
+        """`_next_url_after_auth` needs the key after the passkey ceremony to
+        finish the join — the gate must read it, not pop it."""
+        form = _grant_registration(self.client)
+        self.client.get("/auth/register/")
+        self.assertEqual(
+            self.client.session.get("pending_form_token"), form.share_token
+        )
 
 
 class ProfileViewTests(TestCase):

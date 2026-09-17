@@ -108,6 +108,62 @@ def _rate_limited_response(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------------
+# Registration gate: an account needs a pending invitation
+# ---------------------------------------------------------------------------
+
+
+def _registration_grant(request: HttpRequest) -> str | None:
+    """Name of the pending invitation that authorises creating an account, or
+    None when the visitor carries none.
+
+    Open self-registration is a mail-relay primitive: every POST created a stub
+    account and mailed an activation link to a freely chosen third-party
+    address, which is what the 2026-09-17 abuse used (255 stub accounts, all
+    addresses harvested elsewhere). Rate limiting only slows that down;
+    requiring a token the visitor can only hold by having received an
+    invitation mail, scanned a printed QR code or opened a form's broadcast
+    link removes the primitive. See CLAUDE.md / "Registration requires an
+    invitation".
+
+    The token must still be *usable* — an expired QR code or an already
+    consumed invite is no better than none. Keys are read, never popped:
+    `_next_url_after_auth` needs them after the passkey ceremony.
+    """
+    from forms.models import Form
+    from lists.models import AdminInviteToken, ListInviteToken, ListJoinToken
+
+    # The three token-model grants; `_next_url_after_auth` pops the same keys
+    # after enrolment to finish the join — keep both lists in sync.
+    for session_key, model in (
+        ("pending_invite_token", ListInviteToken),
+        ("pending_join_token", ListJoinToken),
+        ("pending_admin_invite_token", AdminInviteToken),
+    ):
+        value = request.session.get(session_key)
+        if not value:
+            continue
+        token = model.objects.filter(token=value).first()
+        if token is not None and token.is_usable:
+            return session_key
+
+    value = request.session.get("pending_form_token")
+    if value and Form.objects.filter(share_token=value, is_open=True).exists():
+        return "pending_form_token"
+    return None
+
+
+def _registration_closed_response(request: HttpRequest) -> HttpResponse:
+    """Shown when someone reaches the registration form without an invitation.
+    Logged with the client IP: the abuse left no trace in the database because
+    the throttle key is cache-only, so the app log is the forensic record.
+    """
+    log.info(
+        "register blocked: no pending invitation (ip=%s)", _client_ip(request)
+    )
+    return render(request, "auth/register_closed.html", status=403)
+
+
+# ---------------------------------------------------------------------------
 # Registration: email entry → activation link → passkey enrollment
 # ---------------------------------------------------------------------------
 
@@ -117,7 +173,11 @@ def register_start(request: HttpRequest) -> HttpResponse:
     email is unknown, then mails an activation link. Returning users see a
     "you already have an account" hint — deliberately NOT enumeration-
     resistant (see CLAUDE.md / "Enumeration resistance").
+
+    Gated on a pending invitation — see `_registration_grant`.
     """
+    if _registration_grant(request) is None:
+        return _registration_closed_response(request)
     if request.method == "GET":
         return render(
             request,
@@ -163,7 +223,11 @@ def register_start(request: HttpRequest) -> HttpResponse:
 @require_POST
 def register_force(request: HttpRequest) -> HttpResponse:
     """User confirmed they want a second account under an already-known email
-    (shared family mailbox). Skips the existing-account check."""
+    (shared family mailbox). Skips the existing-account check — but not the
+    invitation gate: this path creates an account and sends mail just like
+    `register_start`."""
+    if _registration_grant(request) is None:
+        return _registration_closed_response(request)
     email = (request.POST.get("email") or "").strip().lower()
     given_name = (request.POST.get("given_name") or "").strip()
     family_name = (request.POST.get("family_name") or "").strip()

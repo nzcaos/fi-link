@@ -367,6 +367,25 @@ Rejected: the in-memory `Map` pattern Fi-Planer uses. For Fichtelink the pending
 
 For the shared-family-mailbox case: `login-begin` resolves an email to a *set* of USERs and emits `allowCredentials` containing every passkey of every matching USER. The browser shows all available passkeys; the user picks their own; the chosen credential uniquely identifies the USER.
 
+### Registration requires an invitation
+
+**There is no open self-registration.** `/auth/register/` and `/auth/register/force/` only serve a visitor whose session carries a *usable* invitation, checked by `accounts.views._registration_grant`:
+
+| Session key | Set by | Accepted while |
+|---|---|---|
+| `pending_invite_token` | `lists.views.invite_accept` | `ListInviteToken.is_usable` |
+| `pending_join_token` | `lists.views.join_via_token` (QR) | `ListJoinToken.is_usable` |
+| `pending_admin_invite_token` | `lists.views.admin_invite_accept` | `AdminInviteToken.is_usable` |
+| `pending_form_token` | `forms.views.shared_signin` | form exists and `is_open` |
+
+Without one, the visitor gets `auth/register_closed.html` (403) explaining the three ways in, plus a pointer to account recovery. The keys are **read, not popped** — `_next_url_after_auth` consumes them after the passkey ceremony to finish the join.
+
+Reason: the registration form was a mail-relay primitive. Every POST created a stub PERSON + inactive USER and mailed an activation link to a **freely chosen third-party address**. On 2026-09-17 that was used to create 255 stub accounts and mail as many strangers — our installation as the sender. The per-IP throttle (`_REG_RATE_LIMIT`) cannot fix this: it lives in Django's default `LocMemCache`, so it counts per gunicorn worker and resets on every deploy, and a botnet rotates IPs regardless. Requiring a token the visitor can only hold from an invitation mail, a printed QR code or a broadcast form link removes the primitive instead of slowing it down.
+
+Consequence accepted deliberately: nobody can create an account "on spec" from the public welcome page. That matches the product — an account without a list or form has no purpose, and every onboarding path in the spec already starts from an invitation or a QR code.
+
+Not gated, for good reason: `/auth/activate/<token>/` (the link itself is the proof), `/auth/recover/` (enumeration-resistant, additive, rate-limited, and only ever mails the **on-file** address — it cannot be pointed at a stranger), and `manage.py bootstrap_super_admin` (operator shell).
+
 ### Registration and login flow
 
 - **Registration:** user enters email → confirmation link sent to that address → on click, the browser prompts for passkey enrollment (Touch ID, Face ID, Windows Hello, or a hardware security key) → account is active.
