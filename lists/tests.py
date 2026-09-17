@@ -4119,6 +4119,52 @@ class ProcessInboundTests(TestCase):
         notify.assert_called_once()
         self.assertEqual(notify.call_args.kwargs["recipients"], ["adm@x.org"])
 
+    def test_admin_approval_falls_back_to_super_admins(self):
+        """A list whose admins carry no deliverable address must not strand the
+        mail — the super-admins are notified instead."""
+        mute = _make_user(username="mute", email=None)
+        ListAdmin.objects.create(list=self.lst, user=mute)
+        _make_user(username="su", email="su@x.org", is_superuser=True, is_staff=True)
+        inbound = self._inbound(from_email="stranger@external.example")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        tok = MailReleaseToken.objects.get(inbound=inbound)
+        self.assertEqual(tok.kind, MailReleaseToken.Kind.ADMIN)
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["su@x.org"])
+        self.assertIn("Super-Admin", notify.call_args.kwargs["body"])
+        self.assertIn(tok.token, notify.call_args.kwargs["body"])
+
+    def test_admin_approval_does_not_fall_back_when_admin_reachable(self):
+        """The fallback must not widen the audience: with a reachable list
+        admin the super-admin is not notified alongside."""
+        admin = _make_user(username="adm2", email="adm@x.org")
+        ListAdmin.objects.create(list=self.lst, user=admin)
+        _make_user(username="su2", email="su@x.org", is_superuser=True, is_staff=True)
+        inbound = self._inbound(from_email="stranger@external.example")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["adm@x.org"])
+        self.assertNotIn("Super-Admin", notify.call_args.kwargs["body"])
+
+    def test_admin_approval_without_any_recipient_still_creates_token(self):
+        """Neither list admin nor super-admin reachable: the token is still
+        written (so the mail can be released out-of-band) and no send is
+        attempted."""
+        inbound = self._inbound(from_email="stranger@external.example")
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        self.assertTrue(MailReleaseToken.objects.filter(inbound=inbound).exists())
+        notify.assert_not_called()
+
     def test_auto_submitted_list_mail_suppressed(self):
         raw = _eml(
             to_addr="5a@caos.cloud",

@@ -574,6 +574,20 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
 
     # ADMIN_APPROVAL
     admin_emails = _list_admin_emails(target)
+    fallback_note = ""
+    if not admin_emails:
+        # No list admin carries a deliverable address — either the list has no
+        # ListAdmin row at all, or every admin's PERSON has an empty email.
+        # Without a fallback the token would sit in the DB with nobody notified
+        # and the sender never hearing back. The super-admins own the
+        # installation, so they are the correct last resort — same audience
+        # aggregate aliases use, which have no list-admin by construction.
+        admin_emails = _super_admin_emails()
+        fallback_note = (
+            f'Die Liste „{target.title}" hat keinen Admin mit hinterlegter '
+            f"E-Mail-Adresse — deshalb erhalten Sie diese Anfrage als "
+            f"Super-Admin.\n"
+        )
     _create_release_token(
         inbound,
         target,
@@ -585,12 +599,18 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
             f"Hallo,\n\n"
             f'{inbound.from_email or "(unbekannt)"} möchte eine Mail an die '
             f'Liste „{target.title}" senden, ist aber nicht berechtigt.\n'
-            f'Betreff: {inbound.subject or "(kein Betreff)"}\n\n'
+            f'Betreff: {inbound.subject or "(kein Betreff)"}\n'
+            f"{fallback_note}\n"
             f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"
         ),
     )
-    log.info("process_inbound: admin approval inbound=%d list=%s recipients=%d",
-             inbound.pk, target.email_alias, len(admin_emails))
+    log.info(
+        "process_inbound: admin approval inbound=%d list=%s recipients=%d%s",
+        inbound.pk,
+        target.email_alias,
+        len(admin_emails),
+        " (Super-Admin-Fallback)" if fallback_note else "",
+    )
 
 
 def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) -> None:

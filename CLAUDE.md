@@ -156,7 +156,7 @@ Beyond the spec's two cases (member-sends-with-release-link, non-member-with-adm
 1. Identify sender USER via From.
 2. If sender is a member of the target list → normal release-link flow (anti-spoofing).
 3. Otherwise check `LIST_SEND_PERMISSION` (direct or, if applicable, via `transitive=true` from a parent target): if sender is a member of any list with permission on the target, accept (with or without release-click per the permission row).
-4. Otherwise → admin-approval flow.
+4. Otherwise → admin-approval flow. If no `LIST_ADMIN` of the target carries a deliverable `PERSON.email` (no admin at all, or admins without an address), the approval notification falls back to the **super-admins** — the same audience aggregate aliases use, which have no list-admin by construction. Without the fallback the release token would be written with nobody notified and the sender never hearing back. The token is created in either case, so an operator can always release a stranded mail via its link.
 
 ### List display defaults via LISTTEMPLATE
 
