@@ -150,7 +150,12 @@ async def _connect(host: str, port: int, use_ssl: bool, timeout: float):
     cls = aioimaplib.IMAP4_SSL if use_ssl else aioimaplib.IMAP4
     client = cls(host=host, port=port, timeout=timeout)
     await client.wait_hello_from_server()
-    status, data = await client.login(settings.IMAP_USER, settings.IMAP_PASS)
+    # aioimaplib quotes the password but sends the user name as a bare atom, so
+    # a catch-all login like "*@domain" is rejected (BAD ... instead of "*").
+    # A quoted string is valid for every user name, so always quote.
+    status, data = await client.login(
+        aioimaplib.quoted(settings.IMAP_USER), settings.IMAP_PASS
+    )
     if status != "OK":
         raise RuntimeError(
             f"IMAP LOGIN refused: {status} {_decode_imap_reason(data)!r}"
