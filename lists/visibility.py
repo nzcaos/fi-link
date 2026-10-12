@@ -229,7 +229,7 @@ def build_visible_rows(user, lst: List) -> list[dict]:
     """
     records = list(
         lst.records.filter(archived_at__isnull=True)
-        .select_related("subject")
+        .select_related("subject", "list")
         .prefetch_related("values")
     )
     attributes = list(lst.template.attributes.all())
@@ -346,7 +346,7 @@ def build_composed_rows(user, lst: List) -> list[dict]:
     """
     records = list(
         lst.records.filter(archived_at__isnull=True)
-        .select_related("subject")
+        .select_related("subject", "list")
         .prefetch_related("values")
     )
     if not records:

@@ -67,6 +67,10 @@ class Command(BaseCommand):
             access_token=result["access_token"],
             device_id=result.get("device_id", ""),
         )
+        try:
+            client.disable_ratelimit(account.access_token, account.matrix_user_id)
+        except MatrixError as exc:  # not fatal: erasure repeats it
+            self.stderr.write(f"Warnung: Rate-Limit-Ausnahme nicht gesetzt ({exc}).")
 
         self.stdout.write(self.style.SUCCESS("Matrix service account created."))
         self.stdout.write(f"  Matrix-ID: {account.matrix_user_id}")

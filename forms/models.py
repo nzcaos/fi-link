@@ -99,12 +99,24 @@ class Form(models.Model):
         )
 
     def ensure_share_link(self) -> None:
-        """Create the (single) broadcast token lazily, with the default end date."""
+        """Create the (single) broadcast token lazily. An end date set
+        beforehand (Django admin) is kept; otherwise the default applies."""
         if self.share_token:
             return
         self.share_token = _gen_share_token()
-        self.share_expires_on = timezone.localdate() + timedelta(days=SHARE_LINK_DEFAULT_DAYS)
+        if self.share_expires_on is None:
+            self.share_expires_on = timezone.localdate() + timedelta(days=SHARE_LINK_DEFAULT_DAYS)
         self.save(update_fields=["share_token", "share_expires_on"])
+
+    def clean(self) -> None:
+        # An empty date would not mean "no limit" but switch the link off
+        # without saying so — require one once the link exists.
+        from django.core.exceptions import ValidationError
+
+        if self.share_token and self.share_expires_on is None:
+            raise ValidationError(
+                {"share_expires_on": "Der Freigabe-Link existiert schon und braucht ein Ablaufdatum."}
+            )
 
     @transaction.atomic
     def clone(self, *, created_by, title: str | None = None) -> "Form":

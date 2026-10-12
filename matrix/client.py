@@ -419,6 +419,20 @@ class MatrixClient:
             access_token=access_token,
         )
 
+    def disable_ratelimit(self, access_token: str, user_id: str) -> None:
+        """Exempt a user from message rate limiting (admin API). Used for the
+        service account: erasure redacts event by event, and every redaction
+        counts against rc_message (default 0.2/s, burst 10)."""
+        from urllib.parse import quote
+
+        uid = quote(user_id, safe="")
+        self._request(
+            "POST",
+            f"/_synapse/admin/v1/users/{uid}/override_ratelimit",
+            json={"messages_per_second": 0, "burst_count": 0},
+            access_token=access_token,
+        )
+
     def deactivate_user(self, access_token: str, user_id: str, erase: bool = True) -> None:
         """Deactivate the account (leaves all rooms, drops devices/tokens). With
         erase=True Synapse also marks it GDPR-erased: profile removed, its

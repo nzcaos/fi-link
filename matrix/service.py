@@ -345,12 +345,12 @@ def _wait_for_redaction(client: MatrixClient, token: str, redact_id: str) -> Non
     while True:
         status = client.redact_status(token, redact_id)
         state = status.get("status")
-        if state == "complete":
+        if state in ("complete", "completed"):
             failed = status.get("failed_redactions") or {}
             if failed:
                 log.warning("matrix: %d redaction(s) failed in job %s", len(failed), redact_id)
             return
-        if state == "failed":
+        if state in ("failed", "cancelled"):
             raise MatrixError(f"Synapse-Redaktion {redact_id} fehlgeschlagen.")
         if time.monotonic() > deadline:
             raise MatrixError(f"Synapse-Redaktion {redact_id} nach {REDACT_WAIT_SECONDS}s nicht fertig.")
@@ -374,6 +374,8 @@ def erase_matrix_account(account: MatrixAccount) -> None:
     client = MatrixClient.from_settings()
     token = _service_token()
     mxid = account.matrix_user_id
+    # Idempotent; also covers service accounts bootstrapped before this existed.
+    client.disable_ratelimit(token, MatrixServiceAccount.get().matrix_user_id)
     for room in MatrixRoom.objects.all():
         try:
             event_ids = client.sender_event_ids(token, room.room_id, mxid)

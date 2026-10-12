@@ -592,6 +592,21 @@ class FormShareExpiryTests(TestCase):
         self.form.refresh_from_db()
         self.assertFalse(self.form.share_link_active)
 
+    def test_end_date_set_before_link_creation_is_kept(self):
+        day = timezone.localdate() + timedelta(days=3)
+        fresh = Form.objects.create(title="Neu", created_by=self.creator, share_expires_on=day)
+        fresh.ensure_share_link()
+        fresh.refresh_from_db()
+        self.assertTrue(fresh.share_token)
+        self.assertEqual(fresh.share_expires_on, day)
+
+    def test_existing_link_requires_end_date(self):
+        from django.core.exceptions import ValidationError
+
+        self.form.share_expires_on = None
+        with self.assertRaises(ValidationError):
+            self.form.full_clean()
+
     def test_clone_has_no_link_or_end_date(self):
         clone = self.form.clone(created_by=self.creator)
         self.assertIsNone(clone.share_token)

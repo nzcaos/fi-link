@@ -817,7 +817,13 @@ def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
         return reverse("lists:admin_invite_accept", kwargs={"token": pending_admin})
     pending_form = request.session.pop("pending_form_token", None)
     if pending_form:
-        return reverse("forms:shared", kwargs={"token": pending_form})
+        from forms.models import Form
+
+        form = Form.objects.filter(share_token=pending_form).first()
+        # The activation mail may be clicked after the link's end date; the
+        # account is still the visitor's, but send them home, not to a 410.
+        if form is not None and form.share_link_active:
+            return reverse("forms:shared", kwargs={"token": pending_form})
     return default
 
 

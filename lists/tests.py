@@ -3412,6 +3412,13 @@ class SendOutboundMessageTests(TestCase):
         self.om.refresh_from_db()
         self.assertEqual(self.om.status, OutboundMessage.Status.SENT)
 
+    def test_unicode_spaces_in_filename_kept_as_spaces(self):
+        inbound = self._inbound_with(("Bildschirmfoto 10.00.00\u202fAM.png", b"x"), ("Übersicht\u00a0Klasse.pdf", b"y"))
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        names = [a[0] for a in mail.outbox[0].attachments]
+        self.assertEqual(names, ["Bildschirmfoto 10.00.00 AM.png", "Übersicht Klasse.pdf"])
+
     def test_non_smtp_error_marks_failed(self):
         with patch("lists.tasks.build_outbound_email", side_effect=ValueError("kaputt")):
             with self.assertRaises(ValueError):

@@ -751,6 +751,15 @@ class ErasureClientTests(TestCase):
         self.assertEqual(path, "/_synapse/admin/v1/deactivate/%40u-x%3Afichtelink.caos.cloud")
         self.assertEqual(req.call_args.kwargs["json"], {"erase": True})
 
+    def test_disable_ratelimit_overrides_to_zero(self):
+        client = _client()
+        with patch.object(client, "_request", return_value={}) as req:
+            client.disable_ratelimit("t", "@svc:fichtelink.caos.cloud")
+        method, path = req.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/_synapse/admin/v1/users/%40svc%3Afichtelink.caos.cloud/override_ratelimit")
+        self.assertEqual(req.call_args.kwargs["json"], {"messages_per_second": 0, "burst_count": 0})
+
     def test_delete_room_purges(self):
         client = _client()
         with patch.object(client, "_request", return_value={"delete_id": "d1"}) as req:
@@ -770,6 +779,9 @@ class EraseAccountServiceTests(TestCase):
         self.account = MatrixAccount.objects.create(
             user=self.user, matrix_user_id="@u-e:fichtelink.caos.cloud", password="pw"
         )
+        ratelimit = patch.object(MatrixClient, "disable_ratelimit")
+        self.disable_ratelimit = ratelimit.start()
+        self.addCleanup(ratelimit.stop)
 
     def _patched(self, calls, status="complete"):
         from contextlib import ExitStack
@@ -798,6 +810,14 @@ class EraseAccountServiceTests(TestCase):
             service.erase_matrix_account(self.account)
         self.assertEqual(calls, ["redact", "status", "deactivate"])
         self.assertFalse(MatrixAccount.objects.exists())
+        # Service account exempted from rc_message before redacting.
+        self.disable_ratelimit.assert_called_once_with("svc", "@svc:fichtelink.caos.cloud")
+
+    def test_completed_spelling_is_accepted(self):
+        calls = []
+        with self._patched(calls, status="completed"):
+            service.erase_matrix_account(self.account)
+        self.assertIn("deactivate", calls)
 
     def test_class_rooms_redacted_by_service_account(self):
         # Also rooms the user already left (kicked on list leave).

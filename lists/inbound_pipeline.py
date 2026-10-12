@@ -105,6 +105,7 @@ def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, byte
     ``.eml`` attachment.
     """
     import mimetypes
+    import unicodedata
 
     body_ids = set()
     for pref in (("plain",), ("html",)):
@@ -121,7 +122,13 @@ def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, byte
         # RFC 2231 names are percent-decoded, so CR/LF and other controls can
         # arrive here; they would break (or inject into) the forward's
         # Content-Disposition header.
-        name = "".join(ch for ch in (part.get_filename() or "") if ch.isprintable()).strip()
+        # Unicode spaces (NBSP, the narrow NBSP in macOS screenshot names) are
+        # not "printable" but harmless: keep them as plain spaces.
+        name = "".join(
+            " " if unicodedata.category(ch) == "Zs" else ch
+            for ch in (part.get_filename() or "")
+            if ch.isprintable() or unicodedata.category(ch) == "Zs"
+        ).strip()
         if name:
             return name
         ext = mimetypes.guess_extension(part.get_content_type()) or fallback_ext
