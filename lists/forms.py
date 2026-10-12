@@ -150,11 +150,9 @@ class ListInviteForm(forms.Form):
             "Mit Person: Empfänger meldet sich nur per Passkey an, ohne erneute Erfassung."
         ),
     )
-    mode = forms.ChoiceField(
-        label="Wizard-Modus",
-        choices=[("", "Vorlage-Default"), ("self", "Eigene Person ist Mitglied"), ("via_associate", "Mitglied ist eine andere Person")],
-        required=False,
-    )
+    # No per-invitation wizard mode: whether the invitee is the member or
+    # registers someone else (a child) is a property of the list's template,
+    # not of a single invitation — the view always uses the template default.
 
     def __init__(self, *args, list_obj, inviting_user, **kwargs):
         super().__init__(*args, **kwargs)

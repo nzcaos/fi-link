@@ -21,10 +21,6 @@
     <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">{{ form.target_person.help_text }}</p>
     {% if form.target_person.errors %}<div class="error">{{ form.target_person.errors }}</div>{% endif %}
 
-    <label for="{{ form.mode.id_for_label }}">{{ form.mode.label }}</label>
-    {{ form.mode }}
-    {% if form.mode.errors %}<div class="error">{{ form.mode.errors }}</div>{% endif %}
-
     <p style="margin-top:1rem">
       <button type="submit">Einladung versenden</button>
       <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>

@@ -463,7 +463,7 @@ def list_invite(request, pk: int):
         if form.is_valid():
             target_person = form.cleaned_data.get("target_person")
             target_email = form.cleaned_data["target_email"]
-            mode = form.cleaned_data.get("mode") or lst.template.member_subject_mode
+            mode = lst.template.member_subject_mode
 
             with transaction.atomic():
                 token = ListInviteToken.objects.create(

@@ -5884,3 +5884,27 @@ class ListCreationGateTests(TestCase):
         with override_settings(USER_LIST_CREATION_ENABLED=True):
             self.assertContains(self.client.get(reverse("lists:index")), "Neue Liste anlegen")
             self.assertEqual(self.client.get(reverse("lists:create")).status_code, 200)
+
+
+class InviteModeFollowsTemplateTests(TestCase):
+    """The invite form offers no wizard-mode choice; a posted `mode` is
+    ignored and the token always carries the template's mode."""
+
+    def test_posted_mode_is_ignored(self):
+        tpl = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        lst = List.objects.create(title="Klasse 5a", email_alias="5a-mode", template=tpl)
+        admin = _make_user(username="mode-admin", email="ma@example.test")
+        ListAdmin.objects.create(list=lst, user=admin)
+        self.client.force_login(admin)
+        self.assertNotContains(
+            self.client.get(reverse("lists:invite", kwargs={"pk": lst.pk})), "Wizard-Modus"
+        )
+        self.client.post(
+            reverse("lists:invite", kwargs={"pk": lst.pk}),
+            {"target_email": "neu@example.test", "target_person": "", "mode": "self"},
+        )
+        tok = ListInviteToken.objects.get(list=lst)
+        self.assertEqual(tok.mode, ListInviteToken.Mode.VIA_ASSOCIATE)
