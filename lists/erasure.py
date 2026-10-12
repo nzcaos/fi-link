@@ -14,8 +14,8 @@ first and hands the PROTECT audit references over to a replacement user
 
 Scope:
 - the target PERSON, their USER (passkeys, memberships, admin rights, record
-  managers, form signups, Matrix account cascade with it) and all their
-  LIST_RECORDs including archived ones (values, visibility rows cascade);
+  managers, form signups; the Matrix account is redacted + deactivated on
+  Synapse first) and all their LIST_RECORDs including archived ones (values, visibility rows cascade);
 - children (PERSONs without USER) whose only guardians are being erased —
   otherwise they would be left as records nobody can manage — plus co-parents
   without USER that were captured by proxy only for those children;
@@ -42,7 +42,6 @@ from .models import (
     AggregateAlias,
     InboundMessage,
     List,
-    ListAccess,
     ListAdmin,
     ListInviteToken,
     ListJoinToken,
@@ -160,26 +159,30 @@ def _email_q(field_name: str, emails: list[str]) -> Q:
     return q
 
 
-def _leave_matrix_rooms(users: list[User]) -> None:
-    """Best-effort kick before the MatrixAccount row cascades away — the
-    post_delete signal's task would find no user/account afterwards."""
-    if not settings.MATRIX_ENABLED:
-        return
+def _erase_matrix_accounts(users: list[User]) -> None:
+    """Redact + deactivate the users' Matrix accounts on Synapse before the
+    MatrixAccount rows cascade away (afterwards nobody knows the Matrix ids).
+    Runs before the DB transaction and raises on failure, so an unreachable
+    Synapse aborts the erasure instead of leaving a live account behind.
+    With Matrix switched off Synapse is not contacted; the rows just cascade."""
     import logging
 
+    from matrix.models import MatrixAccount
+
+    accounts = list(MatrixAccount.objects.filter(user__in=users))
+    if not accounts:
+        return
+    if not settings.MATRIX_ENABLED:
+        logging.getLogger(__name__).warning(
+            "erasure: MATRIX_ENABLED is off — %d Matrix account(s) not erased on Synapse: %s",
+            len(accounts),
+            ", ".join(a.matrix_user_id for a in accounts),
+        )
+        return
     from matrix import service
 
-    log = logging.getLogger(__name__)
-    for access in ListAccess.objects.filter(user__in=users).select_related("user", "list"):
-        try:
-            service.remove_user_from_room(access.user, access.list)
-        except Exception:  # noqa: BLE001
-            log.warning(
-                "erasure: matrix kick failed user=%d list=%d",
-                access.user_id,
-                access.list_id,
-                exc_info=True,
-            )
+    for account in accounts:
+        service.erase_matrix_account(account)
 
 
 def execute_erasure(plan: ErasurePlan, *, reassign_to: User | None) -> dict[str, int]:
@@ -190,7 +193,7 @@ def execute_erasure(plan: ErasurePlan, *, reassign_to: User | None) -> dict[str,
         raise ValueError("replacement user is being erased")
     person_ids = [p.pk for p in plan.persons]
 
-    _leave_matrix_rooms(plan.users)
+    _erase_matrix_accounts(plan.users)
 
     counts: dict[str, int] = {}
     with transaction.atomic():

@@ -981,6 +981,33 @@ async def prune_finished_jobs(context, timestamp: int) -> None:
     )
 
 
+def _purge_matrix_room(lst) -> bool:
+    """Delete the list's Synapse room before the list itself. Returns False if
+    that failed (the purge must then skip the list). With Matrix off, Synapse
+    is not contacted and a leftover room is only logged."""
+    from matrix.models import MatrixRoom
+
+    room = MatrixRoom.objects.filter(list=lst).first()
+    if room is None:
+        return True
+    if not settings.MATRIX_ENABLED:
+        log.warning(
+            "purge_archived_lists: list=%d has Matrix room %s but MATRIX_ENABLED is off — not deleted on Synapse",
+            lst.pk,
+            room.room_id,
+        )
+        return True
+    from matrix import service
+    from matrix.client import MatrixError
+
+    try:
+        service.delete_room_for_list(lst)
+    except MatrixError:
+        log.warning("purge_archived_lists: list=%d room deletion failed — skipped", lst.pk, exc_info=True)
+        return False
+    return True
+
+
 @app.periodic(cron="11 4 * * *")
 @app.task(queueing_lock="purge_archived_lists", pass_context=False)
 def purge_archived_lists(timestamp: int) -> None:
@@ -996,8 +1023,9 @@ def purge_archived_lists(timestamp: int) -> None:
     request (`manage.py delete_person`), not by age.
 
     A list that scopes an AggregateAlias is PROTECTed and skipped with a
-    warning; re-scope or delete the alias first. A Synapse room of a
-    matrix-enabled list is not torn down (MatrixRoom row cascades only).
+    warning; re-scope or delete the alias first. A list's Matrix room is shut
+    down and purged on Synapse first; if Synapse can't be reached the list is
+    skipped and retried on the next run, so no room outlives its list unseen.
     """
     cutoff = timezone.now() - timedelta(days=settings.LIST_ARCHIVE_RETENTION_DAYS)
     for lst in List.objects.filter(archived_at__lt=cutoff):
@@ -1008,6 +1036,8 @@ def purge_archived_lists(timestamp: int) -> None:
             )
             continue
         list_id = lst.pk  # instance.delete() resets pk
+        if not _purge_matrix_room(lst):
+            continue
         with transaction.atomic():
             subject_ids = set(
                 ListRecord.objects.filter(list=lst).values_list("subject_id", flat=True)

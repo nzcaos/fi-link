@@ -206,13 +206,21 @@ and rationale: [`docs/matrix-architecture.md`](docs/matrix-architecture.md) and
 
 **How it works once enabled:**
 
-- Accounts are provisioned lazily (Weg A — server-assigned password). A parent
-  opens *Messenger-Zugang* in the menu to see their homeserver / Matrix-ID /
-  password + a QR, and enters them in Element. Display names are pseudonymous
+- Accounts are **opt-in** (Weg A — server-assigned password). A parent opens
+  *Messenger-Zugang* (profile) and clicks *einrichten*; only then is a Matrix
+  account created and invited into the rooms of their class lists. The page
+  shows homeserver / Matrix-ID / password + a QR for Element, and lets the
+  parent delete the account again. Display names are pseudonymous
   (`Elternteil <id>`) — real contact data stays in the encrypted app DB, never
   in Matrix profiles.
-- Membership is mirrored automatically: joining a class list → room invite,
-  leaving → kick, becoming list-admin → room power level 50. No manual step.
+- Membership is mirrored automatically for opted-in parents: joining a class
+  list → room invite, leaving → kick, becoming list-admin → room power level
+  50. Members without an account are skipped.
+- Erasure: deleting the Messenger-Zugang or `manage.py delete_person` redacts
+  the user's messages and deactivates the Synapse account (`erase: true`);
+  `delete_person` aborts if Synapse is unreachable. `purge_archived_lists`
+  shuts down and purges the list's room before deleting the list (skipped and
+  retried next night if Synapse is down).
 - Admins send to a class room via *Nachricht an Klassenraum* (sent as the
   service account, so it also posts in broadcast-only rooms). *Klassenraum-
   Moderation* bans/unbans a member from the room in an emergency.

@@ -2,7 +2,8 @@
 
 The credentials page: a logged-in parent sees their Matrix access data (Weg A —
 homeserver, user id, server-assigned password) as text and as a QR code, to
-enter into Element. The Matrix account is provisioned lazily on first visit.
+enter into Element. The Matrix account is opt-in: created only when the parent
+asks for it on this page, and deletable from here again.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import logging
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 
@@ -18,8 +20,9 @@ from accounts.models import User
 from lists.models import List, ListAccess
 from lists.permissions import can_user_admin_list
 
-from . import service
+from . import service, tasks
 from .client import MatrixError
+from .models import MatrixAccount
 from .service import ensure_matrix_account
 
 log = logging.getLogger(__name__)
@@ -27,14 +30,45 @@ log = logging.getLogger(__name__)
 
 @login_required
 def messenger_access(request: HttpRequest) -> HttpResponse:
+    """Opt-in: GET without an account only explains and offers a button; the
+    account is created on POST action=create and then invited into the user's
+    class rooms. POST action=delete erases it again (redact + deactivate)."""
     if not settings.MATRIX_ENABLED:
         return render(request, "matrix/access.html", {"matrix_enabled": False})
 
-    try:
-        account = ensure_matrix_account(request.user)
-    except MatrixError as exc:
-        log.warning("matrix: provisioning failed for user %s: %s", request.user.pk, exc)
-        return render(request, "matrix/access.html", {"matrix_enabled": True, "provision_error": True})
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "create":
+            try:
+                ensure_matrix_account(request.user)
+            except MatrixError as exc:
+                log.warning("matrix: provisioning failed for user %s: %s", request.user.pk, exc)
+                return render(
+                    request, "matrix/access.html", {"matrix_enabled": True, "provision_error": True}
+                )
+            uid = request.user.pk
+            for lst in service.room_lists_for_user(request.user):
+                lid = lst.pk
+                transaction.on_commit(
+                    lambda lid=lid: tasks.sync_membership_join.defer(user_id=uid, list_id=lid)
+                )
+        elif action == "delete":
+            account = MatrixAccount.objects.filter(user=request.user).first()
+            if account is not None:
+                try:
+                    service.erase_matrix_account(account)
+                except MatrixError as exc:
+                    log.warning("matrix: erasure failed for user %s: %s", request.user.pk, exc)
+                    messages.error(
+                        request, "Der Messenger-Zugang konnte gerade nicht gelöscht werden. Bitte später erneut versuchen."
+                    )
+                else:
+                    messages.success(request, "Ihr Messenger-Zugang und Ihre Nachrichten wurden gelöscht.")
+        return redirect("matrix:access")
+
+    account = MatrixAccount.objects.filter(user=request.user).first()
+    if account is None:
+        return render(request, "matrix/access.html", {"matrix_enabled": True, "account": None})
 
     # The QR encodes THIS page's URL (not the credentials): on a laptop, the
     # parent scans it to reopen the page on their phone, where the copy buttons

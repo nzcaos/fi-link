@@ -306,23 +306,32 @@ Eine offene Liste, z. B. „Wer bringt was mit?". Sie tragen einen Text ein
 
 ## 10. Messenger (Matrix-Klassenraum)
 
+> **Derzeit noch nicht verfügbar.** Der Abschnitt beschreibt die geplante
+> Funktion; in der Online-Hilfe (`/hilfe`) erscheint er erst, wenn der
+> Messenger eingeschaltet ist.
+
 Optional bietet eine Installation pro Klasse einen **Matrix-Chatraum** für
 kurzfristige Infos (z. B. „Ausflug wegen Wetter abgesagt") — parallel zur
-E-Mail.
+E-Mail. Die Teilnahme ist freiwillig.
 
 So verbinden Sie sich (über **Mein Profil → Messenger-Zugang**):
 
-1. Eine **Matrix-App** installieren (z. B. Element X, FluffyChat, SchildiChat).
-2. In der App „Anmelden" wählen.
-3. Als **Benutzername** die angezeigte **Matrix-ID** eintragen (falls nach dem
+1. „**Messenger-Zugang einrichten**" klicken. Erst dann wird ein
+   Messenger-Konto für Sie angelegt und in die Chaträume Ihrer Klassen
+   eingeladen.
+2. Eine **Matrix-App** installieren (z. B. Element X, FluffyChat, SchildiChat).
+3. In der App „Anmelden" wählen.
+4. Als **Benutzername** die angezeigte **Matrix-ID** eintragen (falls nach dem
    Server gefragt: den angezeigten Servernamen eingeben).
-4. Das angezeigte **Passwort** eingeben.
+5. Das angezeigte **Passwort** eingeben.
 
 Danach empfangen Sie die Klassen-Nachrichten in der App. Auf dem Desktop
-erleichtert ein QR-Code das Weiterreichen an Ihr Handy.
+erleichtert ein QR-Code das Weiterreichen an Ihr Handy. Im Chat erscheinen Sie
+als „Elternteil …", nicht mit Ihrem Namen.
 
-> Der Messenger ist nur aktiv, wenn die Installation und die jeweilige Liste ihn
-> aktiviert haben. Ist er nicht verfügbar, sehen Sie einen entsprechenden Hinweis.
+Auf derselben Seite können Sie den Zugang jederzeit wieder **löschen**: Sie
+verlassen alle Chaträume, und Ihre dort geschriebenen Nachrichten werden
+entfernt.
 
 ---
 

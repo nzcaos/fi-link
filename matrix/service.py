@@ -136,10 +136,19 @@ def _tolerate_logical(exc: MatrixError, what: str) -> None:
 
 
 def sync_user_into_room(user, list_obj) -> None:
-    """Ensure the user's account + the list's room exist, invite them, and set
-    their power level (admin → 50, member stays at users_default 0). Idempotent.
+    """Ensure the list's room exists, invite the user, and set their power
+    level (admin → 50, member stays at users_default 0). Idempotent.
+
+    Opt-in: a user WITHOUT a MatrixAccount is skipped — accounts are created
+    only when the user sets up their Messenger-Zugang themselves (views.
+    messenger_access), never as a side effect of joining a list. That view
+    then calls this for each of their room-enabled lists.
     """
-    account = ensure_matrix_account(user)
+    if not settings.MATRIX_ENABLED:
+        raise MatrixError("Matrix-Integration ist deaktiviert (MATRIX_ENABLED=False).")
+    account = MatrixAccount.objects.filter(user=user).first()
+    if account is None:
+        return
     room = ensure_room_for_list(list_obj)
     client = MatrixClient.from_settings()
     token = _service_token()
@@ -172,12 +181,12 @@ def sync_user_power(user, list_obj, is_admin: bool) -> None:
 
     On *promotion* the new admin may not be in the list's Benutzergruppe at all:
     an ADMIN_INVITE_TOKEN handover (lists.views.admin_invite_accept) creates a
-    `ListAdmin` row but no `ListAccess`, so the user never went through
-    `sync_user_into_room` — they have neither a provisioned Matrix account nor a
-    room invite, and a bare `set_user_power_level` here would either no-op (no
-    account) or set power for someone who isn't in the room. Promotion therefore
-    routes through `sync_user_into_room`, which provisions the account, invites
-    them, and (because the `ListAdmin` row now exists) sets power to 50.
+    `ListAdmin` row but no `ListAccess`, so they were never invited, and a bare
+    `set_user_power_level` would set power for someone who isn't in the room.
+    Promotion therefore routes through `sync_user_into_room`, which invites
+    them and (because the `ListAdmin` row now exists) sets power to 50 — or
+    skips them if they have not opted in (no MatrixAccount); opting in later
+    runs the same path via `room_lists_for_user`, which includes admin lists.
 
     *Demotion* only lowers the power level — the user may still be a plain member
     via `ListAccess`, so they are never kicked here (room-leave is the
@@ -292,3 +301,60 @@ def send_to_list(list_obj, body: str) -> str:
         room = ensure_room_for_list(list_obj)
     client = MatrixClient.from_settings()
     return client.send_message(_service_token(), room.room_id, body)
+
+
+# ---------------------------------------------------------------------------
+# Opt-in and erasure
+# ---------------------------------------------------------------------------
+
+
+def room_lists_for_user(user):
+    """Active room-enabled lists the user belongs to (Benutzergruppe or admin)
+    — the rooms they are invited to once they opt in."""
+    from django.db.models import Q
+
+    from lists.models import List
+
+    return List.objects.filter(
+        Q(members__user=user) | Q(admins__user=user),
+        matrix_room_enabled=True,
+        archived_at__isnull=True,
+    ).distinct()
+
+
+def erase_matrix_account(account: MatrixAccount) -> None:
+    """Remove a user's Matrix footprint on Synapse, then drop the local row.
+
+    Order matters: redact first (Synapse picks the rooms from the user's
+    current memberships), then deactivate with erase=True (leaves all rooms,
+    removes the profile, marks the account GDPR-erased). A 404 means the
+    account is already gone on Synapse and counts as done; anything else
+    raises so the caller does not lose track of a live account.
+    """
+    client = MatrixClient.from_settings()
+    token = _service_token()
+    try:
+        client.redact_user_events(token, account.matrix_user_id)
+        client.deactivate_user(token, account.matrix_user_id, erase=True)
+    except MatrixError as exc:
+        if exc.status != 404:
+            raise
+        log.info("matrix: %s not found on Synapse — treated as erased", account.matrix_user_id)
+    log.info("matrix: erased account %s (user %s)", account.matrix_user_id, account.user_id)
+    account.delete()
+
+
+def delete_room_for_list(list_obj) -> None:
+    """Shut down and purge the list's room on Synapse, then drop the local
+    MatrixRoom row. No-op without a room. A 404 counts as already deleted."""
+    room = MatrixRoom.objects.filter(list=list_obj).first()
+    if room is None:
+        return
+    client = MatrixClient.from_settings()
+    try:
+        client.delete_room(_service_token(), room.room_id)
+    except MatrixError as exc:
+        if exc.status != 404:
+            raise
+    log.info("matrix: deleted room %s of list %s", room.room_id, list_obj.pk)
+    room.delete()

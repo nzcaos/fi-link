@@ -342,3 +342,56 @@ class MatrixClient:
             for uid, m in self.room_memberships(access_token, room_id).items()
             if m in memberships
         }
+
+    # -- admin API: erasure (as the service account, a Synapse admin) -----
+
+    def redact_user_events(self, access_token: str, user_id: str) -> str:
+        """Redact every event the user sent, in all rooms they are (or were
+        banned) in. Synapse resolves the room set synchronously and redacts in
+        the background, so this must run BEFORE `deactivate_user` (which makes
+        the user leave every room). Returns Synapse's redact_id.
+        """
+        from urllib.parse import quote
+
+        uid = quote(user_id, safe="")
+        result = self._request(
+            "POST",
+            f"/_synapse/admin/v1/user/{uid}/redact",
+            json={"rooms": []},
+            access_token=access_token,
+        )
+        log.info("matrix: redaction of %s's events started", user_id)
+        return result.get("redact_id", "")
+
+    def deactivate_user(self, access_token: str, user_id: str, erase: bool = True) -> None:
+        """Deactivate the account (leaves all rooms, drops devices/tokens). With
+        erase=True Synapse also marks it GDPR-erased: profile removed, its
+        messages hidden from anyone who joins a room later.
+        """
+        from urllib.parse import quote
+
+        uid = quote(user_id, safe="")
+        self._request(
+            "POST",
+            f"/_synapse/admin/v1/deactivate/{uid}",
+            json={"erase": erase},
+            access_token=access_token,
+        )
+        log.info("matrix: deactivated %s (erase=%s)", user_id, erase)
+
+    def delete_room(self, access_token: str, room_id: str) -> str:
+        """Shut a room down: kick everyone and purge its history from the
+        database (`purge: true`). Runs in the background on Synapse; returns
+        the delete_id.
+        """
+        from urllib.parse import quote
+
+        rid = quote(room_id, safe="")
+        result = self._request(
+            "DELETE",
+            f"/_synapse/admin/v2/rooms/{rid}",
+            json={"block": False, "purge": True},
+            access_token=access_token,
+        )
+        log.info("matrix: deletion of room %s started", room_id)
+        return result.get("delete_id", "")

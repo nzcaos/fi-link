@@ -15,6 +15,24 @@
       erneut versuchen — wenn das Problem bestehen bleibt, an die Listen-Leitung
       wenden.
     </p>
+  {% elif not account %}
+    <p style="color:#666;max-width:42rem">
+      Für Klassen mit Chatraum können Sie kurzfristige Infos (z.&nbsp;B. „Ausflug
+      abgesagt") zusätzlich in einer <strong>Matrix-Messenger-App</strong>
+      empfangen. Der Zugang ist freiwillig: Erst wenn Sie ihn hier einrichten,
+      wird ein Messenger-Konto für Sie angelegt und in die Chaträume Ihrer
+      Klassen eingeladen.
+    </p>
+    <p style="color:#666;max-width:42rem">
+      Im Chat erscheinen Sie nicht mit Ihrem Namen, sondern als „Elternteil …".
+      Nachrichten im Chatraum liegen unverschlüsselt auf dem Fichtelink-Server.
+      Einzelheiten stehen in den <a href="{% url 'datenschutz' %}">Datenschutzhinweisen</a>.
+      Sie können den Zugang jederzeit wieder löschen.
+    </p>
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" name="action" value="create">Messenger-Zugang einrichten</button>
+    </form>
   {% else %}
     <style>
       .cred { margin: 0.75rem 0; }
@@ -29,11 +47,11 @@
     </style>
 
     <p style="color:#666;max-width:42rem">
-      Mit diesen Zugangsdaten meldest du dich in einer
+      Mit diesen Zugangsdaten melden Sie sich in einer
       <strong>Matrix-Messenger-App</strong> an (z.&nbsp;B. Element X, FluffyChat
-      oder SchildiChat), um Klassen-Nachrichten zu empfangen. Installiere eine
-      solche App und wähle „Anmelden". Im Feld <em>Benutzername</em> die
-      Matrix-ID unten eingeben — den Server erkennt die App meist automatisch
+      oder SchildiChat), um Klassen-Nachrichten zu empfangen. Installieren Sie
+      eine solche App und wählen Sie „Anmelden". Im Feld <em>Benutzername</em>
+      die Matrix-ID unten eingeben — den Server erkennt die App meist automatisch
       (falls vorab nach dem Server gefragt wird: <code>{{ server_name }}</code>
       eingeben). Danach das Passwort.
     </p>
@@ -54,20 +72,32 @@
     </div>
 
     <p style="color:#666;font-size:0.85rem;max-width:42rem">
-      Bewahre das Passwort sicher auf. Du kannst diese Seite jederzeit erneut
-      öffnen, um es wieder anzuzeigen.
+      Bewahren Sie das Passwort sicher auf. Sie können diese Seite jederzeit
+      erneut öffnen, um es wieder anzuzeigen.
     </p>
 
     <div class="qr-handoff">
-      <strong>Auf dem Laptop?</strong>
+      <strong>Am Laptop?</strong>
       <p style="color:#666;font-size:0.9rem;margin:0.4rem 0">
-        Element läuft am besten auf dem Handy. Scanne diesen Code mit der
-        Handy-Kamera, um <em>diese Seite</em> dort zu öffnen — dort kannst du die
-        Zugangsdaten direkt in Element kopieren. (Beim Öffnen meldest du dich
-        ggf. mit deinem Passkey an.)
+        Element läuft am besten auf dem Handy. Scannen Sie diesen Code mit der
+        Handy-Kamera, um <em>diese Seite</em> dort zu öffnen — dort können Sie
+        die Zugangsdaten direkt in Element kopieren. (Beim Öffnen melden Sie sich
+        ggf. mit Ihrem Passkey an.)
       </p>
       <div class="qr-target" data-url="{{ page_url }}" style="width:160px;height:160px"></div>
     </div>
+
+    <h2 style="margin-top:2rem">Zugang löschen</h2>
+    <p style="color:#666;max-width:42rem">
+      Löscht Ihr Messenger-Konto: Sie verlassen alle Chaträume, und Ihre dort
+      geschriebenen Nachrichten werden entfernt. Ihr Fichtelink-Konto und Ihre
+      Listeneinträge bleiben bestehen. Sie können später einen neuen Zugang
+      einrichten.
+    </p>
+    <form method="post" onsubmit="return confirm('Messenger-Zugang und Ihre Nachrichten wirklich löschen?');">
+      {% csrf_token %}
+      <button type="submit" name="action" value="delete" class="danger">Messenger-Zugang löschen</button>
+    </form>
 
     <script src="{% static 'vendor/qrcodejs-1.0.0.umd.min.js' %}"></script>
     <script>

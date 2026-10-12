@@ -51,7 +51,7 @@ Beim Pflegen bitte beide Fassungen synchron halten.
     <li><a href="#sichtbarkeit">Wer sieht was? Die Sichtbarkeit steuern</a></li>
     <li><a href="#mail">E-Mail an eine Liste senden und empfangen</a></li>
     <li><a href="#formulare">Formulare: sich für Aktionen eintragen</a></li>
-    <li><a href="#messenger">Messenger (Matrix-Klassenraum)</a></li>
+    <li><a href="#messenger">Messenger (Matrix-Klassenraum)</a>{% if not matrix_enabled %} — noch nicht verfügbar{% endif %}</li>
     <li><a href="#umzug">Eintrag umziehen oder löschen</a></li>
     <li><a href="#wiederherstellung">Konto-Wiederherstellung bei Geräteverlust</a></li>
     <li><a href="#admins">Für Listen-Admins</a></li>
@@ -377,13 +377,24 @@ Beim Pflegen bitte beide Fassungen synchron halten.
 
 <section id="messenger">
 <h2>10. Messenger (Matrix-Klassenraum)</h2>
+{% if not matrix_enabled %}
+<div class="note">
+  <strong>Derzeit noch nicht verfügbar.</strong> Geplant ist ein freiwilliger
+  Chatraum pro Klasse für kurzfristige Infos (z. B. „Ausflug wegen Wetter
+  abgesagt") — parallel zur E-Mail. Sobald er zur Verfügung steht, wird diese
+  Hilfe ergänzt und Sie erhalten dazu eine eigene Information.
+</div>
+{% else %}
 <p>
-  Optional bietet eine Installation pro Klasse einen
-  <strong>Matrix-Chatraum</strong> für kurzfristige Infos (z. B. „Ausflug wegen
-  Wetter abgesagt") — parallel zur E-Mail.
+  Für Klassen mit Chatraum gibt es einen <strong>Matrix-Chatraum</strong> für
+  kurzfristige Infos (z. B. „Ausflug wegen Wetter abgesagt") — parallel zur
+  E-Mail. Die Teilnahme ist freiwillig.
 </p>
 <p>So verbinden Sie sich (über <strong>Mein Profil → Messenger-Zugang</strong>):</p>
 <ol>
+  <li>„<strong>Messenger-Zugang einrichten</strong>" klicken. Erst dann wird ein
+    Messenger-Konto für Sie angelegt und in die Chaträume Ihrer Klassen
+    eingeladen.</li>
   <li>Eine <strong>Matrix-App</strong> installieren (z. B. Element X, FluffyChat,
     SchildiChat).</li>
   <li>In der App „Anmelden" wählen.</li>
@@ -394,12 +405,15 @@ Beim Pflegen bitte beide Fassungen synchron halten.
 </ol>
 <p>
   Danach empfangen Sie die Klassen-Nachrichten in der App. Auf dem Desktop
-  erleichtert ein QR-Code das Weiterreichen an Ihr Handy.
+  erleichtert ein QR-Code das Weiterreichen an Ihr Handy. Im Chat erscheinen Sie
+  als „Elternteil …", nicht mit Ihrem Namen.
 </p>
-<div class="note">
-  Der Messenger ist nur aktiv, wenn die Installation und die jeweilige Liste ihn
-  aktiviert haben. Ist er nicht verfügbar, sehen Sie einen entsprechenden Hinweis.
-</div>
+<p>
+  Auf derselben Seite können Sie den Zugang jederzeit wieder
+  <strong>löschen</strong>: Sie verlassen alle Chaträume, und Ihre dort
+  geschriebenen Nachrichten werden entfernt.
+</p>
+{% endif %}
 </section>
 
 <section id="umzug">

@@ -249,15 +249,51 @@ class MessengerAccessViewTests(TestCase):
         self.assertIn("/auth/login/", resp["Location"])
 
     @override_settings(MATRIX_ENABLED=True)
-    def test_provisions_and_shows_credentials(self):
+    def test_get_without_account_offers_opt_in_and_provisions_nothing(self):
         self.client.force_login(self.user)
-        ok = {"user_id": "@u-abc123:fichtelink.caos.cloud", "access_token": "t", "device_id": "d"}
-        with patch.object(MatrixClient, "register_user", return_value=ok):
+        with patch.object(MatrixClient, "register_user") as reg:
             resp = self.client.get(reverse("matrix:access"))
         self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'value="create"')
+        reg.assert_not_called()
+        self.assertFalse(MatrixAccount.objects.filter(user=self.user).exists())
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_opt_in_provisions_and_joins_room_lists(self):
+        template = ListTemplate.objects.create(name="Schulklasse")
+        room_list = List.objects.create(
+            title="Klasse 5a", email_alias="5a", template=template, matrix_room_enabled=True
+        )
+        plain = List.objects.create(title="Plain", email_alias="plain", template=template)
+        ListAccess.objects.create(list=room_list, user=self.user)
+        ListAccess.objects.create(list=plain, user=self.user)
+        self.client.force_login(self.user)
+        ok = {"user_id": "@u-abc123:fichtelink.caos.cloud", "access_token": "t", "device_id": "d"}
+        with patch.object(MatrixClient, "register_user", return_value=ok), \
+                patch("matrix.tasks.sync_membership_join.defer") as defer, \
+                self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(reverse("matrix:access"), {"action": "create"})
+        self.assertRedirects(resp, reverse("matrix:access"), fetch_redirect_response=False)
+        self.assertTrue(MatrixAccount.objects.filter(user=self.user).exists())
+        defer.assert_called_once_with(user_id=self.user.pk, list_id=room_list.pk)
+
+        resp = self.client.get(reverse("matrix:access"))
         self.assertContains(resp, "@u-abc123:fichtelink.caos.cloud")
         self.assertContains(resp, "copy-btn")  # copy buttons present
-        self.assertTrue(MatrixAccount.objects.filter(user=self.user).exists())
+        self.assertContains(resp, 'value="delete"')
+
+    @override_settings(MATRIX_ENABLED=True)
+    def test_delete_erases_account(self):
+        MatrixServiceAccount.objects.create(matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc")
+        MatrixAccount.objects.create(user=self.user, matrix_user_id="@u-x:fichtelink.caos.cloud", password="pw")
+        self.client.force_login(self.user)
+        with patch.object(MatrixClient, "redact_user_events") as red, \
+                patch.object(MatrixClient, "deactivate_user") as deact:
+            resp = self.client.post(reverse("matrix:access"), {"action": "delete"})
+        self.assertRedirects(resp, reverse("matrix:access"), fetch_redirect_response=False)
+        red.assert_called_once_with("svc", "@u-x:fichtelink.caos.cloud")
+        deact.assert_called_once_with("svc", "@u-x:fichtelink.caos.cloud", erase=True)
+        self.assertFalse(MatrixAccount.objects.filter(user=self.user).exists())
 
     @override_settings(MATRIX_ENABLED=False)
     def test_disabled_shows_notice_and_provisions_nothing(self):
@@ -393,23 +429,29 @@ class MembershipSyncServiceTests(TestCase):
             service.sync_user_power(self.user, self.list, is_admin=False)
         pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-x:fichtelink.caos.cloud", 0)
 
-    def test_promotion_invites_handover_admin_without_account(self):
-        # A handover admin (ADMIN_INVITE_TOKEN) gets a ListAdmin row but no
-        # ListAccess and never went through sync_user_into_room — so they have
-        # no Matrix account and no room invite. Promotion must provision and
-        # invite them (not silently no-op), then set power to 50.
+    def test_promotion_skips_admin_without_account(self):
+        # Opt-in: a handover admin (ListAdmin row, no ListAccess) who never set
+        # up a Messenger-Zugang gets neither an account nor an invite — the
+        # power level is applied once they opt in (messenger_access).
         person = Person.objects.create(given_name="H", family_name="O", email="h@example.invalid")
         handover = User.objects.create_user(person=person, username="handover")
         ListAdmin.objects.create(list=self.list, user=handover)
-        with patch.object(
-            MatrixClient, "register_user",
-            return_value={"user_id": "@u-h:fichtelink.caos.cloud"},
-        ), patch.object(MatrixClient, "invite") as inv, \
+        with patch.object(MatrixClient, "register_user") as reg, \
+                patch.object(MatrixClient, "invite") as inv, \
                 patch.object(MatrixClient, "set_user_power_level") as pl:
             service.sync_user_power(handover, self.list, is_admin=True)
-        self.assertTrue(MatrixAccount.objects.filter(user=handover).exists())
-        inv.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-h:fichtelink.caos.cloud")
-        pl.assert_called_once_with("svc-token", "!r:fichtelink.caos.cloud", "@u-h:fichtelink.caos.cloud", 50)
+        reg.assert_not_called()
+        inv.assert_not_called()
+        pl.assert_not_called()
+        self.assertFalse(MatrixAccount.objects.filter(user=handover).exists())
+
+    def test_join_skips_user_without_account(self):
+        person = Person.objects.create(given_name="N", family_name="O", email="n@example.invalid")
+        other = User.objects.create_user(person=person, username="noaccount")
+        with patch.object(MatrixClient, "register_user") as reg, patch.object(MatrixClient, "invite") as inv:
+            service.sync_user_into_room(other, self.list)
+        reg.assert_not_called()
+        inv.assert_not_called()
 
     def test_rename_room(self):
         with patch.object(MatrixClient, "set_room_name") as sn:
@@ -673,3 +715,119 @@ class RoomModerationViewTests(TestCase):
         self.client.force_login(self.member)
         resp = self.client.get(reverse("matrix:moderation", args=[self.list.pk]))
         self.assertEqual(resp.status_code, 403)
+
+
+class ErasureClientTests(TestCase):
+    def test_redact_posts_empty_room_list(self):
+        client = _client()
+        with patch.object(client, "_request", return_value={"redact_id": "r1"}) as req:
+            self.assertEqual(client.redact_user_events("t", "@u-x:fichtelink.caos.cloud"), "r1")
+        method, path = req.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/_synapse/admin/v1/user/%40u-x%3Afichtelink.caos.cloud/redact")
+        self.assertEqual(req.call_args.kwargs["json"], {"rooms": []})
+
+    def test_deactivate_with_erase(self):
+        client = _client()
+        with patch.object(client, "_request", return_value={}) as req:
+            client.deactivate_user("t", "@u-x:fichtelink.caos.cloud")
+        method, path = req.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/_synapse/admin/v1/deactivate/%40u-x%3Afichtelink.caos.cloud")
+        self.assertEqual(req.call_args.kwargs["json"], {"erase": True})
+
+    def test_delete_room_purges(self):
+        client = _client()
+        with patch.object(client, "_request", return_value={"delete_id": "d1"}) as req:
+            self.assertEqual(client.delete_room("t", "!r:fichtelink.caos.cloud"), "d1")
+        method, path = req.call_args.args
+        self.assertEqual(method, "DELETE")
+        self.assertEqual(path, "/_synapse/admin/v2/rooms/%21r%3Afichtelink.caos.cloud")
+        self.assertEqual(req.call_args.kwargs["json"], {"block": False, "purge": True})
+
+
+@override_settings(MATRIX_ENABLED=True)
+class EraseAccountServiceTests(TestCase):
+    def setUp(self):
+        person = Person.objects.create(given_name="E", family_name="R", email="e@example.invalid")
+        self.user = User.objects.create_user(person=person, username="er")
+        MatrixServiceAccount.objects.create(matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc")
+        self.account = MatrixAccount.objects.create(
+            user=self.user, matrix_user_id="@u-e:fichtelink.caos.cloud", password="pw"
+        )
+
+    def test_redacts_before_deactivating_and_drops_row(self):
+        calls = []
+        with patch.object(MatrixClient, "redact_user_events", side_effect=lambda *a: calls.append("redact")), \
+                patch.object(MatrixClient, "deactivate_user", side_effect=lambda *a, **k: calls.append("deactivate")):
+            service.erase_matrix_account(self.account)
+        self.assertEqual(calls, ["redact", "deactivate"])
+        self.assertFalse(MatrixAccount.objects.exists())
+
+    def test_unknown_on_synapse_counts_as_erased(self):
+        with patch.object(
+            MatrixClient, "redact_user_events",
+            side_effect=MatrixError("nope", errcode="M_NOT_FOUND", status=404),
+        ):
+            service.erase_matrix_account(self.account)
+        self.assertFalse(MatrixAccount.objects.exists())
+
+    def test_failure_keeps_row(self):
+        with patch.object(MatrixClient, "redact_user_events", side_effect=MatrixError("boom")):
+            with self.assertRaises(MatrixError):
+                service.erase_matrix_account(self.account)
+        self.assertTrue(MatrixAccount.objects.exists())
+
+    def test_person_erasure_erases_matrix_account(self):
+        from lists.erasure import execute_erasure, plan_erasure
+
+        plan = plan_erasure(self.user.person)
+        with patch.object(MatrixClient, "redact_user_events") as red, \
+                patch.object(MatrixClient, "deactivate_user") as deact:
+            execute_erasure(plan, reassign_to=None)
+        red.assert_called_once_with("svc", "@u-e:fichtelink.caos.cloud")
+        deact.assert_called_once_with("svc", "@u-e:fichtelink.caos.cloud", erase=True)
+        self.assertFalse(User.objects.filter(pk=self.user.pk).exists())
+
+    def test_person_erasure_aborts_when_synapse_fails(self):
+        from lists.erasure import execute_erasure, plan_erasure
+
+        plan = plan_erasure(self.user.person)
+        with patch.object(MatrixClient, "redact_user_events", side_effect=MatrixError("boom")):
+            with self.assertRaises(MatrixError):
+                execute_erasure(plan, reassign_to=None)
+        self.assertTrue(User.objects.filter(pk=self.user.pk).exists())
+        self.assertTrue(MatrixAccount.objects.exists())
+
+
+@override_settings(MATRIX_ENABLED=True, LIST_ARCHIVE_RETENTION_DAYS=365)
+class PurgeArchivedListRoomTests(TestCase):
+    def setUp(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        template = ListTemplate.objects.create(name="Schulklasse")
+        self.list = List.objects.create(
+            title="K2", email_alias="k2", template=template, matrix_room_enabled=True,
+            archived_at=timezone.now() - timedelta(days=400),
+        )
+        MatrixServiceAccount.objects.create(matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc")
+        MatrixRoom.objects.create(list=self.list, room_id="!k2:fichtelink.caos.cloud")
+
+    def test_room_deleted_with_list(self):
+        from lists.tasks import purge_archived_lists
+
+        with patch.object(MatrixClient, "delete_room") as dr:
+            purge_archived_lists.func(timestamp=0)
+        dr.assert_called_once_with("svc", "!k2:fichtelink.caos.cloud")
+        self.assertFalse(List.objects.filter(pk=self.list.pk).exists())
+        self.assertFalse(MatrixRoom.objects.exists())
+
+    def test_list_kept_when_room_deletion_fails(self):
+        from lists.tasks import purge_archived_lists
+
+        with patch.object(MatrixClient, "delete_room", side_effect=MatrixError("boom")):
+            purge_archived_lists.func(timestamp=0)
+        self.assertTrue(List.objects.filter(pk=self.list.pk).exists())
+        self.assertTrue(MatrixRoom.objects.exists())

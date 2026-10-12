@@ -8,6 +8,8 @@ from django.core.management.base import BaseCommand, CommandError
 
 from accounts.models import Person, User
 from lists.erasure import execute_erasure, plan_erasure
+from matrix.client import MatrixError
+from matrix.models import MatrixAccount
 
 
 class Command(BaseCommand):
@@ -47,6 +49,8 @@ class Command(BaseCommand):
                 f"{'  [Konto]' if has_user else ''}"
             )
         self.stdout.write(f"Listeneinträge (inkl. archivierter): {plan.record_count}")
+        for account in MatrixAccount.objects.filter(user__in=plan.users):
+            self.stdout.write(f"Matrix-Konto (Nachrichten werden entfernt): {account.matrix_user_id}")
         self.stdout.write(
             "Mail-Daten/Tokens für: " + (", ".join(plan.emails) or "— (Adresse wird weiter genutzt)")
         )
@@ -64,7 +68,13 @@ class Command(BaseCommand):
             self.stdout.write("Trockenlauf — nichts gelöscht. Mit --yes ausführen.")
             return
 
-        counts = execute_erasure(plan, reassign_to=reassign_to)
+        try:
+            counts = execute_erasure(plan, reassign_to=reassign_to)
+        except MatrixError as exc:
+            raise CommandError(
+                f"Matrix-Konto konnte auf Synapse nicht gelöscht werden ({exc}). "
+                "Nichts in Fichtelink gelöscht — Synapse prüfen und erneut ausführen."
+            ) from exc
         self.stdout.write("")
         for label, n in sorted(counts.items()):
             self.stdout.write(f"  {label}: {n}")
