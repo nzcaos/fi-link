@@ -967,6 +967,7 @@ def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: 
                 subject=subject,
                 body=body,
                 anonymize=anonymize,
+                inbound_id=inbound.pk,
             )
         else:
             enqueue_list_fanout(
@@ -975,6 +976,7 @@ def _release_forward(rel: MailReleaseToken, inbound: InboundMessage, anonymize: 
                 subject=subject,
                 body=body,
                 anonymize=anonymize,
+                inbound_id=inbound.pk,
             )
         inbound.decision = InboundMessage.Decision.FORWARDED
         inbound.reason = f"Über Freigabe-Link weitergeleitet (anonymize={anonymize})."

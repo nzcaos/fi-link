@@ -170,6 +170,61 @@ def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
     )
 
 
+# File types mail providers and virus scanners reject outright — forwarding
+# them would bounce the whole mail for every recipient.
+_BLOCKED_ATTACHMENT_EXTENSIONS = {
+    ".exe", ".bat", ".cmd", ".com", ".scr", ".pif", ".vbs", ".vbe", ".js",
+    ".jse", ".wsf", ".wsh", ".msi", ".msp", ".ps1", ".jar", ".lnk", ".hta",
+    ".cpl", ".reg",
+}
+
+
+def _forward_attachments(inbound_id: int | None) -> tuple[list[tuple[str, bytes, str]], str]:
+    """Attachments to put on a forward of inbound ``inbound_id``, plus a note
+    for the text body naming anything left out (blocked type, over
+    ``MAIL_MAX_ATTACHMENT_BYTES`` in total, original no longer stored)."""
+    if inbound_id is None:
+        return [], ""
+    from .inbound_pipeline import extract_attachments, parse_message
+
+    raw = (
+        InboundMessage.objects.filter(pk=inbound_id)
+        .values_list("raw_eml", flat=True)
+        .first()
+    )
+    if not raw:
+        log.warning("send_outbound_message: inbound %s gone, sending without attachments", inbound_id)
+        return [], ""
+    found = extract_attachments(parse_message(bytes(raw)))
+    if not found:
+        return [], ""
+
+    blocked = [n for n, _d, _c in found
+               if any(n.lower().endswith(ext) for ext in _BLOCKED_ATTACHMENT_EXTENSIONS)]
+    kept = [a for a in found if a[0] not in blocked]
+    total = sum(len(d) for _n, d, _c in kept)
+    dropped_size: list[str] = []
+    if total > settings.MAIL_MAX_ATTACHMENT_BYTES:
+        dropped_size = [n for n, _d, _c in kept]
+        kept = []
+
+    lines = []
+    if blocked:
+        lines.append(
+            "Aus Sicherheitsgründen nicht weitergeleitet (Dateityp gesperrt): "
+            + ", ".join(blocked)
+        )
+    if dropped_size:
+        limit_mb = settings.MAIL_MAX_ATTACHMENT_BYTES // (1024 * 1024)
+        lines.append(
+            f"Anhänge zusammen größer als {limit_mb} MB, nicht weitergeleitet: "
+            + ", ".join(dropped_size)
+            + ". Bitte beim Absender erfragen."
+        )
+    note = ("\n\n-- \n[Fichtelink] " + "\n[Fichtelink] ".join(lines) + "\n") if lines else ""
+    return kept, note
+
+
 # ---------------------------------------------------------------------------
 # Task: SMTP submission for a single OutboundMessage
 # ---------------------------------------------------------------------------
@@ -184,7 +239,7 @@ def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
         retry_exceptions={SMTPException, ConnectionError, OSError},
     ),
 )
-def send_outbound_message(outbound_id: int, body: str) -> None:
+def send_outbound_message(outbound_id: int, body: str, inbound_id: int | None = None) -> None:
     """SMTP-submit a single OutboundMessage. Idempotent on success (already-
     sent rows are skipped) so a retry that races a successful delivery cannot
     double-send.
@@ -193,14 +248,22 @@ def send_outbound_message(outbound_id: int, body: str) -> None:
     procrastinate's RetryStrategy schedules a retry. On the final attempt the
     row is flipped to FAILED so the admin UI can surface it (Phase 5b will
     add resend/cancel buttons).
+
+    ``inbound_id`` names the forwarded original: its attachments are read from
+    the stored MIME copy here, at send time, rather than travelling in the
+    task args (the job table must not fill up with files). Optional, so jobs
+    queued before attachments were supported still run.
     """
     om = OutboundMessage.objects.select_related("list", "aggregate").get(pk=outbound_id)
     if om.status == OutboundMessage.Status.SENT:
         return
 
+    attachments, note = _forward_attachments(inbound_id)
     om.attempts += 1
     try:
-        msg = build_outbound_email(om, body)
+        msg = build_outbound_email(om, body + note)
+        for name, data, ctype in attachments:
+            msg.attach(name, data, ctype)
         msg.send(fail_silently=False)
     except SMTPException as exc:
         om.last_error = f"{type(exc).__name__}: {exc}"[:2000]
@@ -263,6 +326,7 @@ def _enqueue_fanout(
     anonymize: bool,
     list_obj: List | None = None,
     aggregate=None,
+    inbound_id: int | None = None,
 ) -> list[OutboundMessage]:
     """Create one OutboundMessage row per recipient and enqueue a send task per
     row. Exactly one of ``list_obj`` / ``aggregate`` identifies the source. The
@@ -293,7 +357,7 @@ def _enqueue_fanout(
 
         def _defer():
             for pk in ids:
-                send_outbound_message.defer(outbound_id=pk, body=body)
+                send_outbound_message.defer(outbound_id=pk, body=body, inbound_id=inbound_id)
 
         transaction.on_commit(_defer)
     return created
@@ -306,9 +370,11 @@ def enqueue_list_fanout(
     subject: str,
     body: str,
     anonymize: bool = False,
+    inbound_id: int | None = None,
 ) -> list[OutboundMessage]:
     """Fan out to a list's Benutzergruppe. Returns the created rows (the test-
     send admin UI reports counts; the forwarding path can ignore it).
+    ``inbound_id``: the forwarded original, whose attachments go along.
     """
     return _enqueue_fanout(
         recipients=list_recipient_emails(list_obj),
@@ -317,6 +383,7 @@ def enqueue_list_fanout(
         body=body,
         anonymize=anonymize,
         list_obj=list_obj,
+        inbound_id=inbound_id,
     )
 
 
@@ -328,6 +395,7 @@ def enqueue_aggregate_fanout(
     subject: str,
     body: str,
     anonymize: bool = False,
+    inbound_id: int | None = None,
 ) -> list[OutboundMessage]:
     """Fan out an aggregate-alias message to pre-resolved recipients (resolved
     by the caller via `aggregates.aggregate_recipient_emails`, since recipient
@@ -339,6 +407,7 @@ def enqueue_aggregate_fanout(
         body=body,
         anonymize=anonymize,
         aggregate=aggregate,
+        inbound_id=inbound_id,
     )
 
 
@@ -487,7 +556,9 @@ def _route_reply(inbound: InboundMessage, msg) -> None:
             f"Antwort an Originalsender geroutet (Alias {om.alias_token}).",
         )
     transaction.on_commit(
-        lambda pk=reply.pk: send_outbound_message.defer(outbound_id=pk, body=body)
+        lambda pk=reply.pk: send_outbound_message.defer(
+            outbound_id=pk, body=body, inbound_id=inbound.pk
+        )
     )
     log.info("process_inbound: reply routed inbound=%d → outbound=%d", inbound.pk, reply.pk)
 
@@ -550,7 +621,7 @@ def _approval_preview(msg) -> str:
         text = text[:_APPROVAL_PREVIEW_CHARS].rstrip() + " […]"
     out = "\n--- Beginn der Mail ---\n" + (text or "(kein lesbarer Text)") + "\n--- Ende ---\n"
     if attachments:
-        out += "Anhänge (werden nicht weitergeleitet): " + ", ".join(attachments) + "\n"
+        out += "Anhänge (werden mit weitergeleitet): " + ", ".join(attachments) + "\n"
     # The notification body is later scanned for the link placeholder; make
     # sure the stranger's text can't inject one.
     return out.replace("__LINK__", "__ LINK __")
@@ -571,6 +642,7 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
                 subject=subject,
                 body=body,
                 anonymize=False,
+                inbound_id=inbound.pk,
             )
             _mark(
                 inbound,
@@ -665,6 +737,7 @@ def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) ->
                 subject=subject,
                 body=body,
                 anonymize=False,
+                inbound_id=inbound.pk,
             )
             _mark(
                 inbound,

@@ -3324,6 +3324,53 @@ class SendOutboundMessageTests(TestCase):
         """Invoke the task body synchronously, skipping the procrastinate queue."""
         send_outbound_message.func(outbound_id=om_pk, body=body)
 
+    def _inbound_with(self, *attachments, html_logo=False):
+        from email.message import EmailMessage
+
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = "lehrer@schule.example", "5a@caos.cloud", "Elternbrief"
+        m.set_content("Liebe Eltern, anbei der Brief.")
+        if html_logo:
+            m.add_alternative('<p>Liebe Eltern</p><img src="cid:logo1">', subtype="html")
+            m.get_payload()[1].add_related(
+                b"\x89PNG", maintype="image", subtype="png", cid="<logo1>", filename="image001.png"
+            )
+        for name, data in attachments:
+            m.add_attachment(data, maintype="application", subtype="octet-stream", filename=name)
+        return InboundMessage.objects.create(
+            imap_uidvalidity=9, imap_uid=InboundMessage.objects.count() + 1,
+            message_id=f"att{InboundMessage.objects.count()}@x", from_email="lehrer@schule.example",
+            to_alias="5a", to_domain="caos.cloud", subject="Elternbrief",
+            raw_eml=m.as_bytes(), received_at=timezone.now(), matched_list=self.lst,
+        )
+
+    def test_attachments_of_original_are_forwarded(self):
+        inbound = self._inbound_with(("Elternbrief.pdf", b"%PDF-1.4 x"), html_logo=True)
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        sent = mail.outbox[0]
+        names = [a[0] for a in sent.attachments]
+        # The real attachment goes along; the HTML-embedded signature logo does not.
+        self.assertEqual(names, ["Elternbrief.pdf"])
+        self.assertEqual(sent.attachments[0][1], b"%PDF-1.4 x")
+        self.assertEqual(sent.body, "Text")
+
+    def test_blocked_type_and_size_limit_leave_a_note(self):
+        inbound = self._inbound_with(("tool.exe", b"MZ"), ("Foto.jpg", b"x" * 2048))
+        mail.outbox = []
+        with self.settings(MAIL_MAX_ATTACHMENT_BYTES=1024):
+            send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.attachments, [])
+        self.assertIn("Dateityp gesperrt): tool.exe", sent.body)
+        self.assertIn("nicht weitergeleitet: Foto.jpg", sent.body)
+
+    def test_missing_original_sends_text_only(self):
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=999999)
+        self.assertEqual(mail.outbox[0].attachments, [])
+        self.assertEqual(mail.outbox[0].body, "Text")
+
     def test_success_marks_sent_and_writes_outbox(self):
         mail.outbox = []
         self._run_task(self.om.pk, body="Hallo")
@@ -4437,7 +4484,7 @@ class MailReleaseViewTests(TestCase):
         self.assertContains(resp, "Termin ist Freitag.")
         self.assertContains(resp, "&lt;script&gt;")  # escaped, never rendered
         self.assertContains(resp, "Brief.pdf")
-        self.assertContains(resp, "Anhänge werden nicht weitergeleitet")
+        self.assertContains(resp, "Die Anhänge werden mit weitergeleitet")
 
     def test_get_is_side_effect_free(self):
         resp = self.client.get(self._url())
@@ -4450,9 +4497,11 @@ class MailReleaseViewTests(TestCase):
         )
 
     def test_post_approve_forwards_and_consumes(self):
-        with patch.object(send_outbound_message, "defer"):
+        with patch.object(send_outbound_message, "defer") as deferred:
             with self.captureOnCommitCallbacks(execute=True):
                 resp = self.client.post(self._url(), data={"action": "approve"})
+        # The original travels by reference, so its attachments go along.
+        self.assertEqual(deferred.call_args.kwargs["inbound_id"], self.inbound.pk)
         self.assertEqual(resp.status_code, 200)
         self.token.refresh_from_db()
         self.inbound.refresh_from_db()

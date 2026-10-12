@@ -178,6 +178,12 @@ EMAIL_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "30"))
 # the alias/bounce tokens used in Phase 4 outbound. Tests fall back to a literal.
 MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "example.invalid")
 
+# Attachments of forwarded list mail (taken from the stored original at send
+# time). Over this total size they are dropped with a note in the text — the
+# mail is sent once per recipient, so large files multiply quickly, and the
+# provider's message-size limit (IONOS ~ 20–50 MB) must never be hit.
+MAIL_MAX_ATTACHMENT_BYTES = int(os.environ.get("MAIL_MAX_ATTACHMENT_BYTES", str(15 * 1024 * 1024)))
+
 # IMAP IDLE consumer (Phase 5a). Catch-all mailbox credentials and tunables.
 IMAP_HOST = os.environ.get("IMAP_HOST", "")
 IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))

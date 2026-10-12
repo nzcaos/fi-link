@@ -88,15 +88,72 @@ def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
         log.warning("message_preview: %s", exc)
     text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", str(text or "")).strip()
 
-    attachments: list[str] = []
-    for part in msg.walk():
-        if part.is_multipart():
-            continue
-        if part.get_content_disposition() == "attachment" or (
-            part.get_filename() and part.get_content_disposition() != "inline"
-        ):
-            attachments.append(part.get_filename() or part.get_content_type())
+    attachments = [name for name, _data, _ctype in extract_attachments(msg)]
     return text, attachments
+
+
+def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, bytes, str]]:
+    """The attachments of a mail as ``(filename, data, content_type)``, in
+    order — what a forward carries alongside the text body.
+
+    Everything that is not the chosen text/HTML body counts, with one
+    exception: images embedded in an HTML body (``multipart/related`` parts
+    with a Content-ID — Outlook signature logos and the like). We forward the
+    text body, so those would only turn up as stray ``image001.png`` files.
+    Inline images Apple Mail puts in ``multipart/mixed`` *are* kept: there
+    they are the content. A forwarded mail (``message/rfc822``) becomes an
+    ``.eml`` attachment.
+    """
+    import mimetypes
+
+    body_ids = set()
+    for pref in (("plain",), ("html",)):
+        try:
+            part = msg.get_body(preferencelist=pref)
+        except Exception:  # noqa: BLE001
+            part = None
+        if part is not None:
+            body_ids.add(id(part))
+
+    out: list[tuple[str, bytes, str]] = []
+
+    def _name(part, fallback_ext: str = "") -> str:
+        name = part.get_filename()
+        if name:
+            return name
+        ext = mimetypes.guess_extension(part.get_content_type()) or fallback_ext
+        return f"Anhang-{len(out) + 1}{ext}"
+
+    def _visit(part, in_related: bool) -> None:
+        ctype = part.get_content_type()
+        if ctype == "message/rfc822":
+            inner = part.get_payload()
+            inner = inner[0] if isinstance(inner, list) and inner else inner
+            if hasattr(inner, "as_bytes"):
+                out.append((_name(part, ".eml"), inner.as_bytes(), ctype))
+            return
+        if part.is_multipart():
+            related = ctype == "multipart/related"
+            for sub in part.iter_parts():
+                _visit(sub, related)
+            return
+        if id(part) in body_ids:
+            return
+        disposition = part.get_content_disposition()
+        if in_related and part.get("Content-ID"):
+            return  # referenced from the HTML body (cid:), not a file of its own
+        if part.get_content_maintype() == "text" and not part.get_filename() and disposition != "attachment":
+            return  # an alternative body part, not a file
+        data = part.get_payload(decode=True)
+        if data is None:
+            return
+        out.append((_name(part), data, ctype))
+
+    try:
+        _visit(msg, False)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("extract_attachments: %s", exc)
+    return out
 
 
 _MSGID_RE = re.compile(r"<([^<>]+)>")
