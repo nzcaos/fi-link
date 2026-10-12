@@ -171,7 +171,7 @@ class RegisterStartViewTests(TestCase):
 
         resp = self.client.post(
             "/auth/register/",
-            {"email": "new@example.org", "given_name": "Anna", "family_name": "Müller"},
+            {"email": "new@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "E-Mail-Postfach prüfen")
@@ -183,7 +183,7 @@ class RegisterStartViewTests(TestCase):
         _make_user(email="parent@example.org")
         resp = self.client.post(
             "/auth/register/",
-            {"email": "parent@example.org", "given_name": "Bernd", "family_name": "Müller"},
+            {"email": "parent@example.org", "given_name": "Bernd", "family_name": "Müller", "privacy_consent": "on"},
         )
         self.assertEqual(resp.status_code, 200)
         # The form should offer to continue under the shared address (family-mailbox case).
@@ -210,6 +210,7 @@ class N15RegisterRateLimitTests(TestCase):
                 "email": email,
                 "given_name": "Anna",
                 "family_name": "Müller",
+                "privacy_consent": "on",
             },
             **kwargs,
         )
@@ -221,6 +222,7 @@ class N15RegisterRateLimitTests(TestCase):
                 "email": email,
                 "given_name": "Anna",
                 "family_name": "Müller",
+                "privacy_consent": "on",
             },
             **kwargs,
         )
@@ -304,7 +306,7 @@ class RegistrationGateTests(TestCase):
         cache.clear()
 
     def _payload(self, email="stranger@example.org"):
-        return {"email": email, "given_name": "Anna", "family_name": "Müller"}
+        return {"email": email, "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"}
 
     def _stash(self, key: str, value: str):
         session = self.client.session
@@ -603,3 +605,93 @@ class RetentionSweepTests(TestCase):
         )
         clear_expired_sessions.func(timestamp=0)
         self.assertEqual(list(Session.objects.values_list("session_key", flat=True)), ["new"])
+
+
+class PrivacyConsentRegistrationTests(TestCase):
+    def setUp(self):
+        _grant_registration(self.client)
+
+    def test_register_without_consent_stores_nothing(self):
+        from django.core import mail
+
+        resp = self.client.post(
+            "/auth/register/",
+            {"email": "new@example.org", "given_name": "Anna", "family_name": "Müller"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertContains(resp, "Datenschutzhinweise", status_code=400)
+        self.assertFalse(Person.objects.filter(email="new@example.org").exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(PRIVACY_POLICY_VERSION="2026-10-12")
+    def test_register_with_consent_records_it(self):
+        self.client.post(
+            "/auth/register/",
+            {
+                "email": "new@example.org",
+                "given_name": "Anna",
+                "family_name": "Müller",
+                "privacy_consent": "1",
+            },
+        )
+        user = User.objects.get(person__email="new@example.org")
+        self.assertEqual(user.privacy_consent_version, "2026-10-12")
+        self.assertIsNotNone(user.privacy_consent_at)
+
+    def test_force_without_consent_creates_nothing(self):
+        self.client.post(
+            "/auth/register/force/",
+            {"email": "new@example.org", "given_name": "Anna", "family_name": "Müller"},
+        )
+        self.assertFalse(Person.objects.filter(email="new@example.org").exists())
+
+
+@override_settings(PRIVACY_CONSENT_REQUIRED=True, PRIVACY_POLICY_VERSION="2026-10-12")
+class PrivacyConsentMiddlewareTests(TestCase):
+    def setUp(self):
+        self.user = _make_user("anna@example.org")
+        self.client.force_login(self.user)
+
+    def test_page_redirects_to_consent_with_next(self):
+        resp = self.client.get("/lists/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], "/auth/einwilligung/?next=%2Flists%2F")
+
+    def test_exempt_paths_and_htmx_pass(self):
+        self.assertEqual(self.client.get("/datenschutz/").status_code, 200)
+        resp = self.client.get("/lists/", HTTP_HX_REQUEST="true")
+        self.assertNotEqual(resp.get("Location", ""), "/auth/einwilligung/?next=%2Flists%2F")
+
+    def test_consent_post_records_and_continues(self):
+        resp = self.client.post(
+            "/auth/einwilligung/", {"privacy_consent": "1", "next": "/lists/"}
+        )
+        self.assertRedirects(resp, "/lists/", fetch_redirect_response=False)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.privacy_consent_version, "2026-10-12")
+        self.assertNotEqual(self.client.get("/lists/").status_code, 302)
+
+    def test_consent_post_without_box_is_rejected(self):
+        resp = self.client.post("/auth/einwilligung/", {"next": "/lists/"})
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.privacy_consent_version, "")
+
+    def test_offsite_next_is_ignored(self):
+        resp = self.client.post(
+            "/auth/einwilligung/", {"privacy_consent": "1", "next": "https://evil.example/"}
+        )
+        self.assertRedirects(resp, reverse("lists:home"), fetch_redirect_response=False)
+
+    def test_version_bump_asks_again(self):
+        self.user.record_privacy_consent()
+        with self.settings(PRIVACY_POLICY_VERSION="2027-01-01"):
+            self.assertEqual(self.client.get("/lists/").status_code, 302)
+
+
+@override_settings(PRIVACY_POLICY_VERSION="2026-10-12")
+class DatenschutzPageTests(TestCase):
+    def test_public_and_shows_stand(self):
+        resp = self.client.get("/datenschutz/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Stand: 12.10.2026")

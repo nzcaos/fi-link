@@ -56,7 +56,8 @@ technisch zwingend und unter der gewohnten Adresse Ihrer Installation (z. B.
 ### Konto anlegen
 
 1. Auf der Startseite **„Registrieren"** wählen.
-2. **Vorname**, **Nachname** und **E-Mail-Adresse** eingeben und
+2. **Vorname**, **Nachname** und **E-Mail-Adresse** eingeben, die
+   **Datenschutzhinweise** bestätigen (Häkchen; der Link öffnet sie) und
    **„Aktivierungs-Link anfordern"** klicken.
 3. Sie erhalten eine E-Mail mit einem **Aktivierungs-Link**. Diesen Link öffnen.
 4. Auf der Seite **„Passkey einrichten"** klicken Sie auf *„Passkey einrichten"*;

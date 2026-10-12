@@ -11,6 +11,7 @@
       <input type="hidden" name="email" value="{{ email }}">
       <input type="hidden" name="given_name" value="{{ given_name }}">
       <input type="hidden" name="family_name" value="{{ family_name }}">
+      <input type="hidden" name="privacy_consent" value="1">
       <p>Trotzdem ein weiteres Konto unter <strong>{{ email }}</strong> anlegen für <strong>{{ given_name }} {{ family_name }}</strong>?</p>
       <button type="submit">Ja, weiteres Konto anlegen</button>
       <a href="{% url 'accounts:register_start' %}"><button type="button" class="secondary">Abbrechen</button></a>
@@ -31,6 +32,7 @@
         Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar,
         wenn Sie sie pro Liste explizit freigeben.
       </p>
+      {% include "auth/_privacy_consent_field.html" %}
       <p style="margin-top:1rem">
         <button type="submit">Aktivierungs-Link anfordern</button>
       </p>

@@ -23,6 +23,7 @@ urlpatterns = [
 
     # Profile (own person)
     path("profil/", views.profile, name="profile"),
+    path("einwilligung/", views.privacy_consent, name="privacy_consent"),
 
     # Passkey management
     path("passkeys/", views.passkeys_index, name="passkeys"),

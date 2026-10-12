@@ -219,6 +219,9 @@
               font-size: .94rem; cursor: pointer; border-radius: 7px; }
     .menu-panel a:hover, .menu-panel button.menu-item:hover { background: var(--surface-2);
               color: var(--brand-strong); text-decoration: none; }
+    .site-footer { display: flex; gap: 1.2rem; justify-content: center;
+                   margin: 1.2rem 0 2rem; font-size: .82rem; }
+    .site-footer a { color: var(--muted); }
     .menu-sep { height: 1px; background: var(--border); margin: 0.4rem 0.3rem; }
     .menu-label { padding: 0.45rem 0.7rem 0.2rem; font-size: 0.7rem;
               text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
@@ -312,6 +315,10 @@
       {% endif %}
       {% block content %}{% endblock %}
     </main>
+    <footer class="site-footer">
+      <a href="{% url 'datenschutz' %}">Datenschutz</a>
+      <a href="{% url 'hilfe' %}">Hilfe</a>
+    </footer>
   </div>
 </body>
 </html>

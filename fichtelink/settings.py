@@ -56,6 +56,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "accounts.middleware.PrivacyConsentMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -124,6 +125,15 @@ if "test" in sys.argv:
     STORAGES["staticfiles"]["BACKEND"] = (
         "django.contrib.staticfiles.storage.StaticFilesStorage"
     )
+
+# Privacy notice (/datenschutz/, templates/datenschutz.html). Bump the version
+# whenever the notice changes materially — every user is then asked to consent
+# again (accounts.middleware.PrivacyConsentMiddleware). The date is the
+# notice's "Stand".
+PRIVACY_POLICY_VERSION = "2026-10-12"
+# Off in the test runner so the hundreds of tests that log users in don't all
+# need a consent row; the consent tests switch it on via override_settings.
+PRIVACY_CONSENT_REQUIRED = "test" not in sys.argv
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

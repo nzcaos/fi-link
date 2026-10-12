@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% comment %}
+Datenschutzhinweise, ausgeliefert unter /datenschutz/. Bei jeder inhaltlichen
+Änderung settings.PRIVACY_POLICY_VERSION (= "Stand") anheben — dann werden alle
+Benutzer erneut um Einwilligung gebeten (accounts.middleware).
+Fristen hier müssen zu den Einstellungen in .env passen (README / Data retention).
+{% endcomment %}
+{% block title %}Datenschutzhinweise — Fichtelink{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+{% block content %}
+<style>
+  .privacy h1 { margin-bottom: .25rem; }
+  .privacy .lead { color: var(--text-soft); max-width: 48rem; }
+  .privacy h2 { margin-top: 2.25rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+  .privacy p, .privacy li { max-width: 48rem; }
+  .privacy .table-wrap { overflow-x: auto; }
+  .privacy table { border-collapse: collapse; font-size: .9rem; min-width: 40rem; }
+  .privacy th, .privacy td { border-bottom: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  .privacy th { background: var(--surface-2); font-weight: 600; }
+</style>
+
+<div class="privacy">
+<h1>Datenschutzhinweise</h1>
+<p class="lead">Welche Daten Fichtelink wo, in welcher Form und wie lange speichert — und warum. Stand: {{ policy_version_display }}.</p>
+
+<h2>Das Wichtigste in Kürze</h2>
+<p>Fichtelink ersetzt die Papier-Klassenliste und den E-Mail-Verteiler der Klasse. Sie entscheiden selbst, wer welche Ihrer Angaben sehen darf. Ohne Ihre Freigabe sieht niemand außer den Klassen-Admins Ihre Telefonnummer, Adresse oder E-Mail-Adresse.</p>
+<ul>
+  <li><strong>Anmeldung ohne Passwort:</strong> Sie melden sich per Passkey an (Face ID, Touch ID, Windows Hello). Wir speichern nur einen öffentlichen Schlüssel, kein Passwort und keine biometrischen Daten.</li>
+  <li><strong>Listeneinträge verschlüsselt:</strong> Alle Angaben in der Klassenliste (Telefon, Adresse, Angaben zum Kind) liegen verschlüsselt in der Datenbank.</li>
+  <li><strong>Namen und E-Mail im Klartext:</strong> Name und E-Mail-Adresse werden unverschlüsselt gespeichert, weil das System damit Mails zustellt.</li>
+  <li><strong>E-Mails an den Klassenverteiler:</strong> Sie werden weitergeleitet und danach höchstens 90 Tage aufbewahrt, damit Rückfragen, Fehlzustellungen und Antworten zugeordnet werden können.</li>
+  <li><strong>Keine Werbung, keine Weitergabe:</strong> Die Daten dienen nur der Kommunikation innerhalb der Schulgemeinschaft. Es gibt keine Tracking-Cookies und keine Analyse-Dienste.</li>
+  <li><strong>Speicherort:</strong> Alle Daten liegen auf einem Server der CAOS GmbH in Deutschland; Mails laufen über IONOS, ebenfalls in Deutschland. Details im Abschnitt <a href="#dienstleister">Dienstleister</a>.</li>
+</ul>
+
+<h2>Übersicht: was, wo, wie, wie lange, warum</h2>
+<p>„Bis Konto-Löschung“ heißt: Es gibt keine automatische Löschung, die Daten werden auf Ihren Wunsch vom Verantwortlichen gelöscht.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Daten</th><th>Wo</th><th>Form</th><th>Wie lange</th><th>Warum</th></tr></thead>
+  <tbody>
+    <tr><td>Vor- und Nachname, E-Mail-Adresse</td><td>Datenbank</td><td>Klartext</td><td>Bis Konto-Löschung</td><td>Anzeige in der Liste, Mailzustellung, Anmelde- und Einladungslinks</td></tr>
+    <tr><td>Angaben im Klasseneintrag (Telefon, Adresse, Angaben zum Kind)</td><td>Datenbank</td><td>Verschlüsselt (AES/Fernet)</td><td>Bis Konto-Löschung, spätestens 12 Monate nach Ende der Klassenliste; nach Austritt archiviert</td><td>Ersatz der Papier-Klassenliste</td></tr>
+    <tr><td>Familienbeziehung („Mutter von …“)</td><td>Datenbank</td><td>Klartext</td><td>Bis Konto-Löschung</td><td>Zuordnung Eltern ↔ Kind in der Klassenzeile</td></tr>
+    <tr><td>Sichtbarkeits-Einstellungen</td><td>Datenbank</td><td>Klartext</td><td>Solange der Eintrag besteht</td><td>Durchsetzung Ihrer Freigaben</td></tr>
+    <tr><td>Ihre Einwilligung (Zeitpunkt, Stand dieser Hinweise)</td><td>Datenbank</td><td>Klartext</td><td>Bis Konto-Löschung</td><td>Nachweis der Einwilligung</td></tr>
+    <tr><td>Passkey (öffentlicher Schlüssel, Gerätename, letzte Nutzung)</td><td>Datenbank</td><td>Klartext, kein Geheimnis</td><td>Bis Sie ihn löschen oder Konto-Löschung</td><td>Anmeldung</td></tr>
+    <tr><td>Anmelde-Sitzung</td><td>Datenbank + Cookie im Browser</td><td>Zufalls-ID</td><td>2 Wochen, danach gelöscht</td><td>Angemeldet bleiben</td></tr>
+    <tr><td>Einladungs- und Aktivierungslinks (inkl. Empfänger-Mail)</td><td>Datenbank</td><td>Klartext</td><td>Gültig 7–30 Tage, 30 Tage nach Ablauf oder Einlösung gelöscht</td><td>Registrierung, Einladung, Konto-Wiederherstellung</td></tr>
+    <tr><td>E-Mail an den Klassenverteiler (vollständig inkl. Anhänge)</td><td>Postfach beim Mail-Anbieter</td><td>Wie empfangen</td><td>7 Tage nach Verarbeitung</td><td>Empfang</td></tr>
+    <tr><td>Dieselbe E-Mail als Kopie</td><td>Datenbank</td><td>Klartext</td><td>90 Tage</td><td>Freigabe-Klick, Erkennung von Mail-Schleifen und Fehlzustellungen</td></tr>
+    <tr><td>Versand-Protokoll pro Empfänger (Absender, Empfänger, Betreff, Status)</td><td>Datenbank</td><td>Klartext</td><td>90 Tage</td><td>Zuordnung von Antworten und Unzustellbarkeitsmeldungen</td></tr>
+    <tr><td>Text der weitergeleiteten E-Mail in der Versand-Warteschlange</td><td>Datenbank</td><td>Klartext</td><td>7 Tage nach Versand</td><td>Zuverlässiger Versand mit Wiederholung</td></tr>
+    <tr><td>Freigabe-Links für Mails</td><td>Datenbank</td><td>Zufalls-Token</td><td>7 Tage</td><td>Schutz gegen gefälschte Absender</td></tr>
+    <tr><td>Server-Protokolle (aufgerufene Seiten, Zeit, Browser-Kennung; bei Fehlern E-Mail-Adressen)</td><td>Protokoll des Servers</td><td>Text</td><td>Rotierend, max. 30 MB je Dienst; Älteres wird überschrieben</td><td>Fehlersuche, Missbrauchsabwehr</td></tr>
+    <tr><td>Zugriffsprotokoll des Webproxys (IP-Adresse, Zeit, Seite)</td><td>Proxy-Server</td><td>Text</td><td>1 Jahr</td><td>Sicherheit, Fehlersuche</td></tr>
+    <tr><td>Formular-Eintragungen (Helferschicht, Kuchenspende)</td><td>Datenbank</td><td>Klartext</td><td>Bis zur Löschung des Formulars oder Ihrer Austragung</td><td>Organisation von Veranstaltungen</td></tr>
+    <tr><td>Datensicherung</td><td>Backup-Verzeichnis des Servers</td><td>Komprimierter Datenbank-Abzug</td><td>14 Tage</td><td>Wiederherstellung nach Ausfall</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Ihr Konto</h2>
+<p>Für Ihr Konto speichern wir Vor- und Nachname, E-Mail-Adresse, das Registrierungsdatum, den Zeitpunkt der letzten Anmeldung und den Zeitpunkt Ihrer Einwilligung in diese Hinweise. Die E-Mail-Adresse ist Pflicht, weil das System ohne sie keine Klassenmails, Freigabe- oder Anmeldelinks zustellen kann.</p>
+<ul>
+  <li><strong>Gemeinsame Familien-Adresse:</strong> Beide Elternteile können eigene Konten mit derselben E-Mail-Adresse haben.</li>
+  <li><strong>Passkeys:</strong> Gespeichert werden ein öffentlicher Schlüssel, ein von Ihnen vergebener Gerätename (z. B. „iPhone“), Anlage- und letzter Nutzungszeitpunkt. Der private Schlüssel und Ihr Fingerabdruck oder Gesicht verlassen Ihr Gerät nie.</li>
+  <li><strong>Einladungen:</strong> Wenn Sie eingeladen werden, speichern wir die Adresse, an die die Einladung ging, wer eingeladen hat, und wann der Link eingelöst wurde. Links gelten 7 Tage (Aktivierung, Wiederherstellung) bzw. 30 Tage (Einladung); 30 Tage nach Ablauf oder Einlösung wird der Datensatz gelöscht.</li>
+  <li><strong>Anmeldung:</strong> Ein Sitzungs-Cookie hält Sie bis zu 2 Wochen angemeldet. Weitere Cookies gibt es nur zum Schutz von Formularen (CSRF).</li>
+  <li><strong>Keine IP-Adressen im Konto:</strong> IP-Adressen werden nicht zu Ihrem Konto gespeichert. Sie erscheinen nur kurzzeitig im Speicher (Schutz vor massenhaften Registrierungsversuchen, 1 Stunde) und in Server-Protokollen.</li>
+</ul>
+
+<h2>Ihr Eintrag in der Klassenliste</h2>
+<p>Alle Angaben, die Sie in der Klassenliste eintragen, werden verschlüsselt gespeichert. Wer sie sieht, legen Sie pro Feld selbst fest.</p>
+<ul>
+  <li><strong>Was gespeichert wird:</strong> Der Name Ihres Kindes, Ihr eigener Eintrag als Elternteil und die Felder, die die Klassenliste vorsieht (z. B. Adresse, Telefon). Optional auch ein zweiter Elternteil, den Sie miterfassen — bitte informieren Sie ihn darüber und über diese Hinweise.</li>
+  <li><strong>Verschlüsselung:</strong> Die Feldinhalte sind mit einem einzigen Schlüssel der Installation verschlüsselt (Fernet: AES-128 + HMAC). Wer nur die Datenbank oder ein Backup in die Hand bekommt, kann sie nicht lesen. Namen, E-Mail-Adressen und die Familienzuordnung sind nicht verschlüsselt.</li>
+  <li><strong>Sichtbarkeit:</strong> Pro Feld wählen Sie, für welche Gruppe (z. B. „Klasse 5a“, „Elternbeirat“) es sichtbar ist. Der Name ist standardmäßig sichtbar, wie auf der Papierliste; Ihre E-Mail-Adresse ist standardmäßig verborgen. Verbergen Sie Ihren Namen, erscheinen Sie als „?1“, „?2“ usw.</li>
+  <li><strong>Wer immer alles sieht:</strong> Die Admins der Klassenliste (Elternvertreter) und die Super-Admins des Systems sehen alle Namen, um Mails freigeben und Klassenwechsel bearbeiten zu können. Zur Korrektur können Klassen-Admins auch die Feldinhalte eines Eintrags öffnen und ändern, Ihre Sichtbarkeitseinstellungen aber nie.</li>
+  <li><strong>Schuljahreswechsel:</strong> Die Liste wandert mit der Klasse (5a → 6a). Ihre Daten bleiben unverändert erhalten. Bei einem Klassenwechsel wird der alte Eintrag archiviert, nicht gelöscht.</li>
+  <li><strong>Austritt:</strong> Sie können sich jederzeit selbst aus einer Liste austragen. Der Eintrag wird dann für andere unsichtbar und archiviert; die Inhalte werden auf Löschantrag entfernt, spätestens mit der Klassenliste.</li>
+</ul>
+
+<h2>E-Mails an den Klassenverteiler</h2>
+<p>Eine E-Mail an die Klassenadresse (z. B. 5a@…) wird vollständig bis zu 90 Tage in der Datenbank aufbewahrt und danach automatisch gelöscht. So läuft der Weg einer Mail:</p>
+<ol>
+  <li><strong>Empfang:</strong> Die Mail landet im Sammelpostfach beim Mail-Anbieter. Dort wird sie 7 Tage nach der Verarbeitung gelöscht.</li>
+  <li><strong>Kopie in der Datenbank:</strong> Das System legt eine vollständige Kopie ab (Kopfzeilen, Text, Anhänge). Sie wird gebraucht, um die Mail nach Ihrem Freigabe-Klick zu versenden und automatische Antworten (Abwesenheitsnotizen) zu erkennen. Löschung nach 90 Tagen.</li>
+  <li><strong>Freigabe:</strong> Sie erhalten einen Freigabe-Link, der 7 Tage gültig ist. Erst nach dem Klick wird die Mail verteilt; das schützt vor gefälschten Absendern. Schreiben Personen von außerhalb der Klasse, entscheidet ein Klassen-Admin; dafür sieht er Absender und Betreff.</li>
+  <li><strong>Weiterleitung:</strong> Jedes Klassenmitglied erhält eine eigene Kopie, nur mit dem Textteil, ohne Anhänge. Als Absender steht eine Adresse des Systems. Ihre echte Adresse steht nur dann als Antwortadresse darin, wenn Sie Ihre E-Mail-Adresse für die Klasse freigegeben haben; sonst erscheint die Mail anonym, und Antworten werden über das System an Sie weitergeleitet.</li>
+  <li><strong>Versand-Protokoll:</strong> Pro Empfänger werden Absender, Empfänger, Betreff, Zeitpunkt und Zustellstatus gespeichert. Damit lassen sich Antworten und Unzustellbarkeitsmeldungen zuordnen. Löschung nach 90 Tagen.</li>
+</ol>
+<p>Der Mail-Text liegt außerdem in der Versand-Warteschlange, damit ein fehlgeschlagener Versand wiederholt werden kann. Diese Einträge werden 7 Tage nach dem Versand gelöscht.</p>
+
+<h2>Protokolldaten (Logs)</h2>
+<p>Der Server schreibt technische Protokolle zur Fehlersuche und Missbrauchsabwehr. Sie werden nicht ausgewertet, um Nutzerverhalten zu analysieren.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Protokoll</th><th>Inhalt</th><th>Wo</th><th>Wie lange</th></tr></thead>
+  <tbody>
+    <tr><td>Zugriffsprotokoll des Webproxys</td><td>IP-Adresse, Zeit, aufgerufene Seite, Browser-Kennung</td><td>Proxy-Server (Apache)</td><td>1 Jahr</td></tr>
+    <tr><td>Zugriffsprotokoll der Anwendung</td><td>Zeit, aufgerufene Seite (inkl. Link-Codes), Browser-Kennung; nur die IP des Proxys, nicht Ihre</td><td>Container-Protokoll auf dem Server</td><td>Rotierend, max. 30 MB; Älteres wird überschrieben</td></tr>
+    <tr><td>Anwendungsprotokoll</td><td>Fehler und Mail-Ereignisse; bei Zustellfehlern die Empfänger-Adresse; bei abgewiesenen Registrierungen die IP-Adresse</td><td>Container-Protokoll auf dem Server</td><td>Rotierend, max. 30 MB; Älteres wird überschrieben</td></tr>
+    <tr><td>Registrierungsbremse</td><td>IP-Adresse, Anzahl Versuche</td><td>Arbeitsspeicher</td><td>1 Stunde, kein Plattenzugriff</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Passkey-Geheimnisse und Inhalte Ihres Klasseneintrags stehen nie in Protokollen.</p>
+
+<h2>Formulare und Messenger</h2>
+<p><strong>Formulare</strong> (z. B. Helferschichten beim Schulfest, Kuchenspenden): Gespeichert wird, wofür Sie sich eingetragen haben, ein eventueller Freitext (z. B. „Apfelkuchen“) und der Zeitpunkt. Name und E-Mail werden aus Ihrem Konto gelesen, nicht erneut erfasst. Ihr Name ist für andere Formularnutzer standardmäßig sichtbar, Ihre E-Mail-Adresse verborgen; beides können Sie jederzeit ändern. Sie können sich selbst wieder austragen; dann wird die Eintragung gelöscht. Ansonsten bleibt sie bestehen, bis das Formular gelöscht wird.</p>
+<p><strong>Klassen-Messenger:</strong> Ein Chat pro Klasse ist technisch vorbereitet, aber derzeit nicht aktiv. Wird er eingeschaltet, erhalten Sie dazu eine eigene Information.</p>
+
+<h2 id="dienstleister">Dienstleister und Speicherorte</h2>
+<p>Fichtelink nutzt nur zwei externe Dienste: einen Server-Hoster und einen Mail-Anbieter. Es werden keine Inhalte von fremden Servern (CDNs, Schriftarten, Analyse-Dienste) nachgeladen.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Dienst</th><th>Aufgabe</th><th>Welche Daten</th><th>Standort</th></tr></thead>
+  <tbody>
+    <tr><td>CAOS GmbH</td><td>Server mit Datenbank, Anwendung und Backups</td><td>Alle oben genannten Daten</td><td>Deutschland</td></tr>
+    <tr><td>CAOS GmbH</td><td>HTTPS-Verschlüsselung, Weiterleitung zum Server</td><td>IP-Adresse, aufgerufene Seiten</td><td>Deutschland</td></tr>
+    <tr><td>IONOS</td><td>Empfang und Versand der Mails</td><td>Mails an die Klassenadressen, alle versendeten Mails</td><td>Deutschland</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Verantwortlich im Sinne der DSGVO: Nicolas Ziegler, Eisenlohrstr. 14, 76135 Karlsruhe, <a href="mailto:ziegler@caos-gmbh.de">ziegler@caos-gmbh.de</a>.</p>
+
+<h2>Löschung, Widerruf und Ihre Rechte</h2>
+<p>Ihr Konto und alle Einträge löschen wir auf formlose Anfrage an den Verantwortlichen (<a href="mailto:ziegler@caos-gmbh.de">ziegler@caos-gmbh.de</a>). Eine Löschfunktion im System selbst gibt es noch nicht.</p>
+<ul>
+  <li><strong>Selbst erledigen:</strong> Aus einer Liste austragen, einzelne Felder verbergen, Formular-Eintragungen entfernen, Passkeys löschen.</li>
+  <li><strong>Auf Anfrage:</strong> Vollständige Löschung von Konto, Klasseneinträgen (auch archivierten) und Familienzuordnung. Daten in Backups verschwinden spätestens 14 Tage danach.</li>
+  <li><strong>Ende der Schulzeit:</strong> Nach der Kursstufe (K2) wird die Klassenliste archiviert. 12 Monate nach der Archivierung wird sie automatisch mit allen Einträgen gelöscht, ebenso die Daten Ihres Kindes. Ihr Konto bleibt bestehen, bis Sie seine Löschung beantragen.</li>
+  <li><strong>Rechtsgrundlage:</strong> Ihre Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), die Sie bei der Registrierung bzw. bei der ersten Anmeldung nach einer Änderung dieser Hinweise erteilen. Sie können sie jederzeit für die Zukunft widerrufen; eine formlose Nachricht an den Verantwortlichen genügt, Ihr Konto wird dann gelöscht.</li>
+  <li><strong>Ihre Rechte nach DSGVO:</strong> Auskunft, Berichtigung, Löschung, Einschränkung, Datenübertragbarkeit und Widerspruch, sowie Beschwerde bei der Datenschutz-Aufsichtsbehörde (in Baden-Württemberg: Landesbeauftragter für den Datenschutz und die Informationsfreiheit, LfDI BW).</li>
+</ul>
+</div>
+{% endblock %}

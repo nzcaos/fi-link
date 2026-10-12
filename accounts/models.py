@@ -102,6 +102,21 @@ class User(AbstractBaseUser, PermissionsMixin):
         help_text="Darf sich am Django-Admin anmelden.",
     )
     date_joined = models.DateTimeField("registriert am", auto_now_add=True)
+    privacy_consent_at = models.DateTimeField(
+        "Einwilligung Datenschutz am",
+        null=True,
+        blank=True,
+        help_text="Zeitpunkt, zu dem der Benutzer in die Datenschutzhinweise eingewilligt hat.",
+    )
+    privacy_consent_version = models.CharField(
+        "Version der Datenschutzhinweise",
+        max_length=20,
+        blank=True,
+        help_text=(
+            "Stand der Datenschutzhinweise (settings.PRIVACY_POLICY_VERSION), in den "
+            "eingewilligt wurde. Weicht er vom aktuellen ab, wird erneut gefragt."
+        ),
+    )
     last_selected_list = models.ForeignKey(
         "lists.List",
         null=True,
@@ -137,6 +152,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def get_short_name(self) -> str:
         return self.person.given_name
+
+    @property
+    def has_current_privacy_consent(self) -> bool:
+        return self.privacy_consent_version == settings.PRIVACY_POLICY_VERSION
+
+    def record_privacy_consent(self) -> None:
+        """Stamp consent to the current privacy notice (Art. 7 Abs. 1 DSGVO:
+        the controller must be able to prove it)."""
+        self.privacy_consent_at = timezone.now()
+        self.privacy_consent_version = settings.PRIVACY_POLICY_VERSION
+        self.save(update_fields=["privacy_consent_at", "privacy_consent_version"])
 
 
 # ---------------------------------------------------------------------------

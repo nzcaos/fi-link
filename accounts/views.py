@@ -26,6 +26,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
@@ -195,6 +196,20 @@ def register_start(request: HttpRequest) -> HttpResponse:
             {"error": "Bitte Vor-/Nachname und E-Mail angeben."},
             status=400,
         )
+    if not request.POST.get("privacy_consent"):
+        # Consent precedes storage: nothing is written before the box is
+        # ticked (Art. 6 Abs. 1 lit. a DSGVO).
+        return render(
+            request,
+            "auth/register.html",
+            {
+                "error": "Bitte bestätigen Sie die Datenschutzhinweise.",
+                "email": email,
+                "given_name": given_name,
+                "family_name": family_name,
+            },
+            status=400,
+        )
     if not _check_registration_rate_limit(request):
         return _rate_limited_response(request)
 
@@ -231,7 +246,7 @@ def register_force(request: HttpRequest) -> HttpResponse:
     email = (request.POST.get("email") or "").strip().lower()
     given_name = (request.POST.get("given_name") or "").strip()
     family_name = (request.POST.get("family_name") or "").strip()
-    if not (email and given_name and family_name):
+    if not (email and given_name and family_name and request.POST.get("privacy_consent")):
         return redirect("accounts:register_start")
     if not _check_registration_rate_limit(request):
         return _rate_limited_response(request)
@@ -247,7 +262,14 @@ def _create_stub_and_send(
             family_name=family_name,
             email=email,
         )
-        user = User.objects.create_user(person=person, username=random_username(), is_active=False)
+        # Both callers checked the privacy-consent box before we got here.
+        user = User.objects.create_user(
+            person=person,
+            username=random_username(),
+            is_active=False,
+            privacy_consent_at=timezone.now(),
+            privacy_consent_version=settings.PRIVACY_POLICY_VERSION,
+        )
         token = ActivationToken.issue(person=person, email=email, user=user)
     link = request.build_absolute_uri(
         reverse("accounts:activate", args=[token.token])
@@ -541,6 +563,30 @@ def profile(request: HttpRequest) -> HttpResponse:
     else:
         form = ProfileForm(instance=person)
     return render(request, "auth/profile.html", {"form": form, "email": person.email})
+
+
+@login_required
+def privacy_consent(request: HttpRequest) -> HttpResponse:
+    """Consent to the current privacy notice for a signed-in user who has none
+    on record (or consented to an older version). Reached via
+    PrivacyConsentMiddleware with `?next=` pointing back where they wanted to go.
+    """
+    next_url = request.POST.get("next") or request.GET.get("next") or ""
+    if not url_has_allowed_host_and_scheme(
+        next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        next_url = reverse("lists:home")
+    if request.method == "POST":
+        if request.POST.get("privacy_consent"):
+            request.user.record_privacy_consent()
+            return redirect(next_url)
+        return render(
+            request,
+            "auth/privacy_consent.html",
+            {"next": next_url, "error": "Bitte setzen Sie das Häkchen, um fortzufahren."},
+            status=400,
+        )
+    return render(request, "auth/privacy_consent.html", {"next": next_url})
 
 
 # ---------------------------------------------------------------------------

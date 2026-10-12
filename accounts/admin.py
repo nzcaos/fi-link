@@ -16,11 +16,14 @@ class PersonAdmin(admin.ModelAdmin):
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ("username", "person", "is_active", "is_staff", "is_superuser")
+    list_display = (
+        "username", "person", "is_active", "is_staff", "is_superuser", "privacy_consent_version",
+    )
     search_fields = ("username", "person__family_name", "person__given_name", "person__email")
     list_filter = ("is_active", "is_staff", "is_superuser")
     autocomplete_fields = ("person", "last_selected_list")
-    readonly_fields = ("last_login", "date_joined")
+    # Consent is proof (Art. 7 Abs. 1 DSGVO) — only the user records it.
+    readonly_fields = ("last_login", "date_joined", "privacy_consent_at", "privacy_consent_version")
 
 
 @admin.register(Passkey)

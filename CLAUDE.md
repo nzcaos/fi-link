@@ -403,6 +403,15 @@ Wherever the email field is shown to a user during onboarding, a short inline pr
 
 The usernameless flow combined with `user.displayName` cleanly handles the shared-family-email case (see *PERSON vs. USER*): both parents register passkeys under the same `PERSON.email`, and the browser shows both passkeys labeled by name when either parent signs in — even on a shared device.
 
+### Privacy notice and consent
+
+The legal basis for processing is the user's **consent** (Art. 6 Abs. 1 lit. a DSGVO), so it must be informed and provable:
+
+- **Notice:** `/datenschutz/` (`templates/datenschutz.html`, public, linked from the site footer and the registration form). Its "Stand" is `settings.PRIVACY_POLICY_VERSION`; **bump it on every material change** to the notice — and keep the retention periods in it in sync with the `*_RETENTION_DAYS` settings.
+- **Proof:** `USER.privacy_consent_at` + `privacy_consent_version`. Registration (`register_start` / `register_force`) refuses to store anything without the checkbox and stamps both fields on the stub USER.
+- **Everyone else** (operator-created accounts, accounts predating the notice, all users after a version bump) is caught by `accounts.middleware.PrivacyConsentMiddleware`: full-page GETs of a signed-in user without current consent redirect to `/auth/einwilligung/?next=…`. HTMX/fetch/POST requests and `/auth/`, `/datenschutz/`, `/hilfe/`, `/static/`, `/admin/` pass through. `PRIVACY_CONSENT_REQUIRED` is off in the test runner; consent tests switch it on.
+- **Withdrawal** = erasure request → `manage.py delete_person`.
+
 ### Account recovery
 
 **Self-service, email-based.** A locked-out USER (e.g. they deleted their passkey on the phone / in the OS keychain) requests recovery themselves at `/auth/recover/`: they enter their on-file email and the server mails a fresh passkey-enrollment link (a `RECOVER`-purpose `ActivationToken`). Clicking it runs the normal enrollment ceremony and signs them in. No admin or super-admin is involved in the common case. Implementation: `accounts.views.recover_start` + `templates/auth/recover.html`, linked from the login and registration pages.

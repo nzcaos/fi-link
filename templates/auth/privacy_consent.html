@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Datenschutzhinweise — Fichtelink{% endblock %}
+{% block content %}
+  <h1>Datenschutzhinweise</h1>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <p>
+    Bevor Sie Fichtelink weiter nutzen, bitten wir Sie, die
+    <a href="{% url 'datenschutz' %}" target="_blank" rel="noopener">Datenschutzhinweise</a>
+    zu lesen und einzuwilligen. Sie beschreiben, welche Daten wo, wie und wie lange
+    gespeichert werden.
+  </p>
+  <form method="post" action="{% url 'accounts:privacy_consent' %}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {% include "auth/_privacy_consent_field.html" %}
+    <p style="margin-top:1rem">
+      <button type="submit">Einwilligen und fortfahren</button>
+    </p>
+  </form>
+  <p class="hint" style="margin-top:1.5rem">
+    Sie möchten nicht einwilligen? Dann melden Sie sich ab und bitten den
+    Verantwortlichen (siehe Datenschutzhinweise) um Löschung Ihres Kontos.
+  </p>
+{% endblock %}
