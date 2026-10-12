@@ -472,6 +472,38 @@ class RegistrationGateTests(TestCase):
         )
 
 
+class RegisterTargetHintTests(TestCase):
+    """After a QR scan into a via_associate list (school class), the
+    registration form must say the data is the parent's own, not the child's."""
+
+    def _stash_join(self, mode):
+        from lists.models import List, ListJoinToken, ListTemplate
+
+        owner = _make_user(email="admin@example.org", given="Ada", family="Admin")
+        tpl = ListTemplate.objects.create(name=f"T-{mode}", member_subject_mode=mode)
+        lst = List.objects.create(title="Klasse 5a", email_alias=f"k-{mode}", template=tpl)
+        join = ListJoinToken.objects.create(list=lst, created_by=owner)
+        session = self.client.session
+        session["pending_join_token"] = join.token
+        session.save()
+
+    def test_via_associate_says_own_data_not_child(self):
+        from lists.models import ListTemplate
+
+        self._stash_join(ListTemplate.MemberSubjectMode.VIA_ASSOCIATE)
+        resp = self.client.get("/auth/register/")
+        self.assertContains(resp, "nicht</strong> die Ihres Kindes")
+        self.assertContains(resp, "Klasse 5a")
+
+    def test_self_mode_has_no_child_hint(self):
+        from lists.models import ListTemplate
+
+        self._stash_join(ListTemplate.MemberSubjectMode.SELF)
+        resp = self.client.get("/auth/register/")
+        self.assertNotContains(resp, "Ihres Kindes")
+        self.assertContains(resp, "Sie tragen sich selbst")
+
+
 class ProfileViewTests(TestCase):
     def setUp(self):
         self.person = Person.objects.create(

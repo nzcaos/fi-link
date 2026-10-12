@@ -153,6 +153,42 @@ def _registration_grant(request: HttpRequest) -> str | None:
     return None
 
 
+def _registration_target(request: HttpRequest) -> dict:
+    """Template context naming the list the visitor is about to join, and
+    whether its member is someone else (a child) — then the form must say
+    plainly that name + email are the *registering* person's own, because the
+    child is only captured in the wizard after login. Looked up from the same
+    session keys as `_registration_grant`; empty when nothing matches.
+    """
+    from lists.models import ListInviteToken, ListJoinToken, ListTemplate
+
+    lst, mode = None, None
+    join = ListJoinToken.objects.filter(
+        token=request.session.get("pending_join_token") or ""
+    ).select_related("list__template").first()
+    if join is not None:
+        lst, mode = join.list, join.list.template.member_subject_mode
+    else:
+        invite = ListInviteToken.objects.filter(
+            token=request.session.get("pending_invite_token") or ""
+        ).select_related("list").first()
+        if invite is not None:
+            lst, mode = invite.list, invite.mode
+    return {
+        "join_list": lst,
+        "via_associate": mode == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+    }
+
+
+def _render_register(request: HttpRequest, context: dict, status: int = 200) -> HttpResponse:
+    return render(
+        request,
+        "auth/register.html",
+        {**_registration_target(request), **context},
+        status=status,
+    )
+
+
 def _registration_closed_response(request: HttpRequest) -> HttpResponse:
     """Shown when someone reaches the registration form without an invitation.
     Logged with the client IP: the abuse left no trace in the database because
@@ -180,9 +216,8 @@ def register_start(request: HttpRequest) -> HttpResponse:
     if _registration_grant(request) is None:
         return _registration_closed_response(request)
     if request.method == "GET":
-        return render(
+        return _render_register(
             request,
-            "auth/register.html",
             {"email": (request.GET.get("email") or "").strip().lower() or None},
         )
 
@@ -190,18 +225,16 @@ def register_start(request: HttpRequest) -> HttpResponse:
     given_name = (request.POST.get("given_name") or "").strip()
     family_name = (request.POST.get("family_name") or "").strip()
     if not email or not given_name or not family_name:
-        return render(
+        return _render_register(
             request,
-            "auth/register.html",
             {"error": "Bitte Vor-/Nachname und E-Mail angeben."},
             status=400,
         )
     if not request.POST.get("privacy_consent"):
         # Consent precedes storage: nothing is written before the box is
         # ticked (Art. 6 Abs. 1 lit. a DSGVO).
-        return render(
+        return _render_register(
             request,
-            "auth/register.html",
             {
                 "error": "Bitte bestätigen Sie die Datenschutzhinweise.",
                 "email": email,
@@ -236,9 +269,8 @@ def register_start(request: HttpRequest) -> HttpResponse:
 
     existing = Person.objects.filter(email__iexact=email, user__isnull=False).exists()
     if existing:
-        return render(
+        return _render_register(
             request,
-            "auth/register.html",
             {
                 "info": (
                     "Mit dieser Adresse ist bereits mindestens ein Konto verknüpft. "

@@ -20,13 +20,23 @@
       Passkey verloren? <a href="{% url 'accounts:recover' %}">Zugang zu bestehendem Konto wiederherstellen</a>.
     </p>
   {% else %}
+    {% if via_associate %}
+      <div class="info">
+        Bitte tragen Sie hier <strong>Ihre eigenen</strong> Angaben ein — als
+        Elternteil bzw. Bezugsperson, <strong>nicht</strong> die Ihres Kindes.
+        Ihr Kind erfassen Sie im nächsten Schritt, nachdem Sie sich angemeldet
+        haben{% if join_list %} (Liste „{{ join_list.title }}"){% endif %}.
+      </div>
+    {% elif join_list %}
+      <p style="color:#666">Sie tragen sich selbst in „{{ join_list.title }}" ein.</p>
+    {% endif %}
     <form method="post" action="{% url 'accounts:register_start' %}">
       {% csrf_token %}
-      <label for="given_name">Vorname</label>
+      <label for="given_name">Ihr Vorname</label>
       <input type="text" id="given_name" name="given_name" value="{{ given_name|default_if_none:'' }}" required>
-      <label for="family_name">Nachname</label>
+      <label for="family_name">Ihr Nachname</label>
       <input type="text" id="family_name" name="family_name" value="{{ family_name|default_if_none:'' }}" required>
-      <label for="email">E-Mail-Adresse</label>
+      <label for="email">Ihre E-Mail-Adresse</label>
       <input type="email" id="email" name="email" value="{{ email|default_if_none:'' }}" autocomplete="email" required>
       <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">
         Ihre E-Mail wird für die Kommunikation mit Ihnen verwendet und nur sichtbar,
