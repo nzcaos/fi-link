@@ -40,6 +40,11 @@
   {% endcomment %}
   <hr>
   <div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem">
+    {% if can_add_associate %}
+      <a href="{% url 'lists:record_add_associate' pk=list_obj.pk record_pk=record.pk %}">
+        <button type="button" class="secondary">Weitere Bezugsperson hinzufügen</button>
+      </a>
+    {% endif %}
     {% if can_transfer %}
       <a href="{% url 'lists:transfer_initiate' pk=list_obj.pk record_pk=record.pk %}">
         <button type="button" class="secondary">{% if list_obj.template.member_subject_mode == 'via_associate' %}In eine andere Klasse umziehen{% else %}In eine andere Liste umziehen{% endif %}</button>

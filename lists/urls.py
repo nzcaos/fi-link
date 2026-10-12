@@ -31,6 +31,11 @@ urlpatterns = [
     ),
     path("<int:pk>/records/<int:record_pk>/edit/", views.record_edit, name="record_edit"),
     path(
+        "<int:pk>/records/<int:record_pk>/add-associate/",
+        views.record_add_associate,
+        name="record_add_associate",
+    ),
+    path(
         "<int:pk>/records/<int:record_pk>/transfer/",
         views.transfer_initiate,
         name="transfer_initiate",

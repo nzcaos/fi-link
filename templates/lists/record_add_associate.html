@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Bezugsperson hinzufügen — {{ list_obj.title }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=record.pk %}">← Zurück zum Eintrag</a></p>
+  <h1>Bezugsperson hinzufügen</h1>
+  <p style="color:#666">
+    Weitere Bezugsperson (z. B. zweiter Elternteil) für
+    <strong>{{ record.subject }}</strong> in „{{ list_obj.title }}". Sie legen
+    die Angaben stellvertretend an; die Person kann ihren Eintrag später per
+    Einladung selbst übernehmen.
+  </p>
+
+  {% if form.non_field_errors %}
+    <div class="error">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <fieldset style="border:1px solid #ddd;padding:0.75rem 1rem;margin-bottom:1rem">
+      <legend style="font-weight:500">Bezugsperson</legend>
+
+      <label for="{{ form.given_name.id_for_label }}">{{ form.given_name.label }}</label>
+      {{ form.given_name }}
+      {% if form.given_name.errors %}<div class="error">{{ form.given_name.errors }}</div>{% endif %}
+
+      <label for="{{ form.family_name.id_for_label }}">{{ form.family_name.label }}</label>
+      {{ form.family_name }}
+      {% if form.family_name.errors %}<div class="error">{{ form.family_name.errors }}</div>{% endif %}
+
+      <label for="{{ form.role.id_for_label }}">{{ form.role.label }}</label>
+      {{ form.role }}
+      {% if form.role.errors %}<div class="error">{{ form.role.errors }}</div>{% endif %}
+
+      <label for="{{ form.email.id_for_label }}">{{ form.email.label }}</label>
+      {{ form.email }}
+      <p style="font-size:0.85rem;color:#555;margin:0.25rem 0 0">{{ form.email.help_text }}</p>
+      {% if form.email.errors %}<div class="error">{{ form.email.errors }}</div>{% endif %}
+
+      {% for attribute, value_field in form.iter_attribute_rows %}
+        <label for="{{ value_field.id_for_label }}">{{ value_field.label }}</label>
+        {{ value_field }}
+        {% if value_field.errors %}<div class="error">{{ value_field.errors }}</div>{% endif %}
+      {% endfor %}
+    </fieldset>
+
+    <p>
+      <button type="submit">Hinzufügen</button>
+      <a href="{% url 'lists:record_edit' pk=list_obj.pk record_pk=record.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
+    </p>
+  </form>
+{% endblock %}

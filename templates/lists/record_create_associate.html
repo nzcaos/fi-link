@@ -67,7 +67,7 @@
       </label>
       {% if form.add_second_parent.errors %}<div class="error">{{ form.add_second_parent.errors }}</div>{% endif %}
 
-      <div style="margin-top:0.5rem">
+      <div id="second-parent-fields" style="margin-top:0.5rem">
         <label for="{{ form.p2_given_name.id_for_label }}">{{ form.p2_given_name.label }}</label>
         {{ form.p2_given_name }}
         {% if form.p2_given_name.errors %}<div class="error">{{ form.p2_given_name.errors }}</div>{% endif %}
@@ -93,9 +93,35 @@
       </div>
     </fieldset>
 
+    <p style="font-size:0.85rem;color:#555">
+      Eine zweite Bezugsperson können Sie auch später noch in der
+      Bearbeiten-Ansicht des Eintrags hinzufügen.
+    </p>
+
     <p>
       <button type="submit">Anlegen</button>
       <a href="{% url 'lists:detail' pk=list_obj.pk %}"><button type="button" class="secondary">Abbrechen</button></a>
     </p>
   </form>
+
+  {% comment %}
+    Second-parent fields are only shown (and submitted) while the box is
+    ticked — typed-in data with the box unticked used to be dropped silently.
+    Without JS the fields stay visible and AssociateWizardForm.clean() asks.
+  {% endcomment %}
+  <script>
+    (function () {
+      var box = document.getElementById("{{ form.add_second_parent.id_for_label }}");
+      var block = document.getElementById("second-parent-fields");
+      if (!box || !block) return;
+      function sync() {
+        block.hidden = !box.checked;
+        block.querySelectorAll("input, select, textarea").forEach(function (el) {
+          el.disabled = !box.checked;
+        });
+      }
+      box.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
 {% endblock %}

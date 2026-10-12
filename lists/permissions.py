@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from django.db.models import Q, QuerySet
 
-from .models import List, ListAccess, ListAdmin, ListRecord, RecordManager
+from .models import List, ListAccess, ListAdmin, ListRecord, ListTemplate, RecordManager
 
 
 def is_super_admin(user) -> bool:
@@ -211,6 +211,24 @@ def can_user_edit_record(user, record: ListRecord) -> bool:
     if ListAdmin.objects.filter(list=record.list, user=user).exists():
         return True
     return False
+
+
+def can_user_add_associate(user, record: ListRecord) -> bool:
+    """Who may add a further parent/guardian to a child (`member`) record of a
+    `via_associate` list: the child's RecordManagers (guardians) and the
+    super-admin. Pure ListAdmins do not — linking a person to someone else's
+    child is a household decision, like the visibility matrix (CLAUDE.md /
+    *Who may edit the visibility matrix*).
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if record.archived_at is not None or record.role != ListRecord.Role.MEMBER:
+        return False
+    if record.list.template.member_subject_mode != ListTemplate.MemberSubjectMode.VIA_ASSOCIATE:
+        return False
+    if user.is_superuser:
+        return True
+    return RecordManager.objects.filter(record=record, user=user).exists()
 
 
 # ---------------------------------------------------------------------------

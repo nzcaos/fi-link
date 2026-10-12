@@ -22,6 +22,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .forms import (
+    AddAssociateForm,
     AdminInviteForm,
     AssociateWizardForm,
     CohortEditForm,
@@ -83,6 +84,7 @@ def _sanitize_header_value(value: str, max_length: int = 200) -> str:
     return " ".join((value or "").split())[:max_length]
 from .permissions import (
     accessible_lists_for,
+    can_user_add_associate,
     can_user_admin_list,
     can_user_decide_transfer,
     can_user_edit_record,
@@ -575,7 +577,40 @@ def record_edit(request, pk: int, record_pk: int):
             "record": record,
             "sections": sections,
             "can_transfer": can_user_initiate_transfer(request.user, record),
+            "can_add_associate": can_user_add_associate(request.user, record),
         },
+    )
+
+
+@login_required
+def record_add_associate(request, pk: int, record_pk: int):
+    """Add a further parent/guardian to an existing child record — for when
+    the second parent was skipped in the onboarding wizard (or a new guardian
+    joins later). Lands back on the child's combined family edit dialog,
+    where the new parent's section now appears.
+    """
+    lst = get_object_or_404(List, pk=pk)
+    record = get_object_or_404(ListRecord, pk=record_pk, list=lst)
+    if not can_user_add_associate(request.user, record):
+        return HttpResponseForbidden("Sie dürfen hier keine Bezugsperson hinzufügen.")
+
+    form = AddAssociateForm(
+        request.POST if request.method == "POST" else None,
+        record=record,
+        user=request.user,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            assoc = form.save()
+        except ValidationError as exc:
+            messages.error(request, " ".join(exc.messages))
+        else:
+            messages.success(request, f'„{assoc.subject}" wurde als Bezugsperson hinzugefügt.')
+            return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
+    return render(
+        request,
+        "lists/record_add_associate.html",
+        {"list_obj": lst, "record": record, "form": form},
     )
 
 

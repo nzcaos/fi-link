@@ -615,6 +615,75 @@ def _attr_value_str(attribute: ListAttribute, raw) -> str:
     return str(raw)
 
 
+def _write_associate_values(list_obj: List, cleaned_data: dict, record, attrs: dict, prefix: str) -> None:
+    """Write a freshly created wizard record's attribute values plus the
+    school-class default grants. Shared by the onboarding wizard and the
+    add-associate form."""
+    for pk, attribute in attrs.items():
+        value_str = _attr_value_str(attribute, cleaned_data.get(f"{prefix}{pk}"))
+        # Same choice-cap gate as RecordEditForm. The record was just
+        # created and holds no values yet, so excluding it is a no-op here,
+        # but it keeps the call shape identical and correct if re-run; when
+        # both parents pick the same capped value in one wizard submit, the
+        # first parent's freshly-written value is counted for the second
+        # (same transaction sees its own writes) → the second is rejected.
+        _enforce_choice_cap(
+            attribute, list_obj, value_str,
+            exclude_record_pks=(record.pk,),
+        )
+        ListRecordValue.objects.create(
+            record=record,
+            attribute=attribute,
+            value=value_str,
+        )
+        # School-class density: a via_associate list reproduces the paper
+        # class list, where address/phone are visible to the class (see
+        # CLAUDE.md / *List display defaults*). The matrix is not part of
+        # this wizard, so without a default grant these fields would stay
+        # hidden to every non-privileged member. Grant each non-public
+        # attribute to the list's own Benutzergruppe (audience = the list).
+        # `must_be_public` attrs are always visible (no row needed); the
+        # name sentinel is defaulted public by the post_save signal and the
+        # email sentinel stays opt-in — neither is touched here.
+        if not attribute.must_be_public:
+            ListRecordAccess.objects.get_or_create(
+                record=record,
+                attribute=attribute,
+                audience=list_obj,
+            )
+
+
+def _create_proxy_associate(
+    *, list_obj: List, child: Person, user, given_name: str, family_name: str,
+    email: str | None, role: str, cleaned_data: dict, attrs: dict, prefix: str,
+) -> ListRecord:
+    """A further parent captured by `user` as proxy: a new PERSON (not a USER)
+    with their own associate record, linked to the child, managed by `user`
+    (basis=creator). They can later take the record over via an invitation."""
+    person = Person.objects.create(
+        given_name=given_name.strip(),
+        family_name=family_name.strip(),
+        email=email or None,
+    )
+    record = ListRecord.objects.create(
+        list=list_obj,
+        subject=person,
+        role=ListRecord.Role.ASSOCIATE,
+    )
+    PersonRelationship.objects.create(
+        subject_person=child,
+        related_person=person,
+        role=role,
+    )
+    RecordManager.objects.create(
+        record=record,
+        user=user,
+        basis=RecordManager.Basis.CREATOR,
+    )
+    _write_associate_values(list_obj, cleaned_data, record, attrs, prefix)
+    return record
+
+
 class AssociateWizardForm(forms.Form):
     """Single-page onboarding wizard for `via_associate` lists.
 
@@ -744,41 +813,19 @@ class AssociateWizardForm(forms.Form):
                         f"{label} der zweiten Bezugsperson ist erforderlich, "
                         "wenn Sie eine zweite Bezugsperson hinzufügen.",
                     )
+        elif cleaned.get("p2_given_name") or cleaned.get("p2_family_name"):
+            # Without JS the second-parent fields stay editable even when the
+            # box is unticked; silently dropping what was typed there lost the
+            # second parent. Ask instead.
+            self.add_error(
+                "add_second_parent",
+                "Sie haben Angaben zur zweiten Bezugsperson eingetragen. Setzen "
+                "Sie den Haken, um sie anzulegen — oder leeren Sie die Felder.",
+            )
         return cleaned
 
     def _write_values(self, record, attrs: dict, prefix: str) -> None:
-        for pk, attribute in attrs.items():
-            value_str = _attr_value_str(attribute, self.cleaned_data.get(f"{prefix}{pk}"))
-            # Same choice-cap gate as RecordEditForm. The record was just
-            # created and holds no values yet, so excluding it is a no-op here,
-            # but it keeps the call shape identical and correct if re-run; when
-            # both parents pick the same capped value in one wizard submit, the
-            # first parent's freshly-written value is counted for the second
-            # (same transaction sees its own writes) → the second is rejected.
-            _enforce_choice_cap(
-                attribute, self.list_obj, value_str,
-                exclude_record_pks=(record.pk,),
-            )
-            ListRecordValue.objects.create(
-                record=record,
-                attribute=attribute,
-                value=value_str,
-            )
-            # School-class density: a via_associate list reproduces the paper
-            # class list, where address/phone are visible to the class (see
-            # CLAUDE.md / *List display defaults*). The matrix is not part of
-            # this wizard, so without a default grant these fields would stay
-            # hidden to every non-privileged member. Grant each non-public
-            # attribute to the list's own Benutzergruppe (audience = the list).
-            # `must_be_public` attrs are always visible (no row needed); the
-            # name sentinel is defaulted public by the post_save signal and the
-            # email sentinel stays opt-in — neither is touched here.
-            if not attribute.must_be_public:
-                ListRecordAccess.objects.get_or_create(
-                    record=record,
-                    attribute=attribute,
-                    audience=self.list_obj,
-                )
+        _write_associate_values(self.list_obj, self.cleaned_data, record, attrs, prefix)
 
     @transaction.atomic
     def save(self) -> ListRecord:
@@ -837,30 +884,72 @@ class AssociateWizardForm(forms.Form):
         # 4) Optional second parent: a new PERSON (not a USER) with their own
         #    associate record, managed by the registering user as proxy creator.
         if self.cleaned_data.get("add_second_parent"):
-            p2_person = Person.objects.create(
-                given_name=self.cleaned_data["p2_given_name"].strip(),
-                family_name=self.cleaned_data["p2_family_name"].strip(),
-                email=self.cleaned_data.get("p2_email") or None,
-            )
-            p2_record = ListRecord.objects.create(
-                list=self.list_obj,
-                subject=p2_person,
-                role=ListRecord.Role.ASSOCIATE,
-            )
-            PersonRelationship.objects.create(
-                subject_person=child,
-                related_person=p2_person,
-                role=self.cleaned_data["p2_role"],
-            )
-            RecordManager.objects.create(
-                record=p2_record,
+            _create_proxy_associate(
+                list_obj=self.list_obj,
+                child=child,
                 user=self.user,
-                basis=RecordManager.Basis.CREATOR,
+                given_name=self.cleaned_data["p2_given_name"],
+                family_name=self.cleaned_data["p2_family_name"],
+                email=self.cleaned_data.get("p2_email"),
+                role=self.cleaned_data["p2_role"],
+                cleaned_data=self.cleaned_data,
+                attrs=self._associate_attrs,
+                prefix=_P2_ATTR_PREFIX,
             )
-            self._write_values(p2_record, self._associate_attrs, _P2_ATTR_PREFIX)
 
         # The view lands on the child record's edit form for refinement.
         return record
+
+
+class AddAssociateForm(forms.Form):
+    """Add a further parent/guardian to an existing child (`member`) record in
+    a `via_associate` list — the after-the-fact counterpart of the wizard's
+    second-parent block. Same semantics: a PERSON without USER, own associate
+    record, managed by the adding user as proxy creator.
+    """
+
+    given_name = forms.CharField(label="Vorname", max_length=200)
+    family_name = forms.CharField(label="Nachname", max_length=200)
+    role = forms.ChoiceField(label="Rolle", choices=[])
+    email = forms.EmailField(
+        label="E-Mail (optional)",
+        required=False,
+        help_text=AssociateWizardForm.base_fields["p2_email"].help_text,
+    )
+
+    def __init__(self, *args, record: ListRecord, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.record = record
+        self.list_obj = record.list
+        self.user = user
+        roles = self.list_obj.template.relationship_roles or _DEFAULT_ROLES
+        self.fields["role"].choices = [("", "—")] + [(r, r) for r in roles]
+        self._associate_attrs: dict[int, ListAttribute] = {}
+        for attribute in self.list_obj.template.attributes.all():
+            if attribute.applies_to_role == ListAttribute.AppliesTo.ASSOCIATE:
+                self._associate_attrs[attribute.pk] = attribute
+                field = _build_field_for_attribute(attribute)
+                field.required = False  # as for the wizard's second parent
+                self.fields[f"{_ATTR_FIELD_PREFIX}{attribute.pk}"] = field
+
+    def iter_attribute_rows(self):
+        for pk, attribute in self._associate_attrs.items():
+            yield attribute, self[f"{_ATTR_FIELD_PREFIX}{pk}"]
+
+    @transaction.atomic
+    def save(self) -> ListRecord:
+        return _create_proxy_associate(
+            list_obj=self.list_obj,
+            child=self.record.subject,
+            user=self.user,
+            given_name=self.cleaned_data["given_name"],
+            family_name=self.cleaned_data["family_name"],
+            email=self.cleaned_data.get("email"),
+            role=self.cleaned_data["role"],
+            cleaned_data=self.cleaned_data,
+            attrs=self._associate_attrs,
+            prefix=_ATTR_FIELD_PREFIX,
+        )
 
 
 # ---------------------------------------------------------------------------

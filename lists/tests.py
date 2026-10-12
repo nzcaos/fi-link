@@ -2480,6 +2480,70 @@ class AssociateWizardMultiPersonTests(TestCase):
         )  # atomic: nothing created
         self.assertFalse(Person.objects.filter(given_name="Lina").exists())
 
+    def test_second_parent_data_without_tick_is_rejected_not_dropped(self):
+        # Regression: with JS off (or before the toggle existed) the p2 fields
+        # were editable without the box ticked, and the typed-in parent was
+        # silently lost. Now the form asks instead of saving.
+        resp = self._post(p2_given_name="Olaf", p2_family_name="Mueller", p2_role="Vater von")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Setzen Sie den Haken")
+        self.assertFalse(Person.objects.filter(given_name="Lina").exists())
+        self.assertFalse(Person.objects.filter(given_name="Olaf").exists())
+
+    def test_add_associate_later_from_child_record(self):
+        self._post()
+        child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        url = reverse(
+            "lists:record_add_associate",
+            kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk},
+        )
+        self.assertEqual(self.client.get(url).status_code, 200)
+        resp = self.client.post(url, {
+            "given_name": "Olaf", "family_name": "Mueller", "role": "Vater von",
+            "email": "olaf@example.test",
+            f"attr_{self.attr_phone.pk}": "+49 222",
+        })
+        self.assertRedirects(
+            resp,
+            reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk}),
+        )
+        p2 = Person.objects.get(given_name="Olaf")
+        self.assertFalse(User.objects.filter(person=p2).exists())
+        self.assertTrue(PersonRelationship.objects.filter(
+            subject_person=child_rec.subject, related_person=p2, role="Vater von",
+        ).exists())
+        p2_rec = ListRecord.objects.get(list=self.lst, subject=p2, role=ListRecord.Role.ASSOCIATE)
+        self.assertTrue(RecordManager.objects.filter(
+            record=p2_rec, user=self.parent, basis=RecordManager.Basis.CREATOR,
+        ).exists())
+        self.assertEqual(
+            {v.attribute_id: v.value for v in p2_rec.values.all()}.get(self.attr_phone.pk),
+            "+49 222",
+        )
+        # Shows up in the composed class-list row next to the first parent.
+        rows = build_composed_rows(self.parent, self.lst)
+        self.assertEqual(len(rows[0]["parents"]), 2)
+
+    def test_add_associate_requires_guardian(self):
+        self._post()
+        child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        url = reverse(
+            "lists:record_add_associate",
+            kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk},
+        )
+        # A plain list admin is not the child's guardian → no.
+        admin = _make_user(username="admin", given="Ada", family="Admin")
+        ListAdmin.objects.create(list=self.lst, user=admin)
+        self.client.force_login(admin)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        # Associate records can't be the anchor.
+        p1_rec = ListRecord.objects.get(list=self.lst, subject=self.parent.person)
+        self.client.force_login(self.parent)
+        self.assertEqual(self.client.get(reverse(
+            "lists:record_add_associate",
+            kwargs={"pk": self.lst.pk, "record_pk": p1_rec.pk},
+        )).status_code, 403)
+
     def test_sibling_reuses_parent_associate_record(self):
         self._post(given_name="Lina")
         self._post(given_name="Tom")
