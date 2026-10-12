@@ -153,6 +153,16 @@ def _registration_grant(request: HttpRequest) -> str | None:
     return None
 
 
+def _pending_grant(request: HttpRequest) -> dict:
+    """The invitation behind this registration as ActivationToken kwargs, so
+    `register_passkey_finish` can resume the join in whatever browser the
+    activation link is opened in."""
+    key = _registration_grant(request)
+    if key is None:
+        return {}
+    return {"pending_key": key, "pending_token": request.session.get(key) or ""}
+
+
 def _registration_target(request: HttpRequest) -> dict:
     """Template context naming the list the visitor is about to join, and
     whether its member is someone else (a child) — then the form must say
@@ -264,7 +274,9 @@ def register_start(request: HttpRequest) -> HttpResponse:
         .first()
     )
     if pending is not None:
-        token = ActivationToken.issue(person=pending.person, email=email, user=pending)
+        token = ActivationToken.issue(
+            person=pending.person, email=email, user=pending, **_pending_grant(request)
+        )
         return _send_activation_mail(request, token=token, given_name=given_name, email=email)
 
     existing = Person.objects.filter(email__iexact=email, user__isnull=False).exists()
@@ -323,7 +335,9 @@ def _create_stub_and_send(
             privacy_consent_at=timezone.now(),
             privacy_consent_version=settings.PRIVACY_POLICY_VERSION,
         )
-        token = ActivationToken.issue(person=person, email=email, user=user)
+        token = ActivationToken.issue(
+            person=person, email=email, user=user, **_pending_grant(request)
+        )
     return _send_activation_mail(request, token=token, given_name=given_name, email=email)
 
 
@@ -547,6 +561,12 @@ def register_passkey_finish(request: HttpRequest) -> JsonResponse:
         activation.save(update_fields=["consumed_at"])
 
     auth_login(request, user, backend=DEFAULT_BACKEND)
+    # Activation link opened in a browser without the registration session
+    # (mail app, other device): resume the invitation stored on the token.
+    if activation.pending_key and not any(
+        request.session.get(k) for k in _PENDING_SESSION_KEYS
+    ):
+        request.session[activation.pending_key] = activation.pending_token
     return JsonResponse({"redirect": _next_url_after_auth(request, default=reverse("accounts:passkeys"))})
 
 
@@ -746,16 +766,36 @@ def _json_options(options_json: str) -> JsonResponse:
     return JsonResponse(json.loads(options_json))
 
 
+_PENDING_SESSION_KEYS = (
+    "pending_invite_token",
+    "pending_join_token",
+    "pending_admin_invite_token",
+    "pending_form_token",
+)
+
+
 def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
     """If the session carries a pending list-join handoff (set by the lists
     app when an invite or QR-join click landed on register/login), continue
     to the matching handler so the join is finalised in one user-visible flow.
+
+    A QR join is completed right here — the visitor already confirmed it
+    before registering, and we run inside the passkey ceremony's POST — so
+    the new account is in the list even if they never click on afterwards.
     """
     pending_invite = request.session.pop("pending_invite_token", None)
     if pending_invite:
         return reverse("lists:invite_accept", kwargs={"token": pending_invite})
     pending_join = request.session.pop("pending_join_token", None)
     if pending_join:
+        from lists.models import ListJoinToken
+        from lists.views import complete_qr_join
+
+        join = ListJoinToken.objects.select_related("list__template").filter(
+            token=pending_join
+        ).first()
+        if join is not None and join.is_usable and join.list.archived_at is None:
+            return complete_qr_join(request, join)
         return reverse("lists:join_via_token", kwargs={"token": pending_join})
     pending_admin = request.session.pop("pending_admin_invite_token", None)
     if pending_admin:

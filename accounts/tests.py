@@ -504,6 +504,63 @@ class RegisterTargetHintTests(TestCase):
         self.assertContains(resp, "Sie tragen sich selbst")
 
 
+class ActivationResumesInvitationTests(TestCase):
+    """The QR join used to live only in the session. An activation link opened
+    in another browser (mail app's in-app browser, second device) lost it and
+    left a fresh account without its list. The invitation now rides on the
+    ActivationToken and is resumed at enrolment."""
+
+    def setUp(self):
+        from lists.models import List, ListJoinToken, ListTemplate
+
+        owner = _make_user(email="admin@example.org", given="Ada", family="Admin")
+        tpl = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        self.lst = List.objects.create(title="Klasse 5a", email_alias="5a-resume", template=tpl)
+        self.join = ListJoinToken.objects.create(list=self.lst, created_by=owner)
+
+    def test_registration_stores_invitation_on_token(self):
+        session = self.client.session
+        session["pending_join_token"] = self.join.token
+        session.save()
+        self.client.post("/auth/register/", {
+            "email": "neu@example.org", "given_name": "Nina", "family_name": "Neu",
+            "privacy_consent": "on",
+        })
+        tok = ActivationToken.objects.get(email="neu@example.org")
+        self.assertEqual(tok.pending_key, "pending_join_token")
+        self.assertEqual(tok.pending_token, self.join.token)
+
+    def test_enrolment_in_fresh_browser_still_joins_the_list(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from lists.models import ListAccess
+
+        person = Person.objects.create(given_name="Nina", family_name="Neu", email="neu@example.org")
+        user = User.objects.create_user(person=person, username=random_username(), is_active=False)
+        tok = ActivationToken.issue(
+            person=person, email=person.email, user=user,
+            pending_key="pending_join_token", pending_token=self.join.token,
+        )
+        fake = SimpleNamespace(credential_id=b"cred-1", public_key=b"\x00", sign_count=0, transports=[])
+        # A brand-new client: no session from the QR scan at all.
+        with patch("accounts.views.finish_registration", return_value=fake):
+            resp = self.client.post(
+                reverse("accounts:register_passkey_finish"),
+                data=json.dumps({"token": tok.token, "credential": {"id": "x"}}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(
+            resp.json()["redirect"],
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}),
+        )
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=user).exists())
+
+
 class ProfileViewTests(TestCase):
     def setUp(self):
         self.person = Person.objects.create(

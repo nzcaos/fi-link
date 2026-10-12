@@ -114,5 +114,13 @@
     <p style="margin-top:1.5rem">
       <a href="{% url 'lists:record_create_self' pk=list_obj.pk %}" class="btn">Mich eintragen</a>
     </p>
+  {% elif list_obj.template.member_subject_mode == 'via_associate' and not own_record %}
+    {% comment %}
+      Joined (QR / invite) but the child wizard was never finished — the
+      parent's own associate record only exists after it. Same CTA idea.
+    {% endcomment %}
+    <p style="margin-top:1.5rem">
+      <a href="{% url 'lists:record_create_associate' pk=list_obj.pk %}" class="btn">Mein Kind eintragen</a>
+    </p>
   {% endif %}
 {% endblock %}

@@ -1404,6 +1404,14 @@ class InviteViaAssociateRoutingTests(TestCase):
         self.assertIsNone(token.consumed_at)
         self.assertFalse(ListRecord.objects.filter(list=self.lst).exists())
 
+    def test_accepting_invite_joins_before_wizard(self):
+        token = self._invite(target_person=self.parent.person)
+        self.client.force_login(self.parent)
+        self.client.post(reverse("lists:invite_accept", kwargs={"token": token.token}))
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=self.parent).exists())
+        token.refresh_from_db()
+        self.assertIsNone(token.consumed_at)  # still waits for the wizard save
+
     def test_wizard_save_consumes_invite_and_builds_child_row(self):
         token = self._invite(target_person=self.parent.person)
         self.client.force_login(self.parent)
@@ -2908,8 +2916,13 @@ class Phase3b2E2ETests(TestCase):
             self.client.session.get("wizard_grant_list_id"), self.assoc_list.pk
         )
 
-        # 2) Wizard GET renders for the visitor even though they have no
-        # ListAccess yet (the session marker grants access).
+        # The QR join alone makes the visitor a member — abandoning the
+        # wizard must not leave them without the list.
+        self.assertTrue(
+            ListAccess.objects.filter(list=self.assoc_list, user=self.visitor).exists()
+        )
+
+        # 2) Wizard GET renders for the visitor.
         resp = self.client.get(wizard_url)
         self.assertEqual(resp.status_code, 200)
 
@@ -2999,6 +3012,19 @@ class Phase3b2E2ETests(TestCase):
         req = _req()
         url = _next_url_after_auth(req, default="/lists/")
         self.assertEqual(url, "/lists/")
+
+        # Case 1b: a real, usable QR token is completed right here (we run in
+        # the passkey ceremony's POST) — the visitor is a member without
+        # having to click "Beitreten" once more.
+        tok = ListJoinToken.objects.create(list=self.assoc_list, created_by=self.admin_user)
+        req = SimpleNamespace(user=self.visitor, session={"pending_join_token": tok.token})
+        url = _next_url_after_auth(req, default="/lists/")
+        self.assertEqual(
+            url, reverse("lists:record_create_associate", kwargs={"pk": self.assoc_list.pk})
+        )
+        self.assertTrue(
+            ListAccess.objects.filter(list=self.assoc_list, user=self.visitor).exists()
+        )
 
         # Case 4: both present → invite wins, join is left behind for the
         # next ceremony (invite owns this round).

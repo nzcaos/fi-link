@@ -312,6 +312,13 @@ class ActivationToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     consumed_at = models.DateTimeField("eingelöst am", null=True, blank=True)
+    # The invitation (QR join / list invite / admin invite / form link) the
+    # registration was started from: session key + token. The join used to
+    # live only in the session, so an activation link opened in another
+    # browser (mail app's in-app browser, second device) lost it and left a
+    # fresh account without its list. Restored into the session on enrolment.
+    pending_key = models.CharField("Einladung (Art)", max_length=40, blank=True)
+    pending_token = models.CharField("Einladung (Token)", max_length=64, blank=True)
 
     class Meta:
         verbose_name = "Aktivierungs-Token"
@@ -333,6 +340,8 @@ class ActivationToken(models.Model):
         purpose: str = Purpose.ACTIVATE,
         ttl: timedelta = timedelta(days=7),
         user: "User | None" = None,
+        pending_key: str = "",
+        pending_token: str = "",
     ) -> "ActivationToken":
         return cls.objects.create(
             person=person,
@@ -340,4 +349,6 @@ class ActivationToken(models.Model):
             email=email,
             purpose=purpose,
             expires_at=timezone.now() + ttl,
+            pending_key=pending_key,
+            pending_token=pending_token,
         )

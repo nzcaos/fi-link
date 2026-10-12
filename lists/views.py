@@ -316,6 +316,9 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
             return redirect("lists:detail", pk=invite.list_id)
 
         if invite.mode == ListInviteToken.Mode.VIA_ASSOCIATE:
+            # Accepting joins the Benutzergruppe right away (as for a QR
+            # join); only the token's consumption waits for the wizard save.
+            ListAccess.objects.get_or_create(list=invite.list, user=request.user)
             request.session["wizard_grant_list_id"] = invite.list_id
             request.session["wizard_invite_token"] = invite.token
             return redirect("lists:record_create_associate", pk=invite.list_id)
@@ -661,6 +664,25 @@ def revoke_join_token(request, pk: int, token: str):
     return redirect("lists:join_tokens", pk=lst.pk)
 
 
+def complete_qr_join(request, join_token: ListJoinToken) -> str:
+    """Finalize a QR join for the authenticated visitor and return where to go
+    next. Called from the join POST and — so the join cannot get lost between
+    registration and a later click — from `accounts.views._next_url_after_auth`
+    right after the passkey ceremony.
+
+    Either way the visitor is in the Benutzergruppe once this returns: a
+    `via_associate` joiner gets ListAccess *before* the wizard, so abandoning
+    it leaves them a member who can add their child later via "Mich eintragen"
+    — not a bare account with no list at all.
+    """
+    lst = join_token.list
+    if lst.template.member_subject_mode == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE:
+        ListAccess.objects.get_or_create(list=lst, user=request.user)
+        request.session["wizard_grant_list_id"] = lst.pk
+        return reverse("lists:record_create_associate", kwargs={"pk": lst.pk})
+    return _join_self_mode(request, lst).url
+
+
 def _join_self_mode(request, lst: List):
     """Finalize a self-mode QR join for the authenticated visitor: ensure a
     LIST_RECORD with role=member, subject=user.person exists, then redirect to
@@ -670,6 +692,7 @@ def _join_self_mode(request, lst: List):
         list=lst, subject_id=request.user.person_id, archived_at__isnull=True
     ).first()
     if existing is not None:
+        ListAccess.objects.get_or_create(list=lst, user=request.user)
         return redirect("lists:record_edit", pk=lst.pk, record_pk=existing.pk)
     with transaction.atomic():
         record = ListRecord.objects.create(
@@ -730,15 +753,7 @@ def join_via_token(request, token: str):
         if not request.user.is_authenticated:
             request.session["pending_join_token"] = join_token.token
             return redirect(reverse("accounts:register_start"))
-        if (
-            lst.template.member_subject_mode
-            == ListTemplate.MemberSubjectMode.VIA_ASSOCIATE
-        ):
-            # The wizard reads the session marker to allow access even when
-            # the visitor is not yet in the list's Benutzergruppe.
-            request.session["wizard_grant_list_id"] = lst.pk
-            return redirect("lists:record_create_associate", pk=lst.pk)
-        return _join_self_mode(request, lst)
+        return redirect(complete_qr_join(request, join_token))
 
     # GET: render confirmation page, no side effects.
     if not request.user.is_authenticated:
