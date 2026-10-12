@@ -5708,3 +5708,61 @@ class PersonErasureTests(TestCase):
 
         call_command("delete_person", "--email", "anna@x.org", "--yes", stdout=StringIO())
         self.assertFalse(User.objects.filter(pk=self.parent.pk).exists())
+
+
+from .tasks import purge_archived_lists  # noqa: E402
+
+
+@override_settings(LIST_ARCHIVE_RETENTION_DAYS=365)
+class PurgeArchivedListsTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
+        )
+        self.super_ = _make_super()
+        self.long_ago = timezone.now() - timedelta(days=400)
+
+    def _list(self, alias, archived_at=None):
+        return List.objects.create(
+            title=alias, email_alias=alias, template=self.template, archived_at=archived_at
+        )
+
+    def test_purges_old_archived_list_and_orphaned_child_keeps_account(self):
+        k2 = self._list("k2", archived_at=self.long_ago)
+        parent = _make_user(username="mama", email="anna@x.org")
+        child = _person("Kind", "K")
+        PersonRelationship.objects.create(
+            subject_person=child, related_person=parent.person, role="Mutter von"
+        )
+        child_rec = ListRecord.objects.create(list=k2, subject=child)
+        ListRecordValue.objects.create(record=child_rec, attribute=self.attr, value="0170-1")
+        ListRecord.objects.create(list=k2, subject=parent.person, role=ListRecord.Role.ASSOCIATE)
+        ListAccess.objects.create(list=k2, user=parent)
+
+        purge_archived_lists.func(timestamp=0)
+
+        self.assertFalse(List.objects.filter(pk=k2.pk).exists())
+        self.assertFalse(ListRecordValue.objects.exists())
+        self.assertFalse(Person.objects.filter(pk=child.pk).exists())
+        self.assertTrue(User.objects.filter(pk=parent.pk).exists())
+
+    def test_child_with_record_elsewhere_is_kept(self):
+        old = self._list("10a", archived_at=self.long_ago)
+        active = self._list("k1")
+        child = _person("Kind", "K")
+        ListRecord.objects.create(list=old, subject=child, archived_at=self.long_ago)
+        ListRecord.objects.create(list=active, subject=child)
+        purge_archived_lists.func(timestamp=0)
+        self.assertTrue(Person.objects.filter(pk=child.pk).exists())
+        self.assertTrue(List.objects.filter(pk=active.pk).exists())
+
+    def test_keeps_recent_archive_and_alias_scope(self):
+        recent = self._list("k2a", archived_at=timezone.now() - timedelta(days=30))
+        scoped = self._list("eb", archived_at=self.long_ago)
+        AggregateAlias.objects.create(
+            email_alias="eltern", title="Eltern", scope_list=scoped, created_by=self.super_
+        )
+        purge_archived_lists.func(timestamp=0)
+        self.assertTrue(List.objects.filter(pk=recent.pk).exists())
+        self.assertTrue(List.objects.filter(pk=scoped.pk).exists())

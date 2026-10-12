@@ -171,6 +171,8 @@ Wichtig:
   Kohorten-Felder ändern sich. Nutzer und ihre Einträge bleiben verknüpft.
 - Bei Zusammenführungen wird eine neue K1-Liste angelegt und alle Einträge der
   Quelllisten umgehängt; die Quelllisten werden **archiviert** (schreibgeschützt).
+- Archivierte Listen (zusammengelegte Quelllisten, K2 nach dem Abschluss)
+  werden **12 Monate später automatisch gelöscht** — siehe Abschnitt 10.
 - Der **E-Mail-Alias rollt sofort mit** (`5a@…` → `6a@…`). **Keine
   Übergangsfrist:** ab Tag 1 funktioniert nur die neue Adresse, Mail an die alte
   bekommt eine Unzustellbarkeitsmeldung.
@@ -272,11 +274,19 @@ Sie müssen nichts anstoßen — der `worker` räumt nachts automatisch auf:
 | Erledigte Aufträge der Versand-Warteschlange (enthalten den Mail-Text) | 7 Tagen | `TASK_JOB_RETENTION_DAYS` |
 | Abgelaufene oder eingelöste Einladungs-, Aktivierungs- und QR-Links | 30 Tagen nach Ablauf/Einlösung | `TOKEN_RETENTION_DAYS` |
 | Abgelaufene Anmelde-Sitzungen | täglich | — |
+| Archivierte Listen samt Einträgen; Kinder ohne Konto, die dann in keiner Liste mehr stehen | 12 Monaten nach Archivierung | `LIST_ARCHIVE_RETENTION_DAYS` |
 | Container-Logs | rotierend, max. 3 × 10 MB je Dienst | `docker-compose.yml` |
 | Datenbank-Backups | 14 Tagen | `KEEP_DAYS` in `scripts/backup.sh` |
 
-**Nicht** automatisch gelöscht werden Konten, Listeneinträge (auch archivierte)
-und Formular-Eintragungen — die bleiben, bis eine Löschanfrage kommt.
+**Nicht** automatisch gelöscht werden Konten, archivierte Einträge in noch
+aktiven Listen (z. B. nach Austritt oder Klassenwechsel) und
+Formular-Eintragungen — die bleiben, bis eine Löschanfrage kommt.
+
+Eine archivierte Liste (K2 nach dem letzten Rollover, zusammengelegte 10er-
+bzw. 11er-Klassen) wird 12 Monate nach der Archivierung **endgültig gelöscht**,
+mit allen Einträgen. Die Eltern-Konten bleiben bestehen. Ausnahme: Ist die Liste
+Geltungsbereich eines Aggregat-Alias, wird sie übersprungen (Warnung im
+`worker`-Log) — Alias vorher umstellen oder löschen.
 
 > Ein alter, gedruckter QR-Code führt nach dem Aufräumen auf „Seite nicht
 > gefunden" statt auf „abgelaufen". Für neue Klassen einfach einen neuen

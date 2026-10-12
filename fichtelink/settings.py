@@ -201,6 +201,9 @@ TASK_JOB_RETENTION_DAYS = int(os.environ.get("TASK_JOB_RETENTION_DAYS", "7"))
 # Expired / consumed / revoked invitation, activation and QR-join tokens (each
 # carrying a target email address) are deleted this many days afterwards.
 TOKEN_RETENTION_DAYS = int(os.environ.get("TOKEN_RETENTION_DAYS", "30"))
+# Archived lists (K2 after the final rollover, merged-away source classes) are
+# deleted with their records this many days after archiving.
+LIST_ARCHIVE_RETENTION_DAYS = int(os.environ.get("LIST_ARCHIVE_RETENTION_DAYS", "365"))
 
 # --- Matrix messenger integration (docs/matrix-implementation-plan.md) ---
 # OFF by default so tests/CI and any pre-Phase-0 deploy never touch Matrix.

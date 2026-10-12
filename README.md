@@ -132,10 +132,11 @@ What is deleted automatically, and when (all via procrastinate periodic tasks in
 | Finished task-queue jobs (their args hold forwarded mail bodies) | 7 days | `TASK_JOB_RETENTION_DAYS` |
 | Expired / used invitation, activation and QR-join tokens | 30 days after expiry/use | `TOKEN_RETENTION_DAYS` |
 | Expired login sessions | daily | — |
+| Archived lists with all their records; children/co-parents without account left without any record | 365 days after archiving | `LIST_ARCHIVE_RETENTION_DAYS` |
 | Container logs | rotated at 3 × 10 MB per service | `x-logging` in `docker-compose.yml` |
 | Database dumps | 14 days | `KEEP_DAYS` in `scripts/backup.sh` |
 
-Log rotation only applies to containers created after the change — run `docker compose up -d --force-recreate` once. Old QR codes stop resolving (404 instead of "expired") once their token has been swept.
+Log rotation only applies to containers created after the change — run `docker compose up -d --force-recreate` once. Accounts (USERs) are never deleted by age — only on request via `delete_person`. A list that scopes an aggregate alias is skipped (warning in the worker log). Old QR codes stop resolving (404 instead of "expired") once their token has been swept.
 
 ### Deleting a person (DSGVO erasure request)
 

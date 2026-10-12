@@ -24,12 +24,16 @@ from django.utils import timezone
 from procrastinate import RetryStrategy
 from procrastinate.contrib.django import app
 
+from accounts.models import Person
+
 from .models import (
     AdminInviteToken,
+    AggregateAlias,
     InboundMessage,
     List,
     ListInviteToken,
     ListJoinToken,
+    ListRecord,
     MailReleaseToken,
     OutboundMessage,
 )
@@ -881,6 +885,44 @@ async def prune_finished_jobs(context, timestamp: int) -> None:
         include_cancelled=True,
         include_aborted=True,
     )
+
+
+@app.periodic(cron="11 4 * * *")
+@app.task(queueing_lock="purge_archived_lists", pass_context=False)
+def purge_archived_lists(timestamp: int) -> None:
+    """Delete lists archived more than LIST_ARCHIVE_RETENTION_DAYS ago (K2
+    after the last rollover, merged-away source classes).
+
+    Deleting a List cascades its records (encrypted values, visibility rows,
+    managers), memberships, admins, tokens, transfers and mail metadata.
+    Visibility rows on *other* records whose audience was this list go too —
+    that only ever narrows who sees what. PERSONs left behind with no USER and
+    no remaining record (children, proxy-captured co-parents) are deleted with
+    their relationships; PERSONs with a USER stay — accounts are erased on
+    request (`manage.py delete_person`), not by age.
+
+    A list that scopes an AggregateAlias is PROTECTed and skipped with a
+    warning; re-scope or delete the alias first. A Synapse room of a
+    matrix-enabled list is not torn down (MatrixRoom row cascades only).
+    """
+    cutoff = timezone.now() - timedelta(days=settings.LIST_ARCHIVE_RETENTION_DAYS)
+    for lst in List.objects.filter(archived_at__lt=cutoff):
+        if AggregateAlias.objects.filter(scope_list=lst).exists():
+            log.warning(
+                "purge_archived_lists: list=%d is scope of an aggregate alias — skipped",
+                lst.pk,
+            )
+            continue
+        list_id = lst.pk  # instance.delete() resets pk
+        with transaction.atomic():
+            subject_ids = set(
+                ListRecord.objects.filter(list=lst).values_list("subject_id", flat=True)
+            )
+            lst.delete()
+            orphans, _ = Person.objects.filter(
+                pk__in=subject_ids, user__isnull=True, records__isnull=True
+            ).delete()
+        log.info("purge_archived_lists: removed list=%d (+%d orphaned persons)", list_id, orphans)
 
 
 @app.periodic(cron="47 3 * * *")

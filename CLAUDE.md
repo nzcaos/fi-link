@@ -497,6 +497,7 @@ Prerequisite this exposes: `<MAIL_DOMAIN>` itself must have SPF + DKIM configure
 - **Local metadata (Inbound/Outbound rows):** keep 30–90 days for bounce correlation.
 - **Task-queue jobs:** finished procrastinate jobs are deleted after `TASK_JOB_RETENTION_DAYS` (7) — `send_outbound_message` carries the forwarded body in its args, so the job table must not outlive the mail metadata.
 - **Tokens and sessions:** expired/consumed invitation, activation and QR-join tokens are deleted `TOKEN_RETENTION_DAYS` (30) after they became unusable; expired Django sessions daily.
+- **Archived lists:** deleted `LIST_ARCHIVE_RETENTION_DAYS` (365) after `archived_at` (`purge_archived_lists`), cascading records, memberships and mail metadata; PERSONs left with no USER and no record are deleted too. USERs are never aged out. Lists scoping an `AGGREGATE_ALIAS` (PROTECT) are skipped.
 - **Logs:** container logs rotate by size (3 × 10 MB per service, `x-logging` in compose); routine INFO lines carry no mail addresses.
 - **Erasure:** `manage.py delete_person` (`lists/erasure.py`) is the only way to delete a PERSON — the PROTECT FKs on `User.person`, `ListRecord.subject` and the audit `created_by`/`invited_by` columns block plain ORM/admin deletes by design; the command deletes records first and reassigns audit references to a super-admin.
 
