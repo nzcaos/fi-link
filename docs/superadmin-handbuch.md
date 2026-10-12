@@ -23,7 +23,8 @@ Schuljahres-Übergang aus und ist letzte Stufe der Konto-Wiederherstellung.
 7. [Test-Mail senden](#7-test-mail-senden)
 8. [Formulare anlegen und klonen](#8-formulare-anlegen-und-klonen)
 9. [Konto-Wiederherstellung](#9-konto-wiederherstellung)
-10. [Sonderrechte gegenüber regulären Admins](#10-sonderrechte-gegenüber-regulären-admins)
+10. [Löschanfragen und Aufbewahrungsfristen](#10-löschanfragen-und-aufbewahrungsfristen)
+11. [Sonderrechte gegenüber regulären Admins](#11-sonderrechte-gegenüber-regulären-admins)
 
 ---
 
@@ -258,7 +259,82 @@ Familienbeziehungen bleiben erhalten.
 
 ---
 
-## 10. Sonderrechte gegenüber regulären Admins
+## 10. Löschanfragen und Aufbewahrungsfristen
+
+### Was das System selbst löscht
+
+Sie müssen nichts anstoßen — der `worker` räumt nachts automatisch auf:
+
+| Daten | Gelöscht nach | Einstellung (`.env`) |
+|---|---|---|
+| Verarbeitete Mails im Sammelpostfach (IMAP) | 7 Tagen | `IMAP_EXPUNGE_GRACE_DAYS` |
+| Mail-Kopien in der Datenbank (inkl. Anhänge) und Versand-Protokoll | 90 Tagen | `MAIL_METADATA_RETENTION_DAYS` |
+| Erledigte Aufträge der Versand-Warteschlange (enthalten den Mail-Text) | 7 Tagen | `TASK_JOB_RETENTION_DAYS` |
+| Abgelaufene oder eingelöste Einladungs-, Aktivierungs- und QR-Links | 30 Tagen nach Ablauf/Einlösung | `TOKEN_RETENTION_DAYS` |
+| Abgelaufene Anmelde-Sitzungen | täglich | — |
+| Container-Logs | rotierend, max. 3 × 10 MB je Dienst | `docker-compose.yml` |
+| Datenbank-Backups | 14 Tagen | `KEEP_DAYS` in `scripts/backup.sh` |
+
+**Nicht** automatisch gelöscht werden Konten, Listeneinträge (auch archivierte)
+und Formular-Eintragungen — die bleiben, bis eine Löschanfrage kommt.
+
+> Ein alter, gedruckter QR-Code führt nach dem Aufräumen auf „Seite nicht
+> gefunden" statt auf „abgelaufen". Für neue Klassen einfach einen neuen
+> QR-Code erzeugen.
+
+Ob die Aufräum-Jobs laufen, sehen Sie in der Datenbank:
+
+```bash
+docker compose exec db psql -U fichtelink fichtelink -c "select task_name, max(defer_timestamp) from procrastinate_periodic_defers group by 1 order by 1;"
+```
+
+### Eine Person löschen (Löschanfrage nach DSGVO)
+
+Eine Löschfunktion in der Oberfläche gibt es nicht; auch die
+Django-Administration verweigert das Löschen einer Person mit Einträgen. Bittet
+jemand um Löschung, verwenden Sie das Management-Kommando:
+
+```bash
+docker compose exec web python manage.py delete_person --email <adresse>
+```
+
+Ohne `--yes` ist das ein **Trockenlauf**: Das Kommando zeigt nur an, was es
+löschen würde. Prüfen Sie die Ausgabe und führen Sie es dann mit `--yes` erneut
+aus. Gelöscht werden:
+
+- die Person, ihr Konto (Passkeys, Mitgliedschaften, Admin-Rechte,
+  Formular-Eintragungen) und alle ihre Listeneinträge, auch archivierte;
+- **Kinder, die nur diese Person betreut** — sonst blieben Einträge zurück, die
+  niemand mehr pflegen kann — sowie ein zweiter Elternteil ohne eigenes Konto,
+  der nur für diese Kinder miterfasst wurde;
+- Mail-Kopien, Versand-Protokoll und Einladungen an die E-Mail-Adresse der
+  Person.
+
+Was die Person **für andere** angelegt hat (verschickte Einladungen, angelegte
+Formulare, Sendeberechtigungen, beantragte Umzüge), bleibt erhalten und wird auf
+einen Super-Admin übertragen — standardmäßig den ersten, sonst mit
+`--reassign-to <user-id>` einen bestimmten. Ein Formular dieser Person
+verwalten danach Sie.
+
+Sonderfälle:
+
+- **Geteiltes Familienpostfach:** Passt die E-Mail auf mehrere Personen,
+  listet das Kommando sie auf — erneut mit `--person-id <id>` ausführen. Mail-
+  Daten zu dieser Adresse bleiben dann stehen, weil der andere Elternteil sie
+  noch nutzt; sie laufen regulär nach 90 Tagen ab.
+- **Kind behalten:** Mit `--keep-children` bleiben die Kinder erhalten, z. B.
+  wenn der andere Elternteil das Kind demnächst übernehmen soll.
+- **Einziger Admin einer Liste:** Das Kommando warnt, wenn eine Liste dadurch
+  ihren letzten Admin verliert. Bestimmen Sie vorher einen Nachfolger (Admin
+  hinzufügen bzw. Übergabe).
+
+Nach dem Löschen stehen Restdaten nur noch an Stellen, die von selbst ablaufen:
+Warteschlange (7 Tage), Logs (Rotation) und Backups (14 Tage). Das können Sie
+der Person so mitteilen.
+
+---
+
+## 11. Sonderrechte gegenüber regulären Admins
 
 Als Super-Admin haben Sie über die normalen Listen-Admin-Rechte hinaus:
 
