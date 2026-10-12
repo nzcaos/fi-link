@@ -4208,6 +4208,8 @@ class ProcessInboundTests(TestCase):
         self.assertFalse(tok.offer_anonymize)
         notify.assert_called_once()
         self.assertEqual(notify.call_args.kwargs["recipients"], ["adm@x.org"])
+        # The admin sees the mail's text, not just the subject.
+        self.assertIn("Hello world", notify.call_args.kwargs["body"])
 
     def test_admin_approval_falls_back_to_super_admins(self):
         """A list whose admins carry no deliverable address must not strand the
@@ -4418,6 +4420,24 @@ class MailReleaseViewTests(TestCase):
         return reverse(
             "lists:mail_release", kwargs={"token": token or self.token.token}
         )
+
+    def test_admin_page_shows_mail_text_and_attachments(self):
+        from email.message import EmailMessage
+
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = "fremd@example.org", "5a@caos.cloud", "Info"
+        m.set_content("Liebe Eltern,\n<script>alert(1)</script> Termin ist Freitag.")
+        m.add_attachment(b"%PDF", maintype="application", subtype="pdf", filename="Brief.pdf")
+        self.inbound.raw_eml = m.as_bytes()
+        self.inbound.save(update_fields=["raw_eml"])
+        tok = MailReleaseToken.objects.create(
+            inbound=self.inbound, list=self.lst, kind=MailReleaseToken.Kind.ADMIN,
+        )
+        resp = self.client.get(self._url(tok.token))
+        self.assertContains(resp, "Termin ist Freitag.")
+        self.assertContains(resp, "&lt;script&gt;")  # escaped, never rendered
+        self.assertContains(resp, "Brief.pdf")
+        self.assertContains(resp, "Anhänge werden nicht weitergeleitet")
 
     def test_get_is_side_effect_free(self):
         resp = self.client.get(self._url())

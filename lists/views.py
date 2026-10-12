@@ -1066,10 +1066,23 @@ def mail_release(request, token: str):
             {"list_obj": target, "rel": rel, "action": action, "anonymized": anonymize},
         )
 
+    # Show the held mail's text so an approver can judge it — subject alone
+    # is not enough to decide on a stranger's mail to a class list.
+    from .inbound_pipeline import message_preview, parse_message
+
+    body_preview, attachments = "", []
+    if inbound.raw_eml:
+        body_preview, attachments = message_preview(parse_message(bytes(inbound.raw_eml)))
     return render(
         request,
         "lists/mail_release_confirm.html",
-        {"list_obj": target, "rel": rel, "inbound": inbound},
+        {
+            "list_obj": target,
+            "rel": rel,
+            "inbound": inbound,
+            "body_preview": body_preview,
+            "attachments": attachments,
+        },
     )
 
 

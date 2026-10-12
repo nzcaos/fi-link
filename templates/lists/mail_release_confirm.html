@@ -26,6 +26,25 @@
         <td>{{ inbound.received_at|date:"d.m.Y H:i" }}</td></tr>
   </table>
 
+  {% if rel.kind != "member" %}
+    {% comment %}
+      The held mail's text, escaped (HTML-only mails arrive as stripped text) —
+      the approver needs more than the subject to judge a stranger's mail.
+    {% endcomment %}
+    <h2 style="font-size:1rem;margin:1rem 0 .4rem">Inhalt der Mail</h2>
+    {% if body_preview %}
+      <div style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;border:1px solid #ddd;border-radius:4px;padding:.6rem .8rem;background:#fafafa;font-size:.9rem">{{ body_preview }}</div>
+    {% else %}
+      <p style="color:#666">(Kein lesbarer Text in dieser Mail.)</p>
+    {% endif %}
+    {% if attachments %}
+      <p style="margin-top:.6rem;font-size:.9rem">
+        <strong>Anhänge:</strong> {{ attachments|join:", " }}<br>
+        <span style="color:#666">Anhänge werden nicht weitergeleitet — nur der Text.</span>
+      </p>
+    {% endif %}
+  {% endif %}
+
   <form method="post" action="{% url 'lists:mail_release' token=rel.token %}">
     {% csrf_token %}
     {% if rel.offer_anonymize %}

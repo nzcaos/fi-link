@@ -62,6 +62,43 @@ def extract_subject_and_body(msg: email.message.EmailMessage) -> tuple[str, str]
     return subject, body if isinstance(body, str) else str(body)
 
 
+def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
+    """Readable text of a held mail plus its attachment names, for the people
+    deciding on a release (admin approval). An HTML-only mail is reduced to
+    its text — the preview is rendered escaped, never as markup. Attachments
+    are listed because the forward carries only the text body (see
+    `extract_subject_and_body`); the approver should know what gets dropped.
+    """
+    from html import unescape
+
+    from django.utils.html import strip_tags
+
+    text = ""
+    try:
+        part = msg.get_body(preferencelist=("plain",))
+        if part is not None:
+            text = part.get_content()
+        else:
+            part = msg.get_body(preferencelist=("html",))
+            if part is not None:
+                html = re.sub(r"(?is)<(script|style)\b.*?</\1>", "", part.get_content())
+                html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</tr>", "\n", html)
+                text = unescape(strip_tags(html))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("message_preview: %s", exc)
+    text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", str(text or "")).strip()
+
+    attachments: list[str] = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        if part.get_content_disposition() == "attachment" or (
+            part.get_filename() and part.get_content_disposition() != "inline"
+        ):
+            attachments.append(part.get_filename() or part.get_content_type())
+    return text, attachments
+
+
 _MSGID_RE = re.compile(r"<([^<>]+)>")
 
 

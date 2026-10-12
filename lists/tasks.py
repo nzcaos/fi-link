@@ -540,6 +540,25 @@ def _create_release_token(
         )
 
 
+def _approval_preview(msg) -> str:
+    """Text excerpt of a held mail for the approval notification, so the
+    admin sees what it is about without opening the link first."""
+    from .inbound_pipeline import message_preview
+
+    text, attachments = message_preview(msg)
+    if len(text) > _APPROVAL_PREVIEW_CHARS:
+        text = text[:_APPROVAL_PREVIEW_CHARS].rstrip() + " […]"
+    out = "\n--- Beginn der Mail ---\n" + (text or "(kein lesbarer Text)") + "\n--- Ende ---\n"
+    if attachments:
+        out += "Anhänge (werden nicht weitergeleitet): " + ", ".join(attachments) + "\n"
+    # The notification body is later scanned for the link placeholder; make
+    # sure the stranger's text can't inject one.
+    return out.replace("__LINK__", "__ LINK __")
+
+
+_APPROVAL_PREVIEW_CHARS = 1500
+
+
 def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> None:
     from .inbound_pipeline import Outcome, extract_subject_and_body
 
@@ -615,6 +634,7 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
             f'Betreff: {inbound.subject or "(kein Betreff)"}\n'
             f"{fallback_note}\n"
             f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"
+            f"{_approval_preview(msg)}"
         ),
     )
     log.info(
@@ -694,6 +714,7 @@ def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) ->
             f"betroffenen Listen berechtigt.\n"
             f'Betreff: {inbound.subject or "(kein Betreff)"}\n\n'
             f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"
+            f"{_approval_preview(msg)}"
         ),
     )
     log.info("process_inbound: aggregate super-admin approval inbound=%d alias=%s recipients=%d",
