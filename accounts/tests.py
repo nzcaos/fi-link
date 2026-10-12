@@ -566,3 +566,40 @@ class RecoverViewTests(TestCase):
             self.assertEqual(resp.status_code, 200)
         resp = self.client.post(reverse("accounts:recover"), {"email": "x@example.org"})
         self.assertEqual(resp.status_code, 429)
+
+
+@override_settings(TOKEN_RETENTION_DAYS=30)
+class RetentionSweepTests(TestCase):
+    def test_sweep_activation_tokens(self):
+        from .tasks import sweep_activation_tokens
+
+        user = _make_user("t@example.org")
+        old = ActivationToken.issue(person=user.person, email="t@example.org", user=user)
+        ActivationToken.objects.filter(pk=old.pk).update(
+            expires_at=timezone.now() - timedelta(days=40)
+        )
+        used = ActivationToken.issue(person=user.person, email="t@example.org", user=user)
+        ActivationToken.objects.filter(pk=used.pk).update(
+            consumed_at=timezone.now() - timedelta(days=31)
+        )
+        live = ActivationToken.issue(person=user.person, email="t@example.org", user=user)
+
+        sweep_activation_tokens.func(timestamp=0)
+
+        self.assertEqual(
+            list(ActivationToken.objects.values_list("pk", flat=True)), [live.pk]
+        )
+
+    def test_clear_expired_sessions(self):
+        from django.contrib.sessions.models import Session
+
+        from .tasks import clear_expired_sessions
+
+        Session.objects.create(
+            session_key="old", session_data="", expire_date=timezone.now() - timedelta(days=1)
+        )
+        Session.objects.create(
+            session_key="new", session_data="", expire_date=timezone.now() + timedelta(days=1)
+        )
+        clear_expired_sessions.func(timestamp=0)
+        self.assertEqual(list(Session.objects.values_list("session_key", flat=True)), ["new"])

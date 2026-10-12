@@ -121,6 +121,30 @@ Restore a dump onto a fresh stack:
 gunzip -c fichtelink-2026-05-29T03-30-00.sql.gz | docker compose exec -T db psql -U fichtelink fichtelink
 ```
 
+### Data retention
+
+What is deleted automatically, and when (all via procrastinate periodic tasks in the `worker`):
+
+| Data | Deleted after | Setting |
+|---|---|---|
+| Processed mail in the IMAP catch-all | 7 days | `IMAP_EXPUNGE_GRACE_DAYS` |
+| Inbound copies (`raw_eml`, incl. attachments) and outbound metadata | 90 days | `MAIL_METADATA_RETENTION_DAYS` |
+| Finished task-queue jobs (their args hold forwarded mail bodies) | 7 days | `TASK_JOB_RETENTION_DAYS` |
+| Expired / used invitation, activation and QR-join tokens | 30 days after expiry/use | `TOKEN_RETENTION_DAYS` |
+| Expired login sessions | daily | — |
+| Container logs | rotated at 3 × 10 MB per service | `x-logging` in `docker-compose.yml` |
+| Database dumps | 14 days | `KEEP_DAYS` in `scripts/backup.sh` |
+
+Log rotation only applies to containers created after the change — run `docker compose up -d --force-recreate` once. Old QR codes stop resolving (404 instead of "expired") once their token has been swept.
+
+### Deleting a person (DSGVO erasure request)
+
+```bash
+docker compose exec web python manage.py delete_person --email <address>
+```
+
+Dry-run by default — prints the persons (incl. children only this person guards, and proxy-captured co-parents of those children), records and mail rows it would delete, and which audit references (invitations sent, forms created, send permissions, …) are handed over to a replacement user (default: the first super-admin; override with `--reassign-to <user-id>`). Re-run with `--yes` to delete. Shared family mailbox: use `--person-id`; mail rows for an address another person still uses are kept and age out normally. `--keep-children` skips the child cascade. Task-queue jobs, logs and backups are not touched — they expire on their own (see table above).
+
 ### Account recovery
 
 **Primary path is self-service** (no admin needed): a locked-out user requests a fresh passkey-enrollment link to their on-file email at `/auth/recover/` (linked from the login page). It is additive (keeps existing passkeys), enumeration-resistant, rate-limited, and handles the shared-family-mailbox case with one labelled link per account. See *Account recovery* in CLAUDE.md.

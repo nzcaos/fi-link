@@ -5581,3 +5581,130 @@ class RecordSubjectNameEditTests(TestCase):
         form.save()
         self.manager.person.refresh_from_db()
         self.assertEqual(self.manager.person.given_name, "Eva")  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Retention: token sweep + person erasure (privacy overview for parents)
+# ---------------------------------------------------------------------------
+
+from io import StringIO  # noqa: E402
+
+from django.core.management import call_command  # noqa: E402
+
+from forms.models import Form  # noqa: E402
+
+from .erasure import execute_erasure, plan_erasure  # noqa: E402
+from .tasks import sweep_list_tokens  # noqa: E402
+
+
+@override_settings(TOKEN_RETENTION_DAYS=30)
+class SweepListTokensTests(TestCase):
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="T")
+        self.lst = List.objects.create(title="L", email_alias="l", template=self.template)
+        self.admin = _make_user(username="adm")
+
+    def test_removes_long_expired_and_consumed_keeps_recent(self):
+        long_ago = timezone.now() - timedelta(days=40)
+        expired = ListInviteToken.objects.create(
+            list=self.lst, invited_by=self.admin, target_email="a@x.org"
+        )
+        ListInviteToken.objects.filter(pk=expired.pk).update(expires_at=long_ago)
+        consumed = AdminInviteToken.objects.create(list=self.lst, to_email="b@x.org")
+        AdminInviteToken.objects.filter(pk=consumed.pk).update(consumed_at=long_ago)
+        revoked = ListJoinToken.objects.create(list=self.lst, created_by=self.admin)
+        ListJoinToken.objects.filter(pk=revoked.pk).update(revoked_at=long_ago)
+        recently_expired = ListInviteToken.objects.create(
+            list=self.lst, invited_by=self.admin, target_email="c@x.org"
+        )
+        ListInviteToken.objects.filter(pk=recently_expired.pk).update(
+            expires_at=timezone.now() - timedelta(days=5)
+        )
+        live = ListJoinToken.objects.create(list=self.lst, created_by=self.admin)
+
+        sweep_list_tokens.func(timestamp=0)
+
+        self.assertFalse(ListInviteToken.objects.filter(pk=expired.pk).exists())
+        self.assertFalse(AdminInviteToken.objects.filter(pk=consumed.pk).exists())
+        self.assertFalse(ListJoinToken.objects.filter(pk=revoked.pk).exists())
+        self.assertTrue(ListInviteToken.objects.filter(pk=recently_expired.pk).exists())
+        self.assertTrue(ListJoinToken.objects.filter(pk=live.pk).exists())
+
+
+class PersonErasureTests(TestCase):
+    """A parent with an archived associate record, a child only they guard,
+    sent invitations and a created form — the PROTECT tangle that made
+    deletion impossible before `lists.erasure`."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(name="Schulklasse")
+        self.attr = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE, position=0
+        )
+        self.lst = List.objects.create(title="Klasse 5a", email_alias="5a", template=self.template)
+        self.super_ = _make_super()
+        self.parent = _make_user(username="mama", given="Anna", family="M", email="anna@x.org")
+        self.child = _person("Kind", "M")
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=self.parent.person, role="Mutter von"
+        )
+        self.child_rec = ListRecord.objects.create(list=self.lst, subject=self.child)
+        ListRecordValue.objects.create(record=self.child_rec, attribute=self.attr, value="0170-1")
+        RecordManager.objects.create(
+            record=self.child_rec, user=self.parent, basis=RecordManager.Basis.GUARDIAN
+        )
+        self.parent_rec = ListRecord.objects.create(
+            list=self.lst, subject=self.parent.person, role=ListRecord.Role.ASSOCIATE,
+            archived_at=timezone.now(),
+        )
+        ListAccess.objects.create(list=self.lst, user=self.parent)
+        self.invite = ListInviteToken.objects.create(
+            list=self.lst, invited_by=self.parent, target_email="papa@x.org"
+        )
+        self.form = Form.objects.create(title="Schulfest", created_by=self.parent)
+        OutboundMessage.objects.create(
+            list=self.lst, message_id="o@x", alias_token="E1",
+            from_email="s@x.org", recipient_email="Anna@x.org",
+        )
+
+    def test_erases_person_child_records_and_mail_rows(self):
+        plan = plan_erasure(self.parent.person)
+        self.assertEqual({p.pk for p in plan.persons}, {self.parent.person.pk, self.child.pk})
+        self.assertEqual(plan.emails, ["anna@x.org"])
+
+        execute_erasure(plan, reassign_to=self.super_)
+
+        self.assertFalse(User.objects.filter(pk=self.parent.pk).exists())
+        self.assertFalse(Person.objects.filter(pk=self.child.pk).exists())
+        self.assertFalse(ListRecord.objects.filter(pk__in=[self.child_rec.pk, self.parent_rec.pk]).exists())
+        self.assertFalse(ListRecordValue.objects.exists())
+        self.assertFalse(OutboundMessage.objects.filter(alias_token="E1").exists())
+        self.invite.refresh_from_db()
+        self.assertEqual(self.invite.invited_by, self.super_)
+        self.form.refresh_from_db()
+        self.assertEqual(self.form.created_by, self.super_)
+
+    def test_child_with_other_guardian_is_kept(self):
+        papa = _make_user(username="papa", given="Bernd", family="M", email="papa@x.org")
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=papa.person, role="Vater von"
+        )
+        execute_erasure(plan_erasure(self.parent.person), reassign_to=self.super_)
+        self.assertTrue(Person.objects.filter(pk=self.child.pk).exists())
+        self.assertTrue(ListRecord.objects.filter(pk=self.child_rec.pk).exists())
+
+    def test_shared_mailbox_keeps_mail_rows(self):
+        _make_user(username="papa", given="Bernd", family="M", email="anna@x.org")
+        plan = plan_erasure(self.parent.person)
+        self.assertEqual(plan.emails, [])
+        execute_erasure(plan, reassign_to=self.super_)
+        self.assertTrue(OutboundMessage.objects.filter(alias_token="E1").exists())
+
+    def test_command_is_dry_run_without_yes(self):
+        out = StringIO()
+        call_command("delete_person", "--email", "anna@x.org", stdout=out)
+        self.assertIn("Trockenlauf", out.getvalue())
+        self.assertTrue(User.objects.filter(pk=self.parent.pk).exists())
+
+        call_command("delete_person", "--email", "anna@x.org", "--yes", stdout=StringIO())
+        self.assertFalse(User.objects.filter(pk=self.parent.pk).exists())

@@ -33,7 +33,7 @@ The data model in the spec uses these entities — keep these names and relation
 ## Mailing-list behavior (must be implemented carefully)
 
 - The server pulls mail via **IMAP IDLE** on a single **catch-all** address; per-list addresses are virtual (no real mailboxes).
-- Incoming mail to a list address is **not stored** — only the reception and forwarding are logged.
+- Incoming mail to a list address is **not stored long-term**: the full MIME copy (`InboundMessage.raw_eml`) is kept only for the metadata-retention window (90 days) because the release click and loop detection re-parse it; see *Retention*.
 - **Sender-is-member path:** before forwarding, the server sends the sender a confirmation email with a release link. Mail is only forwarded after that link is clicked. This is the anti-spoofing mechanism — do not skip it.
 - **Sender-is-not-member path:** the release link goes to a list admin, who decides whether to forward.
 - **Anonymization:** if the sender is a member but has not consented to publishing their address, the From: address is rewritten to an auto-generated alias on the list-server domain before forwarding. Replies to that alias must be routed back to the original sender by the server. (Note: *all* forwards rewrite the From: header onto the list domain for DMARC — see *From-header munging (DMARC)* below; anonymization additionally hides the sender's identity by dropping the revealing display name and Reply-To.)
@@ -495,6 +495,10 @@ Prerequisite this exposes: `<MAIL_DOMAIN>` itself must have SPF + DKIM configure
 
 - **IMAP server:** `EXPUNGE` processed messages after a 7-day grace period.
 - **Local metadata (Inbound/Outbound rows):** keep 30–90 days for bounce correlation.
+- **Task-queue jobs:** finished procrastinate jobs are deleted after `TASK_JOB_RETENTION_DAYS` (7) — `send_outbound_message` carries the forwarded body in its args, so the job table must not outlive the mail metadata.
+- **Tokens and sessions:** expired/consumed invitation, activation and QR-join tokens are deleted `TOKEN_RETENTION_DAYS` (30) after they became unusable; expired Django sessions daily.
+- **Logs:** container logs rotate by size (3 × 10 MB per service, `x-logging` in compose); routine INFO lines carry no mail addresses.
+- **Erasure:** `manage.py delete_person` (`lists/erasure.py`) is the only way to delete a PERSON — the PROTECT FKs on `User.person`, `ListRecord.subject` and the audit `created_by`/`invited_by` columns block plain ORM/admin deletes by design; the command deletes records first and reassigns audit references to a super-admin.
 
 With this policy the smallest 5 GB provider tier holds long-term.
 

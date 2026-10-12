@@ -192,6 +192,15 @@ IMAP_EXPUNGE_GRACE_DAYS = int(os.environ.get("IMAP_EXPUNGE_GRACE_DAYS", "7"))
 MAIL_METADATA_RETENTION_DAYS = int(
     os.environ.get("MAIL_METADATA_RETENTION_DAYS", "90")
 )
+# Finished procrastinate jobs (succeeded/failed/cancelled/aborted) are deleted
+# this many days after they reached their final state. Their `args` carry the
+# full body of every forwarded mail (send_outbound_message) and the recipients
+# + release links of notification mails, so they must not outlive the mail
+# metadata — see the privacy overview for parents.
+TASK_JOB_RETENTION_DAYS = int(os.environ.get("TASK_JOB_RETENTION_DAYS", "7"))
+# Expired / consumed / revoked invitation, activation and QR-join tokens (each
+# carrying a target email address) are deleted this many days afterwards.
+TOKEN_RETENTION_DAYS = int(os.environ.get("TOKEN_RETENTION_DAYS", "30"))
 
 # --- Matrix messenger integration (docs/matrix-implementation-plan.md) ---
 # OFF by default so tests/CI and any pre-Phase-0 deploy never touch Matrix.

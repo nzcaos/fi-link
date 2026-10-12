@@ -227,12 +227,13 @@ async def _process_one_uid(client, uidvalidity: int, uid: int) -> bool:
         log.exception("parse_and_persist failed for UID %d — leaving UNSEEN", uid)
         return False
     if row is not None:
+        # No sender address here: the row has it (pruned after the metadata
+        # retention window), the container log has no retention of its own.
         log.info(
-            "inbound persisted: pk=%d uid=%d alias=%r from=%r",
+            "inbound persisted: pk=%d uid=%d alias=%r",
             row.pk,
             uid,
             row.to_alias,
-            row.from_email,
         )
     await client.uid("STORE", str(uid), "+FLAGS", r"(\Seen)")
     return True

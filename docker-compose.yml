@@ -1,3 +1,12 @@
+# Container logs (stdout of gunicorn, worker, IMAP daemon) contain request
+# paths and, on errors, mail addresses. Docker's json-file driver keeps them
+# forever by default; rotate by size so they age out (README / Datenschutz).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
@@ -13,6 +22,7 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    logging: *default-logging
 
   web:
     build: .
@@ -28,6 +38,7 @@ services:
       - media:/app/media
       - staticfiles:/app/staticfiles
     restart: unless-stopped
+    logging: *default-logging
 
   worker:
     build: .
@@ -39,6 +50,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
   imap_idle:
     build: .
@@ -50,6 +62,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
   # Matrix homeserver (docs/matrix-implementation-plan.md, Phase 0). Uses a
   # SEPARATE database `synapse` in the existing `db` instance (collation C) —
@@ -77,6 +90,7 @@ services:
       # delegation on 443.
       - "${SYNAPSE_BIND_ADDR:-127.0.0.1}:${SYNAPSE_PORT:-8008}:8008"
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   pgdata:

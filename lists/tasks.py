@@ -18,12 +18,21 @@ from smtplib import SMTPException
 from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
 from django.db import transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 from procrastinate import RetryStrategy
 from procrastinate.contrib.django import app
 
-from .models import InboundMessage, List, MailReleaseToken, OutboundMessage
+from .models import (
+    AdminInviteToken,
+    InboundMessage,
+    List,
+    ListInviteToken,
+    ListJoinToken,
+    MailReleaseToken,
+    OutboundMessage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -476,7 +485,7 @@ def _route_reply(inbound: InboundMessage, msg) -> None:
     transaction.on_commit(
         lambda pk=reply.pk: send_outbound_message.defer(outbound_id=pk, body=body)
     )
-    log.info("process_inbound: reply routed inbound=%d → %s", inbound.pk, original_sender)
+    log.info("process_inbound: reply routed inbound=%d → outbound=%d", inbound.pk, reply.pk)
 
 
 def _create_release_token(
@@ -851,3 +860,51 @@ def imap_expunge_processed(timestamp: int) -> None:
             client.logout()
         except Exception:  # noqa: BLE001
             log.debug("imap_expunge_processed: logout failed", exc_info=True)
+
+
+@app.periodic(cron="53 3 * * *")
+@app.task(queueing_lock="prune_finished_jobs", pass_context=True)
+async def prune_finished_jobs(context, timestamp: int) -> None:
+    """Delete procrastinate jobs that reached a final state more than
+    TASK_JOB_RETENTION_DAYS ago, together with their events.
+
+    Without this the job table keeps every job forever — and the `args` of
+    `send_outbound_message` hold the full body of each forwarded mail (one row
+    per recipient), `send_notification_mail` the recipients and release links.
+    Failed jobs go too: the OutboundMessage row keeps status and last_error for
+    the metadata-retention window, which is what an operator debugs from.
+    Async because procrastinate's job manager is; the worker runs it natively.
+    """
+    await context.app.job_manager.delete_old_jobs(
+        nb_hours=settings.TASK_JOB_RETENTION_DAYS * 24,
+        include_failed=True,
+        include_cancelled=True,
+        include_aborted=True,
+    )
+
+
+@app.periodic(cron="47 3 * * *")
+@app.task(queueing_lock="sweep_list_tokens", pass_context=False)
+def sweep_list_tokens(timestamp: int) -> None:
+    """Delete invitation / admin-invitation / QR-join tokens that expired, were
+    consumed or were revoked more than TOKEN_RETENTION_DAYS ago. Invitation
+    tokens carry the address they were sent to; once unusable they serve no
+    purpose (the join itself is recorded by ListAccess / RecordManager).
+    """
+    cutoff = timezone.now() - timedelta(days=settings.TOKEN_RETENTION_DAYS)
+    invites, _ = ListInviteToken.objects.filter(
+        Q(expires_at__lt=cutoff) | Q(consumed_at__lt=cutoff)
+    ).delete()
+    admin_invites, _ = AdminInviteToken.objects.filter(
+        Q(expires_at__lt=cutoff) | Q(consumed_at__lt=cutoff)
+    ).delete()
+    joins, _ = ListJoinToken.objects.filter(
+        Q(expires_at__lt=cutoff) | Q(revoked_at__lt=cutoff)
+    ).delete()
+    if invites or admin_invites or joins:
+        log.info(
+            "sweep_list_tokens: removed %d invite, %d admin-invite, %d join token(s)",
+            invites,
+            admin_invites,
+            joins,
+        )
