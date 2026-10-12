@@ -213,6 +213,27 @@ def register_start(request: HttpRequest) -> HttpResponse:
     if not _check_registration_rate_limit(request):
         return _rate_limited_response(request)
 
+    # Retry after a failed (or lost) activation mail: the first POST already
+    # created the stub, so without this the visitor lands in the "account
+    # exists" branch and "continue" would mint a second stub. Same address and
+    # same name as a not-yet-activated USER → just mail a fresh link to it.
+    # Only `_create_stub_and_send` and `bootstrap_super_admin` create inactive
+    # USERs, so this never touches an invited or activated account.
+    pending = (
+        User.objects.select_related("person")
+        .filter(
+            is_active=False,
+            person__email__iexact=email,
+            person__given_name__iexact=given_name,
+            person__family_name__iexact=family_name,
+        )
+        .order_by("-pk")
+        .first()
+    )
+    if pending is not None:
+        token = ActivationToken.issue(person=pending.person, email=email, user=pending)
+        return _send_activation_mail(request, token=token, given_name=given_name, email=email)
+
     existing = Person.objects.filter(email__iexact=email, user__isnull=False).exists()
     if existing:
         return render(
@@ -271,6 +292,12 @@ def _create_stub_and_send(
             privacy_consent_version=settings.PRIVACY_POLICY_VERSION,
         )
         token = ActivationToken.issue(person=person, email=email, user=user)
+    return _send_activation_mail(request, token=token, given_name=given_name, email=email)
+
+
+def _send_activation_mail(
+    request: HttpRequest, *, token: ActivationToken, given_name: str, email: str
+) -> HttpResponse:
     link = request.build_absolute_uri(
         reverse("accounts:activate", args=[token.token])
     )
@@ -289,8 +316,9 @@ def _create_stub_and_send(
         )
     except (smtplib.SMTPException, OSError) as exc:
         # N14: a mail-server outage must not become a 500. The stub User and
-        # activation token are already committed; the user retries (or an admin
-        # re-issues via reset_passkeys) once mail is back.
+        # activation token are already committed; the user retries with the
+        # same name + address (register_start then re-mails a fresh link to the
+        # pending stub instead of creating a second one) once mail is back.
         mail_failed = True
         log.error("activation mail to %s failed: %s", email, exc)
     return render(

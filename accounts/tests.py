@@ -189,6 +189,44 @@ class RegisterStartViewTests(TestCase):
         # The form should offer to continue under the shared address (family-mailbox case).
         self.assertContains(resp, "weiteres Konto")
 
+    def test_retry_for_pending_stub_resends_link_instead_of_new_stub(self):
+        # First attempt created the stub but the mail never arrived (SMTP
+        # outage). Re-submitting the same data must re-mail, not fork a stub.
+        from django.core import mail
+
+        data = {"email": "retry@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"}
+        self.client.post("/auth/register/", data)
+        mail.outbox.clear()
+
+        resp = self.client.post("/auth/register/", {**data, "email": "Retry@Example.org", "given_name": "anna"})
+        self.assertContains(resp, "E-Mail-Postfach prüfen")
+        self.assertEqual(Person.objects.filter(email__iexact="retry@example.org").count(), 1)
+        user = User.objects.get(person__email="retry@example.org")
+        self.assertFalse(user.is_active)
+        self.assertEqual(ActivationToken.objects.filter(user=user).count(), 2)
+        newest = ActivationToken.objects.filter(user=user).order_by("-pk").first()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(newest.token, mail.outbox[0].body)
+
+    def test_pending_stub_with_other_name_keeps_continue_prompt(self):
+        # Same mailbox, different person (second parent) → not a retry.
+        data = {"email": "family@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"}
+        self.client.post("/auth/register/", data)
+        resp = self.client.post("/auth/register/", {**data, "given_name": "Bernd"})
+        self.assertContains(resp, "weiteres Konto")
+        self.assertEqual(Person.objects.filter(email="family@example.org").count(), 1)
+
+    def test_activated_account_is_not_resent(self):
+        from django.core import mail
+
+        _make_user(email="active@example.org", given="Anna", family="Müller")
+        resp = self.client.post(
+            "/auth/register/",
+            {"email": "active@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"},
+        )
+        self.assertContains(resp, "weiteres Konto")
+        self.assertEqual(len(mail.outbox), 0)
+
 
 class N15RegisterRateLimitTests(TestCase):
     """N15: register_start and register_force must throttle per-IP so a
