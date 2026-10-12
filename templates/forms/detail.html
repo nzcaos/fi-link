@@ -11,6 +11,25 @@
       <input type="text" readonly value="{{ share_url }}"
              onclick="this.select()"
              style="width:100%;box-sizing:border-box;margin-top:.3rem;font-family:monospace">
+      <form method="post" action="{% url 'forms:share_expiry' pk=form_obj.pk %}"
+            style="display:flex;gap:.5rem;align-items:end;flex-wrap:wrap;margin-top:.6rem">
+        {% csrf_token %}
+        <label style="display:flex;flex-direction:column;gap:.2rem">
+          <span class="field-label">{{ expiry_form.share_expires_on.label }}</span>
+          {{ expiry_form.share_expires_on }}
+        </label>
+        <button type="submit" class="secondary">Speichern</button>
+      </form>
+      <p class="field-label" style="margin:.4rem 0 0">
+        {% if form_obj.share_link_active %}
+          Der Link funktioniert bis einschließlich {{ form_obj.share_expires_on|date:"d.m.Y" }} —
+          danach können sich darüber weder Gäste eintragen noch neu registrieren.
+          Am besten auf den Tag der Veranstaltung setzen.
+        {% else %}
+          <strong>Der Link ist abgelaufen.</strong> Wer schon eingetragen ist, findet das
+          Formular weiter unter „Formulare“. Für einen neuen Zeitraum ein späteres Datum setzen.
+        {% endif %}
+      </p>
     </div>
   {% endif %}
 

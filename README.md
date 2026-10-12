@@ -181,7 +181,9 @@ signup list.
 
 **Sharing**: every form has a single reusable broadcast link, shown read-only at the
 top of the form page for its admin (the token is created lazily on first admin view —
-no separate "generate" step). Mail that link to recipients. Viewing needs no login;
+no separate "generate" step). Each link has an end date ("Link gültig bis",
+default today + 30 days, set on the same page — usually the event day); after it the
+link shows "abgelaufen" and no longer allows viewing, signup or registration. Mail that link to recipients. Viewing needs no login;
 **signing up** does — a new participant is taken through passkey registration and then
 straight back to the form. Signing up grants the form access so it stays findable
 under `/forms/`.

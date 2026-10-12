@@ -9,6 +9,7 @@ urlpatterns = [
     path("s/<str:token>/", views.shared, name="shared"),
     path("s/<str:token>/signin", views.shared_signin, name="shared_signin"),
     path("<int:pk>/", views.form_detail, name="detail"),
+    path("<int:pk>/link-gueltigkeit", views.share_expiry, name="share_expiry"),
     path("<int:pk>/slots/<int:slot_pk>/signup", views.slot_signup, name="slot_signup"),
     path("<int:pk>/parts/<int:part_pk>/contribute", views.contribute, name="contribute"),
     path("<int:pk>/signups/<int:signup_pk>/remove", views.signup_remove, name="signup_remove"),

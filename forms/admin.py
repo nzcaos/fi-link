@@ -29,7 +29,7 @@ class FormAdmin(admin.ModelAdmin):
     hold). Parts and access are edited inline; a part's slots, HTML body, and
     image assets are edited on the FormPart page."""
 
-    list_display = ("title", "created_by", "is_open", "created_at")
+    list_display = ("title", "created_by", "is_open", "share_expires_on", "created_at")
     list_filter = ("is_open",)
     search_fields = ("title",)
     readonly_fields = ("created_by", "share_token", "created_at", "updated_at")

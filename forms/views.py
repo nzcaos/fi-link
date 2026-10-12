@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_POST
 
-from .forms import ContributionForm, SlotSignupForm
+from .forms import ContributionForm, ShareExpiryForm, SlotSignupForm
 from .models import (
     Form,
     FormAccess,
@@ -27,7 +27,6 @@ from .models import (
     FormPartAsset,
     FormSignup,
     FormSlot,
-    _gen_share_token,
 )
 from .permissions import (
     _is_own,
@@ -163,23 +162,52 @@ def form_detail(request, pk: int):
         return HttpResponseForbidden("Sie haben keinen Zugriff auf dieses Formular.")
     ctx = _render_form(request, form)
     # Form admins get the broadcast link shown at the top; the (single) token is
-    # created lazily on first admin view — no explicit "generate link" action.
+    # created lazily on first admin view — no explicit "generate link" action —
+    # with a default end date the admin can move to the event day.
     if ctx["is_form_admin"]:
-        if not form.share_token:
-            form.share_token = _gen_share_token()
-            form.save(update_fields=["share_token"])
+        form.ensure_share_link()
         ctx["share_url"] = request.build_absolute_uri(
             reverse("forms:shared", kwargs={"token": form.share_token})
         )
+        ctx["expiry_form"] = ShareExpiryForm(initial={"share_expires_on": form.share_expires_on})
     return render(request, "forms/detail.html", ctx)
+
+
+@login_required
+@require_POST
+def share_expiry(request, pk: int):
+    """Form admin sets the broadcast link's last valid day (usually the event
+    day). A past date switches the link off right away."""
+    form = get_object_or_404(Form, pk=pk)
+    if not can_user_admin_form(request.user, form):
+        return HttpResponseForbidden("Nur die Formular-Verwaltung darf den Link ändern.")
+    expiry_form = ShareExpiryForm(request.POST)
+    if expiry_form.is_valid():
+        form.share_expires_on = expiry_form.cleaned_data["share_expires_on"]
+        form.save(update_fields=["share_expires_on", "updated_at"])
+        messages.success(request, "Gültigkeit des Freigabe-Links gespeichert.")
+    else:
+        messages.error(request, "Bitte ein gültiges Datum angeben.")
+    return redirect("forms:detail", pk=form.pk)
+
+
+def _expired_link(request, form: Form):
+    """An expired broadcast link: members who already have access go to the
+    regular form page; everyone else gets a 410 explaining the link is over."""
+    if request.user.is_authenticated and can_user_access_form(request.user, form):
+        return redirect("forms:detail", pk=form.pk)
+    return render(request, "forms/shared_expired.html", {"form_obj": form}, status=410)
 
 
 def shared(request, token: str):
     """Broadcast-link view: open to anyone holding the form's share token (no
-    login required to *view*). Signing up still needs auth — handled by the
-    per-button login handoff in `shared_signin`; authenticated visitors get the
-    real signup forms, authorised by the token via `_can_user_signup`."""
+    login required to *view*) until the link's end date. Signing up still needs
+    auth — handled by the per-button login handoff in `shared_signin`;
+    authenticated visitors get the real signup forms, authorised by the token
+    via `_can_user_signup`."""
     form = get_object_or_404(Form, share_token=token)
+    if not form.share_link_active:
+        return _expired_link(request, form)
     return render(request, "forms/shared.html", _render_form(request, form, share_token=token))
 
 
@@ -187,25 +215,27 @@ def shared_signin(request, token: str):
     """Anonymous-visitor handoff: stash the token and bounce to login. After a
     successful login/registration `_next_url_after_auth` returns to this form."""
     form = get_object_or_404(Form, share_token=token)
+    if not form.share_link_active:
+        return _expired_link(request, form)
     request.session["pending_form_token"] = form.share_token
     return redirect("accounts:login")
 
 
 def _can_user_signup(user, form: Form, token: str) -> bool:
     """A user may sign up if the form is open AND either they already have access
-    OR they present the form's valid broadcast token (Phase 4). Signing up then
+    OR they present the form's broadcast token while the link is active. Signing up then
     grants FormAccess, so the token is only needed for the first interaction."""
     if not form.is_open:
         return False
     if can_user_access_form(user, form):
         return True
-    return bool(form.share_token) and token == form.share_token
+    return form.share_link_active and token == form.share_token
 
 
 def _signup_redirect(form: Form, token: str):
     """Back to the broadcast view if the visitor came via a token, else the
     access-gated detail page."""
-    if token and token == form.share_token:
+    if token and token == form.share_token and form.share_link_active:
         return redirect("forms:shared", token=token)
     return redirect("forms:detail", pk=form.pk)
 

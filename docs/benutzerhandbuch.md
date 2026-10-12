@@ -273,7 +273,9 @@ Helfer­listen oder Kuchen-Spenden für ein Schulfest. Sie bekommen meist einen
 **Link** zugeschickt (oder scannen einen QR-Code) und können das Formular auch
 **ohne Anmeldung ansehen**. Zum **Eintragen** ist eine Anmeldung nötig — beim
 ersten Klick werden Sie durch Anmeldung/Registrierung geführt und landen danach
-wieder beim Formular.
+wieder beim Formular. Der Link gilt bis zu einem Stichtag, meist dem Tag der
+Veranstaltung; danach finden Sie das Formular — wenn Sie eingetragen sind —
+weiterhin unter „Formulare“.
 
 Ein Formular kann zwei Arten von Mitmach-Teilen haben:
 

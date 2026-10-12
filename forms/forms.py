@@ -26,3 +26,10 @@ class ContributionForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.fields["contribution_text"].label = part.contribution_label or "Mein Beitrag"
         self.fields["contribution_text"].required = part.contribution_required
+
+
+class ShareExpiryForm(forms.Form):
+    share_expires_on = forms.DateField(
+        label="Link gültig bis (einschließlich)",
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )

@@ -148,8 +148,10 @@ def _registration_grant(request: HttpRequest) -> str | None:
             return session_key
 
     value = request.session.get("pending_form_token")
-    if value and Form.objects.filter(share_token=value, is_open=True).exists():
-        return "pending_form_token"
+    if value:
+        form = Form.objects.filter(share_token=value, is_open=True).first()
+        if form is not None and form.share_link_active:
+            return "pending_form_token"
     return None
 
 

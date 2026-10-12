@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import re
 import secrets
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 
 
 def _gen_share_token() -> str:
@@ -36,6 +38,11 @@ def _gen_share_token() -> str:
 
 
 _ASSET_REF_RE = re.compile(r"\[\[asset:(\d+)\]\]")
+
+# Default lifetime of a broadcast link. Forms are about an upcoming event; a
+# link that never expires is a standing registration grant (see CLAUDE.md /
+# *Registration requires an invitation*), so every link gets an end date.
+SHARE_LINK_DEFAULT_DAYS = 30
 
 
 class Form(models.Model):
@@ -54,6 +61,17 @@ class Form(models.Model):
         blank=True,
         help_text="Token für den Broadcast-Link; wird bei Bedarf erzeugt.",
     )
+    share_expires_on = models.DateField(
+        "Link gültig bis",
+        null=True,
+        blank=True,
+        help_text=(
+            "Letzter Tag, an dem der Freigabe-Link funktioniert (Ansicht, Eintragung, "
+            "Registrierung). Wird beim Erzeugen des Links auf heute + "
+            f"{SHARE_LINK_DEFAULT_DAYS} Tage gesetzt — in der Regel auf den Tag der "
+            "Veranstaltung ändern."
+        ),
+    )
     is_open = models.BooleanField(
         "Eintragung offen",
         default=True,
@@ -70,11 +88,29 @@ class Form(models.Model):
     def __str__(self) -> str:
         return self.title
 
+    @property
+    def share_link_active(self) -> bool:
+        """The broadcast link works: a token exists and its end date (inclusive,
+        local date) has not passed. Signups via FormAccess are not affected."""
+        return (
+            bool(self.share_token)
+            and self.share_expires_on is not None
+            and timezone.localdate() <= self.share_expires_on
+        )
+
+    def ensure_share_link(self) -> None:
+        """Create the (single) broadcast token lazily, with the default end date."""
+        if self.share_token:
+            return
+        self.share_token = _gen_share_token()
+        self.share_expires_on = timezone.localdate() + timedelta(days=SHARE_LINK_DEFAULT_DAYS)
+        self.save(update_fields=["share_token", "share_expires_on"])
+
     @transaction.atomic
     def clone(self, *, created_by, title: str | None = None) -> "Form":
         """Create a blank copy for re-use (yearly events): copies parts, slots,
         asset images, and authored texts — but **no** signups, no FormAccess, no
-        share token (regenerated lazily), and reopens signups.
+        share token / end date (regenerated lazily), and reopens signups.
 
         Asset `[[asset:<id>]]` references in each part's body are rewritten to the
         cloned asset ids, otherwise the copied body would point at the originals'

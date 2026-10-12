@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ form_obj.title }} — Fichtelink{% endblock %}
+{% block content %}
+  <h1>{{ form_obj.title }}</h1>
+  <p style="max-width:42rem">
+    Dieser Link ist abgelaufen — die Veranstaltung ist vorbei oder die
+    Eintragung über den Link wurde beendet.
+  </p>
+  <p style="max-width:42rem;color:#666">
+    Wenn Sie sich bereits eingetragen hatten, finden Sie das Formular nach dem
+    Anmelden unter „Formulare“. Bei Fragen wenden Sie sich an die Person, die
+    Ihnen den Link geschickt hat.
+  </p>
+{% endblock %}

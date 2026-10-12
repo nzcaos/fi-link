@@ -9,9 +9,12 @@ Run on the deploy VM (`docker compose run --rm web python manage.py test forms`)
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import Person, User
 
@@ -301,7 +304,8 @@ class FormSignupActionTests(TestCase):
         self.alice = _user("alice")  # has access
         self.bob = _user("bob")      # no access, no token
         self.form = Form.objects.create(
-            title="Fest", created_by=self.creator, share_token="TOK"
+            title="Fest", created_by=self.creator, share_token="TOK",
+            share_expires_on=timezone.localdate() + timedelta(days=30),
         )
         FormAccess.objects.create(form=self.form, user=self.alice)
         self.slots_part = FormPart.objects.create(
@@ -436,7 +440,8 @@ class FormBroadcastTests(TestCase):
         self.creator = _user("root", superuser=True)
         self.alice = _user("alice")  # no FormAccess
         self.form = Form.objects.create(
-            title="Sommerfest", created_by=self.creator, share_token="TOK"
+            title="Sommerfest", created_by=self.creator, share_token="TOK",
+            share_expires_on=timezone.localdate() + timedelta(days=30),
         )
         self.part = FormPart.objects.create(form=self.form, kind=FormPart.Kind.SLOTS)
         self.slot = FormSlot.objects.create(part=self.part, label="Aufbau", capacity=2)
@@ -500,6 +505,97 @@ class FormBroadcastTests(TestCase):
         fresh.refresh_from_db()
         self.assertIsNone(fresh.share_token)  # not generated for non-admins
         self.assertNotContains(resp, "Freigabe-Link")
+
+
+class FormShareExpiryTests(TestCase):
+    """Every broadcast link has an end date; afterwards it neither shows the
+    form nor authorises signups or registration."""
+
+    def setUp(self):
+        self.creator = _user("root", superuser=True)
+        self.alice = _user("alice")  # no FormAccess
+        self.form = Form.objects.create(
+            title="Sommerfest", created_by=self.creator, share_token="TOK",
+            share_expires_on=timezone.localdate() - timedelta(days=1),
+        )
+        self.part = FormPart.objects.create(form=self.form, kind=FormPart.Kind.SLOTS)
+        self.slot = FormSlot.objects.create(part=self.part, label="Aufbau", capacity=2)
+
+    def test_last_day_is_still_valid(self):
+        Form.objects.filter(pk=self.form.pk).update(share_expires_on=timezone.localdate())
+        resp = Client().get(reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_expired_link_is_gone(self):
+        resp = Client().get(reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertEqual(resp.status_code, 410)
+        self.assertContains(resp, "abgelaufen", status_code=410)
+
+    def test_expired_signin_sets_no_session(self):
+        c = Client()
+        resp = c.get(reverse("forms:shared_signin", kwargs={"token": "TOK"}))
+        self.assertEqual(resp.status_code, 410)
+        self.assertNotIn("pending_form_token", c.session)
+
+    def test_expired_token_does_not_authorise_signup(self):
+        c = Client()
+        c.force_login(self.alice)
+        url = reverse("forms:slot_signup", kwargs={"pk": self.form.pk, "slot_pk": self.slot.pk})
+        resp = c.post(url, {"token": "TOK", "name_visible": "on"})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(FormSignup.objects.filter(user=self.alice).exists())
+
+    def test_member_with_access_is_sent_to_detail(self):
+        FormAccess.objects.create(form=self.form, user=self.alice)
+        c = Client()
+        c.force_login(self.alice)
+        resp = c.get(reverse("forms:shared", kwargs={"token": "TOK"}))
+        self.assertRedirects(resp, reverse("forms:detail", kwargs={"pk": self.form.pk}))
+
+    def test_expired_link_closes_registration_gate(self):
+        c = Client()
+        session = c.session
+        session["pending_form_token"] = "TOK"
+        session.save()
+        self.assertEqual(c.get("/auth/register/").status_code, 403)
+
+    def test_new_link_gets_default_end_date(self):
+        fresh = Form.objects.create(title="Neu", created_by=self.creator)
+        c = Client()
+        c.force_login(self.creator)
+        c.get(reverse("forms:detail", kwargs={"pk": fresh.pk}))
+        fresh.refresh_from_db()
+        self.assertEqual(fresh.share_expires_on, timezone.localdate() + timedelta(days=30))
+
+    def test_admin_sets_end_date(self):
+        c = Client()
+        c.force_login(self.creator)
+        day = timezone.localdate() + timedelta(days=5)
+        resp = c.post(
+            reverse("forms:share_expiry", kwargs={"pk": self.form.pk}),
+            {"share_expires_on": day.isoformat()},
+        )
+        self.assertRedirects(resp, reverse("forms:detail", kwargs={"pk": self.form.pk}))
+        self.form.refresh_from_db()
+        self.assertEqual(self.form.share_expires_on, day)
+        self.assertTrue(self.form.share_link_active)
+
+    def test_non_admin_cannot_set_end_date(self):
+        FormAccess.objects.create(form=self.form, user=self.alice)
+        c = Client()
+        c.force_login(self.alice)
+        resp = c.post(
+            reverse("forms:share_expiry", kwargs={"pk": self.form.pk}),
+            {"share_expires_on": (timezone.localdate() + timedelta(days=90)).isoformat()},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.form.refresh_from_db()
+        self.assertFalse(self.form.share_link_active)
+
+    def test_clone_has_no_link_or_end_date(self):
+        clone = self.form.clone(created_by=self.creator)
+        self.assertIsNone(clone.share_token)
+        self.assertIsNone(clone.share_expires_on)
 
 
 class FormCloneTests(TestCase):

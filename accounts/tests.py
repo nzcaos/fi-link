@@ -43,6 +43,7 @@ def _grant_registration(client, *, is_open: bool = True):
         title="Sommerfest",
         created_by=owner,
         share_token="share-token-for-tests",
+        share_expires_on=timezone.localdate() + timedelta(days=30),
         is_open=is_open,
     )
     session = client.session

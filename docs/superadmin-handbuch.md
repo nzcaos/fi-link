@@ -218,6 +218,13 @@ Weitere Punkte:
   (`/forms/s/<token>/`). Er wird beim ersten Öffnen der Detailseite durch einen
   Formular-Admin automatisch erzeugt und dort zum Kopieren angezeigt. Ansehen
   braucht keine Anmeldung, Eintragen schon.
+- **Gültigkeit des Links:** Jeder Link hat ein Ablaufdatum („Link gültig bis“,
+  einschließlich). Beim Erzeugen wird es auf heute + 30 Tage gesetzt; der
+  Formular-Admin stellt es auf der Detailseite (oder im Django-Admin) auf den
+  Tag der Veranstaltung. Danach zeigt der Link nur noch „abgelaufen“ — keine
+  Ansicht, keine Eintragung, **keine Registrierung** mehr. Wer schon
+  eingetragen ist, erreicht das Formular weiter über „Formulare“. Ein Datum in
+  der Vergangenheit schaltet den Link sofort ab.
 - **`is_open`:** Eintragungen schließen, ohne die Ansicht zu entfernen.
 - **Klonen:** Die Admin-Aktion `Form.clone()` kopiert ein Formular für
   wiederkehrende Anlässe (jährliches Schulfest) — mit Teilen, Slots, Bild-Assets

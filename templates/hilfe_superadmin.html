@@ -276,6 +276,14 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
     ersten Öffnen der Detailseite durch einen Formular-Admin automatisch erzeugt
     und dort zum Kopieren angezeigt. Ansehen braucht keine Anmeldung, Eintragen
     schon.</li>
+  <li><strong>Gültigkeit des Links:</strong> Jeder Link hat ein Ablaufdatum
+    („Link gültig bis“, einschließlich). Beim Erzeugen wird es auf heute + 30
+    Tage gesetzt; der Formular-Admin stellt es auf der Detailseite (oder im
+    Django-Admin) auf den Tag der Veranstaltung. Danach zeigt der Link nur noch
+    „abgelaufen“ — keine Ansicht, keine Eintragung, <strong>keine
+    Registrierung</strong> mehr. Wer schon eingetragen ist, erreicht das
+    Formular weiter über „Formulare“. Ein Datum in der Vergangenheit schaltet
+    den Link sofort ab.</li>
   <li><strong><code>is_open</code>:</strong> Eintragungen schließen, ohne die
     Ansicht zu entfernen.</li>
   <li><strong>Klonen:</strong> Die Admin-Aktion <code>Form.clone()</code> kopiert
