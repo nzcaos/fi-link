@@ -2,7 +2,9 @@
 {% block title %}Meine Listen & Formulare — Fichtelink{% endblock %}
 {% block content %}
   <h1>Meine Listen &amp; Formulare</h1>
-  <p><a href="{% url 'lists:create' %}"><button type="button">Neue Liste anlegen</button></a></p>
+  {% if can_create_list %}
+    <p><a href="{% url 'lists:create' %}"><button type="button">Neue Liste anlegen</button></a></p>
+  {% endif %}
 
   {% if own_lists or own_forms %}
     <ul>

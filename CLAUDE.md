@@ -171,6 +171,8 @@ The wide school-class row is assembled by the row composer described under *Fami
 
 Beyond the spec's "Super-Admin manages LISTTEMPLATEs", the Super-Admin also manages **top-level lists** — those without a `parent_list_id`, e.g. `Elternbeirat`, `Lehrerkollegium`. Regular USERs cannot create top-level lists themselves: setting up the structural top of an installation is an installation-administrative act, not a self-service action.
 
+**Currently also sub-lists:** self-service list creation is switched off by default (`USER_LIST_CREATION_ENABLED=False`, checked by `permissions.can_user_create_list`) — the "Neue Liste anlegen" button and `lists:create` are super-admin only until the operator turns it on. With the switch on, the sub-list parent rules above apply again.
+
 ### School-class lifecycle
 
 School class lists need lifecycle support that other list templates don't: classes advance one grade each year, students switch classes, and admins (Elternvertreter) rotate annually. These are first-class operations, not workarounds.

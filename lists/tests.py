@@ -5856,3 +5856,31 @@ class PurgeArchivedListsTests(TestCase):
         purge_archived_lists.func(timestamp=0)
         self.assertTrue(List.objects.filter(pk=recent.pk).exists())
         self.assertTrue(List.objects.filter(pk=scoped.pk).exists())
+
+
+class ListCreationGateTests(TestCase):
+    """'Neue Liste anlegen' is super-admin only until
+    USER_LIST_CREATION_ENABLED is switched on."""
+
+    def setUp(self):
+        self.user = _make_user(username="plain", email="plain@example.test")
+        self.super_ = _make_super(username="gate_super")
+
+    def test_regular_user_sees_no_button_and_gets_403(self):
+        self.client.force_login(self.user)
+        self.assertNotContains(self.client.get(reverse("lists:index")), "Neue Liste anlegen")
+        self.assertEqual(self.client.get(reverse("lists:create")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("lists:create"), {}).status_code, 403)
+
+    def test_super_admin_keeps_button(self):
+        self.client.force_login(self.super_)
+        self.assertContains(self.client.get(reverse("lists:index")), "Neue Liste anlegen")
+        self.assertEqual(self.client.get(reverse("lists:create")).status_code, 200)
+
+    def test_switch_reopens_for_regular_users(self):
+        from django.test import override_settings
+
+        self.client.force_login(self.user)
+        with override_settings(USER_LIST_CREATION_ENABLED=True):
+            self.assertContains(self.client.get(reverse("lists:index")), "Neue Liste anlegen")
+            self.assertEqual(self.client.get(reverse("lists:create")).status_code, 200)

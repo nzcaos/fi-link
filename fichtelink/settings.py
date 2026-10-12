@@ -219,6 +219,13 @@ LIST_ARCHIVE_RETENTION_DAYS = int(os.environ.get("LIST_ARCHIVE_RETENTION_DAYS", 
 # OFF by default so tests/CI and any pre-Phase-0 deploy never touch Matrix.
 # Flip MATRIX_ENABLED on only after Synapse answers and the federation tester
 # is green. Every Matrix code path is guarded by this flag.
+# Self-service list creation ("Neue Liste anlegen") for regular users —
+# sub-lists under a list they belong to. Off for now: only the super-admin
+# creates lists until the operator opens it up again.
+USER_LIST_CREATION_ENABLED = os.environ.get(
+    "USER_LIST_CREATION_ENABLED", "False"
+).lower() in ("1", "true", "yes", "on")
+
 MATRIX_ENABLED = os.environ.get("MATRIX_ENABLED", "False").lower() in ("1", "true", "yes", "on")
 # Synapse is reachable ONLY inside the Docker network — 8008/8448 are never
 # exposed publicly. Both the admin API and the client-server API go here.

@@ -86,6 +86,7 @@ from .permissions import (
     accessible_lists_for,
     can_user_add_associate,
     can_user_admin_list,
+    can_user_create_list,
     can_user_decide_transfer,
     can_user_edit_record,
     can_user_initiate_transfer,
@@ -142,12 +143,19 @@ def list_index(request):
     return render(
         request,
         "lists/index.html",
-        {"own_lists": own_lists, "own_forms": own_forms, "public_lists": public_lists},
+        {
+            "own_lists": own_lists,
+            "own_forms": own_forms,
+            "public_lists": public_lists,
+            "can_create_list": can_user_create_list(user),
+        },
     )
 
 
 @login_required
 def list_create(request):
+    if not can_user_create_list(request.user):
+        return HttpResponseForbidden("Neue Listen legt derzeit nur der Super-Admin an.")
     if request.method == "POST":
         form = ListCreateForm(request.POST, user=request.user)
         if form.is_valid():

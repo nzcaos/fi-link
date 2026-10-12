@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from django.db.models import Q, QuerySet
 
+from django.conf import settings
+
 from .models import List, ListAccess, ListAdmin, ListRecord, ListTemplate, RecordManager
 
 
@@ -82,6 +84,18 @@ def resolve_default_list(user) -> List | None:
     if last is not None and last.archived_at is None and can_user_see_list(user, last):
         return last
     return accessible_lists_for(user).first()
+
+
+def can_user_create_list(user) -> bool:
+    """May the user open "Neue Liste anlegen" at all? Super-admin always;
+    regular users only while `settings.USER_LIST_CREATION_ENABLED` is on —
+    then the parent rules below still apply."""
+    if is_super_admin(user):
+        return True
+    return bool(
+        getattr(user, "is_authenticated", False)
+        and settings.USER_LIST_CREATION_ENABLED
+    )
 
 
 def can_user_create_top_level_list(user) -> bool:
