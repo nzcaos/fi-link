@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 def messenger_access(request: HttpRequest) -> HttpResponse:
     """Opt-in: GET without an account only explains and offers a button; the
     account is created on POST action=create and then invited into the user's
-    class rooms. POST action=delete erases it again (redact + deactivate)."""
+    class rooms. POST action=delete erases it again (redact + deactivate) in a
+    background task."""
     if not settings.MATRIX_ENABLED:
         return render(request, "matrix/access.html", {"matrix_enabled": False})
 
@@ -52,18 +53,14 @@ def messenger_access(request: HttpRequest) -> HttpResponse:
                 transaction.on_commit(
                     lambda lid=lid: tasks.sync_membership_join.defer(user_id=uid, list_id=lid)
                 )
-        elif action == "delete":
-            account = MatrixAccount.objects.filter(user=request.user).first()
-            if account is not None:
-                try:
-                    service.erase_matrix_account(account)
-                except MatrixError as exc:
-                    log.warning("matrix: erasure failed for user %s: %s", request.user.pk, exc)
-                    messages.error(
-                        request, "Der Messenger-Zugang konnte gerade nicht gelöscht werden. Bitte später erneut versuchen."
-                    )
-                else:
-                    messages.success(request, "Ihr Messenger-Zugang und Ihre Nachrichten wurden gelöscht.")
+        elif action == "delete" and MatrixAccount.objects.filter(user=request.user).exists():
+            uid = request.user.pk
+            transaction.on_commit(lambda: tasks.erase_matrix_account_task.defer(user_id=uid))
+            messages.success(
+                request,
+                "Ihr Messenger-Zugang wird gelöscht. Das dauert einige Minuten; "
+                "danach sind auch Ihre Nachrichten entfernt.",
+            )
         return redirect("matrix:access")
 
     account = MatrixAccount.objects.filter(user=request.user).first()

@@ -346,10 +346,11 @@ class MatrixClient:
     # -- admin API: erasure (as the service account, a Synapse admin) -----
 
     def redact_user_events(self, access_token: str, user_id: str) -> str:
-        """Redact every event the user sent, in all rooms they are (or were
-        banned) in. Synapse resolves the room set synchronously and redacts in
-        the background, so this must run BEFORE `deactivate_user` (which makes
-        the user leave every room). Returns Synapse's redact_id.
+        """Redact every event the user sent, in all rooms they are currently in
+        (or banned from). Synapse redacts in the BACKGROUND and puppets the
+        local user to do it, so the job must have finished (`redact_status`)
+        before `deactivate_user` makes them leave every room — redactions sent
+        by a non-member are rejected. Returns the redact_id.
         """
         from urllib.parse import quote
 
@@ -362,6 +363,61 @@ class MatrixClient:
         )
         log.info("matrix: redaction of %s's events started", user_id)
         return result.get("redact_id", "")
+
+    def redact_status(self, access_token: str, redact_id: str) -> dict[str, Any]:
+        """Progress of a `redact_user_events` job: {"status": "scheduled" |
+        "active" | "complete" | "failed", "failed_redactions": {...}}."""
+        from urllib.parse import quote
+
+        rid = quote(redact_id, safe="")
+        return self._request(
+            "GET", f"/_synapse/admin/v1/user/redact_status/{rid}", access_token=access_token
+        )
+
+    def sender_event_ids(self, access_token: str, room_id: str, sender: str) -> list[str]:
+        """Ids of the not-yet-redacted, non-state events `sender` posted in the
+        room, read as the service account (a member since room creation, so it
+        sees the whole history). Pages backwards through /messages."""
+        import json as jsonlib
+        from urllib.parse import quote, urlencode
+
+        rid = quote(room_id, safe="")
+        params = {
+            "dir": "b",
+            "limit": "100",
+            "filter": jsonlib.dumps({"senders": [sender]}, separators=(",", ":")),
+        }
+        ids: list[str] = []
+        while True:
+            page = self._request(
+                "GET",
+                f"/_matrix/client/v3/rooms/{rid}/messages?{urlencode(params)}",
+                access_token=access_token,
+            )
+            for ev in page.get("chunk", []):
+                if (
+                    ev.get("sender") == sender
+                    and "state_key" not in ev
+                    and "redacted_because" not in ev.get("unsigned", {})
+                ):
+                    ids.append(ev["event_id"])
+            end = page.get("end")
+            if not end or not page.get("chunk"):
+                return ids
+            params["from"] = end
+
+    def redact_event(self, access_token: str, room_id: str, event_id: str, reason: str = "") -> None:
+        from urllib.parse import quote
+
+        rid = quote(room_id, safe="")
+        eid = quote(event_id, safe="")
+        txn = secrets.token_urlsafe(16)
+        self._request(
+            "PUT",
+            f"/_matrix/client/v3/rooms/{rid}/redact/{eid}/{txn}",
+            json={"reason": reason} if reason else {},
+            access_token=access_token,
+        )
 
     def deactivate_user(self, access_token: str, user_id: str, erase: bool = True) -> None:
         """Deactivate the account (leaves all rooms, drops devices/tokens). With

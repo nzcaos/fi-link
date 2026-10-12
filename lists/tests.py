@@ -2498,6 +2498,24 @@ class AssociateWizardMultiPersonTests(TestCase):
         self.assertFalse(Person.objects.filter(given_name="Lina").exists())
         self.assertFalse(Person.objects.filter(given_name="Olaf").exists())
 
+    def test_second_parent_email_only_without_tick_is_rejected(self):
+        resp = self._post(**{"p2_email": "olaf@example.test", f"p2_attr_{self.attr_phone.pk}": "+49 222"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Setzen Sie den Haken")
+        self.assertFalse(Person.objects.filter(given_name="Lina").exists())
+
+    def test_add_associate_blocked_on_archived_list(self):
+        self._post()
+        child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        List.objects.filter(pk=self.lst.pk).update(archived_at=timezone.now())
+        url = reverse(
+            "lists:record_add_associate",
+            kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk},
+        )
+        self.assertEqual(self.client.get(url).status_code, 403)
+        edit = reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk})
+        self.assertEqual(self.client.get(edit).status_code, 403)
+
     def test_add_associate_later_from_child_record(self):
         self._post()
         child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
@@ -3364,6 +3382,43 @@ class SendOutboundMessageTests(TestCase):
         self.assertEqual(sent.attachments, [])
         self.assertIn("Dateityp gesperrt): tool.exe", sent.body)
         self.assertIn("nicht weitergeleitet: Foto.jpg", sent.body)
+
+    def test_trailing_dot_does_not_bypass_blocklist(self):
+        inbound = self._inbound_with(("tool.exe.", b"MZ"))
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        self.assertEqual(mail.outbox[0].attachments, [])
+        self.assertIn("Dateityp gesperrt): tool.exe.", mail.outbox[0].body)
+
+    def test_control_chars_in_filename_are_stripped(self):
+        raw = (
+            b"From: lehrer@schule.example\r\nTo: 5a@caos.cloud\r\nSubject: x\r\n"
+            b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n"
+            b"--B\r\nContent-Type: text/plain\r\n\r\nText\r\n"
+            b"--B\r\nContent-Type: application/pdf\r\n"
+            b"Content-Disposition: attachment; filename*=us-ascii''a.pdf%0D%0ABcc%3A%20x%40evil.example\r\n"
+            b"\r\n%PDF\r\n--B--\r\n"
+        )
+        inbound = InboundMessage.objects.create(
+            imap_uidvalidity=9, imap_uid=777, message_id="crlf@x", from_email="lehrer@schule.example",
+            to_alias="5a", to_domain="caos.cloud", subject="x",
+            raw_eml=raw, received_at=timezone.now(), matched_list=self.lst,
+        )
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.attachments[0][0], "a.pdfBcc: x@evil.example")
+        self.assertNotIn("\nBcc:", sent.message().as_string())
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.SENT)
+
+    def test_non_smtp_error_marks_failed(self):
+        with patch("lists.tasks.build_outbound_email", side_effect=ValueError("kaputt")):
+            with self.assertRaises(ValueError):
+                self._run_task(self.om.pk)
+        self.om.refresh_from_db()
+        self.assertEqual(self.om.status, OutboundMessage.Status.FAILED)
+        self.assertIn("ValueError", self.om.last_error)
 
     def test_missing_original_sends_text_only(self):
         mail.outbox = []
@@ -4650,7 +4705,7 @@ class PeriodicMaintenanceTests(TestCase):
         fake.search.return_value = ("OK", [b"1 2 3"])
         with patch("imaplib.IMAP4_SSL", return_value=fake):
             imap_expunge_processed.func(timestamp=0)
-        fake.login.assert_called_once_with("u", "p")
+        fake.login.assert_called_once_with('"u"', "p")
         fake.select.assert_called_once_with("INBOX")
         self.assertEqual(fake.store.call_count, 3)
         fake.expunge.assert_called_once()

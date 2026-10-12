@@ -259,13 +259,15 @@ def register_start(request: HttpRequest) -> HttpResponse:
     # Retry after a failed (or lost) activation mail: the first POST already
     # created the stub, so without this the visitor lands in the "account
     # exists" branch and "continue" would mint a second stub. Same address and
-    # same name as a not-yet-activated USER → just mail a fresh link to it.
-    # Only `_create_stub_and_send` and `bootstrap_super_admin` create inactive
-    # USERs, so this never touches an invited or activated account.
+    # same name as a never-activated USER → just mail a fresh link to it.
+    # "Never activated" = no passkey and no login: an operator-deactivated
+    # account is inactive too and must not be revivable this way.
     pending = (
         User.objects.select_related("person")
         .filter(
             is_active=False,
+            last_login__isnull=True,
+            passkeys__isnull=True,
             person__email__iexact=email,
             person__given_name__iexact=given_name,
             person__family_name__iexact=family_name,
@@ -274,9 +276,20 @@ def register_start(request: HttpRequest) -> HttpResponse:
         .first()
     )
     if pending is not None:
-        token = ActivationToken.issue(
-            person=pending.person, email=email, user=pending, **_pending_grant(request)
+        # Carry over the invitation of the stub's own earlier link, not the
+        # one in this visitor's session: name + email are not proof of being
+        # that person, and must not attach someone else's join to the stub.
+        previous = (
+            ActivationToken.objects.filter(user=pending, purpose=ActivationToken.Purpose.ACTIVATE)
+            .order_by("-pk")
+            .first()
         )
+        grant = (
+            {"pending_key": previous.pending_key, "pending_token": previous.pending_token}
+            if previous is not None
+            else {}
+        )
+        token = ActivationToken.issue(person=pending.person, email=email, user=pending, **grant)
         return _send_activation_mail(request, token=token, given_name=given_name, email=email)
 
     existing = Person.objects.filter(email__iexact=email, user__isnull=False).exists()

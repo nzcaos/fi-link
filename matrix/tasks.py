@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
+from procrastinate import RetryStrategy
 from procrastinate.contrib.django import app
 
 log = logging.getLogger(__name__)
@@ -122,3 +123,22 @@ def send_matrix_broadcast(list_id: int, body: str) -> None:
     lst = List.objects.filter(pk=list_id).first()
     if lst:
         service.send_to_list(lst, body)
+
+
+@app.task(
+    name="matrix.erase_account",
+    pass_context=False,
+    retry=RetryStrategy(max_attempts=5, exponential_wait=60),
+)
+def erase_matrix_account_task(user_id: int) -> None:
+    """Self-service deletion of a Messenger-Zugang (views.messenger_access).
+    Runs here, not in the request: redacting + waiting for Synapse's
+    background redaction can outlast gunicorn's 30 s timeout."""
+    if not settings.MATRIX_ENABLED:
+        return
+    from . import service
+    from .models import MatrixAccount
+
+    account = MatrixAccount.objects.filter(user_id=user_id).first()
+    if account is not None:
+        service.erase_matrix_account(account)

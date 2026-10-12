@@ -200,7 +200,8 @@ def _forward_attachments(inbound_id: int | None) -> tuple[list[tuple[str, bytes,
         return [], ""
 
     blocked = [n for n, _d, _c in found
-               if any(n.lower().endswith(ext) for ext in _BLOCKED_ATTACHMENT_EXTENSIONS)]
+               # Windows ignores trailing dots/spaces ("x.exe." runs as x.exe).
+               if any(n.lower().rstrip(" .").endswith(ext) for ext in _BLOCKED_ATTACHMENT_EXTENSIONS)]
     kept = [a for a in found if a[0] not in blocked]
     total = sum(len(d) for _n, d, _c in kept)
     dropped_size: list[str] = []
@@ -265,7 +266,7 @@ def send_outbound_message(outbound_id: int, body: str, inbound_id: int | None = 
         for name, data, ctype in attachments:
             msg.attach(name, data, ctype)
         msg.send(fail_silently=False)
-    except SMTPException as exc:
+    except (SMTPException, OSError) as exc:  # transient: retried by RetryStrategy
         om.last_error = f"{type(exc).__name__}: {exc}"[:2000]
         if om.attempts >= MAX_SEND_ATTEMPTS:
             om.status = OutboundMessage.Status.FAILED
@@ -278,6 +279,14 @@ def send_outbound_message(outbound_id: int, body: str, inbound_id: int | None = 
             MAX_SEND_ATTEMPTS,
             exc,
         )
+        raise
+    except Exception as exc:
+        # Not retryable (e.g. a header the email package refuses to write):
+        # record it and mark FAILED instead of leaving the row PENDING forever.
+        om.last_error = f"{type(exc).__name__}: {exc}"[:2000]
+        om.status = OutboundMessage.Status.FAILED
+        om.save(update_fields=["attempts", "status", "last_error"])
+        log.exception("send_outbound_message %d failed permanently", om.pk)
         raise
     else:
         om.status = OutboundMessage.Status.SENT
@@ -621,7 +630,7 @@ def _approval_preview(msg) -> str:
         text = text[:_APPROVAL_PREVIEW_CHARS].rstrip() + " […]"
     out = "\n--- Beginn der Mail ---\n" + (text or "(kein lesbarer Text)") + "\n--- Ende ---\n"
     if attachments:
-        out += "Anhänge (werden mit weitergeleitet): " + ", ".join(attachments) + "\n"
+        out += "Anhänge (werden mit weitergeleitet, sofern Dateityp und Größe es zulassen): " + ", ".join(attachments) + "\n"
     # The notification body is later scanned for the link placeholder; make
     # sure the stranger's text can't inject one.
     return out.replace("__LINK__", "__ LINK __")
@@ -920,6 +929,10 @@ def expire_release_tokens(timestamp: int) -> None:
         log.info("expire_release_tokens: removed %d expired token(s)", deleted)
 
 
+def _imap_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 @app.periodic(cron="23 4 * * *")
 @app.task(queueing_lock="imap_expunge_processed", pass_context=False)
 def imap_expunge_processed(timestamp: int) -> None:
@@ -939,7 +952,10 @@ def imap_expunge_processed(timestamp: int) -> None:
     cls = imaplib.IMAP4_SSL if settings.IMAP_USE_SSL else imaplib.IMAP4
     client = cls(settings.IMAP_HOST, settings.IMAP_PORT)
     try:
-        client.login(settings.IMAP_USER, settings.IMAP_PASS)
+        # imaplib quotes only the password; a catch-all user like
+        # "*@domain" is not a valid IMAP atom and gets BAD unless quoted
+        # (same fix as imap_consumer for the IDLE daemon).
+        client.login(_imap_quote(settings.IMAP_USER), settings.IMAP_PASS)
         client.select("INBOX")
         typ, data = client.search(None, "SEEN", "BEFORE", cutoff)
         if typ != "OK" or not data or not data[0]:

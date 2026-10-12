@@ -283,17 +283,14 @@ class MessengerAccessViewTests(TestCase):
         self.assertContains(resp, 'value="delete"')
 
     @override_settings(MATRIX_ENABLED=True)
-    def test_delete_erases_account(self):
-        MatrixServiceAccount.objects.create(matrix_user_id="@svc:fichtelink.caos.cloud", access_token="svc")
+    def test_delete_enqueues_erasure(self):
         MatrixAccount.objects.create(user=self.user, matrix_user_id="@u-x:fichtelink.caos.cloud", password="pw")
         self.client.force_login(self.user)
-        with patch.object(MatrixClient, "redact_user_events") as red, \
-                patch.object(MatrixClient, "deactivate_user") as deact:
+        with patch("matrix.tasks.erase_matrix_account_task.defer") as defer, \
+                self.captureOnCommitCallbacks(execute=True):
             resp = self.client.post(reverse("matrix:access"), {"action": "delete"})
         self.assertRedirects(resp, reverse("matrix:access"), fetch_redirect_response=False)
-        red.assert_called_once_with("svc", "@u-x:fichtelink.caos.cloud")
-        deact.assert_called_once_with("svc", "@u-x:fichtelink.caos.cloud", erase=True)
-        self.assertFalse(MatrixAccount.objects.filter(user=self.user).exists())
+        defer.assert_called_once_with(user_id=self.user.pk)
 
     @override_settings(MATRIX_ENABLED=False)
     def test_disabled_shows_notice_and_provisions_nothing(self):
@@ -718,6 +715,24 @@ class RoomModerationViewTests(TestCase):
 
 
 class ErasureClientTests(TestCase):
+    def test_sender_event_ids_pages_and_skips_state_and_redacted(self):
+        client = _client()
+        pages = [
+            {"chunk": [
+                {"event_id": "$a", "sender": "@u:x"},
+                {"event_id": "$s", "sender": "@u:x", "state_key": ""},
+                {"event_id": "$r", "sender": "@u:x", "unsigned": {"redacted_because": {}}},
+            ], "end": "t1"},
+            {"chunk": [{"event_id": "$b", "sender": "@u:x"}], "end": "t2"},
+            {"chunk": [], "end": "t3"},
+        ]
+        with patch.object(client, "_request", side_effect=pages) as req:
+            self.assertEqual(client.sender_event_ids("t", "!r:x", "@u:x"), ["$a", "$b"])
+        first_path = req.call_args_list[0].args[1]
+        self.assertIn("/messages?", first_path)
+        self.assertIn("dir=b", first_path)
+        self.assertIn("from=t1", req.call_args_list[1].args[1])
+
     def test_redact_posts_empty_room_list(self):
         client = _client()
         with patch.object(client, "_request", return_value={"redact_id": "r1"}) as req:
@@ -756,13 +771,55 @@ class EraseAccountServiceTests(TestCase):
             user=self.user, matrix_user_id="@u-e:fichtelink.caos.cloud", password="pw"
         )
 
+    def _patched(self, calls, status="complete"):
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+        stack.enter_context(patch.object(
+            MatrixClient, "sender_event_ids", side_effect=lambda *a: calls.append(("events", a[1])) or ["$e1"]
+        ))
+        stack.enter_context(patch.object(
+            MatrixClient, "redact_event", side_effect=lambda *a, **k: calls.append(("redact_event", a[1], a[2]))
+        ))
+        stack.enter_context(patch.object(
+            MatrixClient, "redact_user_events", side_effect=lambda *a: calls.append("redact") or "r1"
+        ))
+        stack.enter_context(patch.object(
+            MatrixClient, "redact_status", side_effect=lambda *a: calls.append("status") or {"status": status}
+        ))
+        stack.enter_context(patch.object(
+            MatrixClient, "deactivate_user", side_effect=lambda *a, **k: calls.append("deactivate")
+        ))
+        return stack
+
     def test_redacts_before_deactivating_and_drops_row(self):
         calls = []
-        with patch.object(MatrixClient, "redact_user_events", side_effect=lambda *a: calls.append("redact")), \
-                patch.object(MatrixClient, "deactivate_user", side_effect=lambda *a, **k: calls.append("deactivate")):
+        with self._patched(calls):
             service.erase_matrix_account(self.account)
-        self.assertEqual(calls, ["redact", "deactivate"])
+        self.assertEqual(calls, ["redact", "status", "deactivate"])
         self.assertFalse(MatrixAccount.objects.exists())
+
+    def test_class_rooms_redacted_by_service_account(self):
+        # Also rooms the user already left (kicked on list leave).
+        template = ListTemplate.objects.create(name="Schulklasse")
+        lst = List.objects.create(title="5a", email_alias="5a", template=template, matrix_room_enabled=True)
+        MatrixRoom.objects.create(list=lst, room_id="!r5a:fichtelink.caos.cloud")
+        calls = []
+        with self._patched(calls):
+            service.erase_matrix_account(self.account)
+        self.assertEqual(calls[:2], [
+            ("events", "!r5a:fichtelink.caos.cloud"),
+            ("redact_event", "!r5a:fichtelink.caos.cloud", "$e1"),
+        ])
+        self.assertEqual(calls[-1], "deactivate")
+
+    def test_failed_redaction_aborts_before_deactivation(self):
+        calls = []
+        with self._patched(calls, status="failed"):
+            with self.assertRaises(MatrixError):
+                service.erase_matrix_account(self.account)
+        self.assertNotIn("deactivate", calls)
+        self.assertTrue(MatrixAccount.objects.exists())
 
     def test_unknown_on_synapse_counts_as_erased(self):
         with patch.object(
@@ -782,7 +839,8 @@ class EraseAccountServiceTests(TestCase):
         from lists.erasure import execute_erasure, plan_erasure
 
         plan = plan_erasure(self.user.person)
-        with patch.object(MatrixClient, "redact_user_events") as red, \
+        with patch.object(MatrixClient, "redact_user_events", return_value="r1") as red, \
+                patch.object(MatrixClient, "redact_status", return_value={"status": "complete"}), \
                 patch.object(MatrixClient, "deactivate_user") as deact:
             execute_erasure(plan, reassign_to=None)
         red.assert_called_once_with("svc", "@u-e:fichtelink.caos.cloud")

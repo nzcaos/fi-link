@@ -73,7 +73,8 @@ class Command(BaseCommand):
         except MatrixError as exc:
             raise CommandError(
                 f"Matrix-Konto konnte auf Synapse nicht gelöscht werden ({exc}). "
-                "Nichts in Fichtelink gelöscht — Synapse prüfen und erneut ausführen."
+                "Abgebrochen: Personen, Konten und Einträge sind unverändert (nur bereits "
+                "gelöschte Matrix-Konten sind entfernt) — Synapse prüfen und erneut ausführen."
             ) from exc
         self.stdout.write("")
         for label, n in sorted(counts.items()):

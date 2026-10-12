@@ -208,6 +208,37 @@ class RegisterStartViewTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn(newest.token, mail.outbox[0].body)
 
+    def test_retry_keeps_the_stubs_own_invitation(self):
+        # The resent link carries the invitation of the stub's first link, not
+        # whatever grant the (possibly different) submitter holds.
+        person = Person.objects.create(given_name="Vera", family_name="V", email="vera@example.org")
+        stub = User.objects.create_user(person=person, username=random_username(), is_active=False)
+        ActivationToken.issue(
+            person=person, email="vera@example.org", user=stub,
+            pending_key="pending_join_token", pending_token="orig-5a",
+        )
+        self.client.post(
+            "/auth/register/",
+            {"email": "vera@example.org", "given_name": "Vera", "family_name": "V", "privacy_consent": "on"},
+        )
+        newest = ActivationToken.objects.filter(user=stub).order_by("-pk").first()
+        self.assertEqual((newest.pending_key, newest.pending_token), ("pending_join_token", "orig-5a"))
+        self.assertIsNone(newest.consumed_at)
+
+    def test_deactivated_account_gets_no_new_link(self):
+        from django.core import mail
+        from django.utils import timezone as tz
+
+        user = _make_user(email="gesperrt@example.org", given="Anna", family="Müller")
+        User.objects.filter(pk=user.pk).update(is_active=False, last_login=tz.now())
+        mail.outbox.clear()
+        resp = self.client.post(
+            "/auth/register/",
+            {"email": "gesperrt@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"},
+        )
+        self.assertContains(resp, "weiteres Konto")
+        self.assertFalse(ActivationToken.objects.filter(user=user).exists())
+
     def test_pending_stub_with_other_name_keeps_continue_prompt(self):
         # Same mailbox, different person (second parent) → not a retry.
         data = {"email": "family@example.org", "given_name": "Anna", "family_name": "Müller", "privacy_consent": "on"}

@@ -811,7 +811,11 @@ class AssociateWizardForm(forms.Form):
                         f"{label} der zweiten Bezugsperson ist erforderlich, "
                         "wenn Sie eine zweite Bezugsperson hinzufügen.",
                     )
-        elif cleaned.get("p2_given_name") or cleaned.get("p2_family_name"):
+        elif any(
+            v not in (None, "", False, [])
+            for k, v in cleaned.items()
+            if k.startswith("p2_")
+        ):
             # Without JS the second-parent fields stay editable even when the
             # box is unticked; silently dropping what was typed there lost the
             # second parent. Ask instead.

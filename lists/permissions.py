@@ -210,11 +210,13 @@ def can_user_edit_record(user, record: ListRecord) -> bool:
     containing list, by the subject's own User (even without an explicit
     RecordManager row — see CLAUDE.md / *Family-association model*: "a
     parent's record is editable by themselves once they self-register"),
-    and by super-admin. Archived records are read-only.
+    and by super-admin. Archived records — and every record of an archived
+    list (archiving a list leaves its records' own archived_at unset) — are
+    read-only.
     """
     if not getattr(user, "is_authenticated", False):
         return False
-    if record.archived_at is not None:
+    if record.archived_at is not None or record.list.archived_at is not None:
         return False
     if user.is_superuser:
         return True
@@ -236,7 +238,9 @@ def can_user_add_associate(user, record: ListRecord) -> bool:
     """
     if not getattr(user, "is_authenticated", False):
         return False
-    if record.archived_at is not None or record.role != ListRecord.Role.MEMBER:
+    if record.archived_at is not None or record.list.archived_at is not None:
+        return False
+    if record.role != ListRecord.Role.MEMBER:
         return False
     if record.list.template.member_subject_mode != ListTemplate.MemberSubjectMode.VIA_ASSOCIATE:
         return False

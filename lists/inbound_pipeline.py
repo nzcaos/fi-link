@@ -118,7 +118,10 @@ def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, byte
     out: list[tuple[str, bytes, str]] = []
 
     def _name(part, fallback_ext: str = "") -> str:
-        name = part.get_filename()
+        # RFC 2231 names are percent-decoded, so CR/LF and other controls can
+        # arrive here; they would break (or inject into) the forward's
+        # Content-Disposition header.
+        name = "".join(ch for ch in (part.get_filename() or "") if ch.isprintable()).strip()
         if name:
             return name
         ext = mimetypes.guess_extension(part.get_content_type()) or fallback_ext

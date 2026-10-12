@@ -39,10 +39,21 @@ def ensure_matrix_account(user) -> MatrixAccount:
     if not settings.MATRIX_ENABLED:
         raise MatrixError("Matrix-Integration ist deaktiviert (MATRIX_ENABLED=False).")
 
-    existing = MatrixAccount.objects.filter(user=user).first()
-    if existing:
-        return existing
+    from django.db import transaction
 
+    from accounts.models import User
+
+    with transaction.atomic():
+        # Lock the user row so a double-clicked opt-in can't register two
+        # Synapse accounts (the second of which no local row would point to).
+        User.objects.select_for_update().filter(pk=user.pk).first()
+        existing = MatrixAccount.objects.filter(user=user).first()
+        if existing:
+            return existing
+        return _register_matrix_account(user)
+
+
+def _register_matrix_account(user) -> MatrixAccount:
     client = MatrixClient.from_settings()
     password = secrets.token_urlsafe(18)
     last_exc: MatrixError | None = None
@@ -322,25 +333,66 @@ def room_lists_for_user(user):
     ).distinct()
 
 
+# How long erasure waits for Synapse's background redaction before giving up
+# (and aborting, so nothing is deactivated with messages still visible).
+REDACT_WAIT_SECONDS = 120
+
+
+def _wait_for_redaction(client: MatrixClient, token: str, redact_id: str) -> None:
+    import time
+
+    deadline = time.monotonic() + REDACT_WAIT_SECONDS
+    while True:
+        status = client.redact_status(token, redact_id)
+        state = status.get("status")
+        if state == "complete":
+            failed = status.get("failed_redactions") or {}
+            if failed:
+                log.warning("matrix: %d redaction(s) failed in job %s", len(failed), redact_id)
+            return
+        if state == "failed":
+            raise MatrixError(f"Synapse-Redaktion {redact_id} fehlgeschlagen.")
+        if time.monotonic() > deadline:
+            raise MatrixError(f"Synapse-Redaktion {redact_id} nach {REDACT_WAIT_SECONDS}s nicht fertig.")
+        time.sleep(1)
+
+
 def erase_matrix_account(account: MatrixAccount) -> None:
     """Remove a user's Matrix footprint on Synapse, then drop the local row.
 
-    Order matters: redact first (Synapse picks the rooms from the user's
-    current memberships), then deactivate with erase=True (leaves all rooms,
-    removes the profile, marks the account GDPR-erased). A 404 means the
-    account is already gone on Synapse and counts as done; anything else
-    raises so the caller does not lose track of a live account.
+    1. Class rooms: the service account (member since creation, redact PL)
+       redacts the user's messages itself — this also reaches rooms the user
+       already left (list leave = kick), where the user could no longer act.
+    2. Every other room the user is still in (e.g. direct chats): Synapse's
+       admin redaction, which puppets the user and so must FINISH while they
+       are still a member — we poll its status before going on.
+    3. Deactivate with erase=True (leaves all rooms, removes the profile).
+
+    A 404 on the account means it is already gone on Synapse and counts as
+    done; anything else raises, so the caller keeps track of a live account.
     """
     client = MatrixClient.from_settings()
     token = _service_token()
+    mxid = account.matrix_user_id
+    for room in MatrixRoom.objects.all():
+        try:
+            event_ids = client.sender_event_ids(token, room.room_id, mxid)
+        except MatrixError as exc:
+            if exc.status in (403, 404):  # room gone / service account not in it
+                continue
+            raise
+        for event_id in event_ids:
+            client.redact_event(token, room.room_id, event_id, reason="Konto gelöscht")
     try:
-        client.redact_user_events(token, account.matrix_user_id)
-        client.deactivate_user(token, account.matrix_user_id, erase=True)
+        redact_id = client.redact_user_events(token, mxid)
+        if redact_id:
+            _wait_for_redaction(client, token, redact_id)
+        client.deactivate_user(token, mxid, erase=True)
     except MatrixError as exc:
         if exc.status != 404:
             raise
-        log.info("matrix: %s not found on Synapse — treated as erased", account.matrix_user_id)
-    log.info("matrix: erased account %s (user %s)", account.matrix_user_id, account.user_id)
+        log.info("matrix: %s not found on Synapse — treated as erased", mxid)
+    log.info("matrix: erased account %s (user %s)", mxid, account.user_id)
     account.delete()
 
 
