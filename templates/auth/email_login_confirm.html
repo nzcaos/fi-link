@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Anmelden — Fichtelink{% endblock %}
+{% block content %}
+{% if invalid %}
+  <h1>Link ungültig oder abgelaufen</h1>
+  <div class="error">
+    Dieser Anmeldelink ist nicht mehr gültig — er wurde bereits benutzt oder ist
+    abgelaufen.
+  </div>
+  <p style="margin-top:1rem">
+    <a href="{% url 'accounts:email_login_request' %}">Neuen Anmeldelink anfordern</a>
+  </p>
+{% else %}
+  {% comment %}
+    Only a button here: mail scanners prefetch links, so the GET must not
+    sign anyone in or use up the link. The POST does.
+  {% endcomment %}
+  <h1>Anmelden</h1>
+  <p>Konto: <strong>{{ person.full_name }}</strong></p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit">Jetzt anmelden</button>
+  </form>
+  <p style="margin-top:1rem;font-size:0.85rem;color:#555">
+    Sie bleiben auf diesem Gerät {{ session_days }} Tage angemeldet. Nutzen Sie
+    ein fremdes oder gemeinsam genutztes Gerät, melden Sie sich danach bitte ab.
+  </p>
+{% endif %}
+{% endblock %}

@@ -47,7 +47,8 @@ technisch zwingend und unter der gewohnten Adresse Ihrer Installation (z. B.
 `https://fichtelink.caos.cloud`) bereits eingerichtet.
 
 > **Geräte ohne Passkey-Unterstützung** (z. B. sehr alte Windows-Rechner ohne
-> Smartphone) können Fichtelink nicht nutzen. Das ist bewusst so gewählt.
+> Smartphone): Fichtelink funktioniert trotzdem. Sie melden sich dann über einen
+> **Anmeldelink per E-Mail** an (siehe [Abschnitt 2](#2-registrieren-und-anmelden)).
 
 ---
 
@@ -65,6 +66,12 @@ technisch zwingend und unter der gewohnten Adresse Ihrer Installation (z. B.
    Optional können Sie dem Passkey eine **Bezeichnung** geben (z. B. „iPhone",
    „Arbeit-Laptop").
 5. Fertig — Sie sind angemeldet.
+
+> **Passkey klappt nicht?** Unter dem Button auf der Seite „Passkey einrichten“
+> führt der Link *„Passkey klappt nicht?“* zu Tipps (häufigster Grund: der Link
+> wurde im Mini-Browser einer Mail-App geöffnet). Hilft das nicht, wählen Sie
+> dort **„Ohne Passkey fortfahren“** — Ihr Konto ist dann aktiv, und Sie melden
+> sich künftig per Anmeldelink an (siehe unten).
 
 > Die **E-Mail-Adresse ist Pflicht**: Fichtelink lebt von der Kommunikation per
 > Mail (Listenpost, Bestätigungslinks, Einladungen). Ihre Adresse ist aber **nur
@@ -91,6 +98,12 @@ Passkeys direkt an.
 > Beim Anmelden zeigt der Browser beide Passkeys mit Namen an — jeder wählt
 > seinen eigenen, auch auf einem gemeinsam genutzten Gerät.
 
+**Ohne Passkey anmelden:** Auf der Anmeldeseite *„Anmeldelink per E-Mail“*
+wählen, E-Mail-Adresse eingeben, den Link aus der Mail öffnen und auf
+**„Jetzt anmelden“** klicken. Der Link gilt 30 Minuten und nur einmal; danach
+bleiben Sie auf dem Gerät 7 Tage angemeldet. Einen Passkey können Sie jederzeit
+später unter „Passkeys“ einrichten.
+
 Nach dem Anmelden landen Sie **direkt in einer Listenansicht** — es gibt keine
 zusätzliche Startseite. Welche Liste angezeigt wird, ist die zuletzt geöffnete
 (oder die erste Ihrer Listen).
@@ -105,7 +118,8 @@ zusätzliche Startseite. Welche Liste angezeigt wird, ist die zuletzt geöffnete
 - **weitere Passkeys hinzufügen** (z. B. zusätzlich zum iPhone noch den
   Laptop). Mehrere Passkeys sind ausdrücklich erwünscht — sie sind Ihr Schutz
   gegen Geräteverlust.
-- **einzelne Passkeys löschen** (z. B. bei einem abgegebenen Altgerät).
+- **einzelne Passkeys löschen** (z. B. bei einem abgegebenen Altgerät). Auch
+  der letzte darf weg — danach melden Sie sich per Anmeldelink an.
 
 > **Tipp:** Richten Sie von Anfang an einen Passkey auf einem **zweiten Gerät**
 > ein. Verlieren Sie eines, kommen Sie mit dem anderen weiterhin hinein, ohne

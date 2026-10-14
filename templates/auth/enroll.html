@@ -17,6 +17,10 @@
   </p>
   <div id="status"></div>
 
+  <p style="margin-top:2rem;font-size:0.9rem">
+    <a href="{% url 'accounts:passkey_help' token %}">Passkey klappt nicht?</a>
+  </p>
+
   {{ token|json_script:"token-data" }}
   <script>
     (function () {
@@ -68,7 +72,8 @@
           setStatus('Passkey gespeichert. Sie werden weitergeleitet …', 'ok');
           window.location = out.redirect;
         } catch (err) {
-          setStatus('Fehler: ' + err.message, 'error');
+          setStatus('Fehler: ' + err.message
+            + ' — <a href="{% url 'accounts:passkey_help' token %}">Passkey klappt nicht?</a>', 'error');
           btn.disabled = false;
         }
       });

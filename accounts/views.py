@@ -370,7 +370,9 @@ def _send_activation_mail(
                 f"Hallo {given_name},\n\n"
                 f"klicken Sie auf den folgenden Link, um Ihr Fichtelink-Konto zu aktivieren "
                 f"und einen Passkey einzurichten:\n\n{link}\n\n"
-                f"Der Link ist {token.expires_at:%d.%m.%Y %H:%M} gültig."
+                f"Der Link ist bis {token.expires_at:%d.%m.%Y %H:%M} gültig. Falls die "
+                f"Passkey-Einrichtung auf Ihrem Gerät nicht klappt, finden Sie auf der "
+                f"Seite unter „Passkey klappt nicht?“ Hilfe und einen Weg ohne Passkey."
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],
@@ -500,7 +502,7 @@ def activate(request: HttpRequest, token: str) -> HttpResponse:
     embedded JS can read it on first visit (e.g. opening the activation
     link in a browser that has never touched the site before — iOS Safari).
     """
-    activation = get_object_or_404(ActivationToken, token=token)
+    activation = get_object_or_404(ActivationToken, token=token, purpose__in=_ENROL_PURPOSES)
     if not activation.is_valid():
         return render(
             request,
@@ -575,14 +577,190 @@ def register_passkey_finish(request: HttpRequest) -> JsonResponse:
         activation.consumed_at = timezone.now()
         activation.save(update_fields=["consumed_at"])
 
-    auth_login(request, user, backend=DEFAULT_BACKEND)
-    # Activation link opened in a browser without the registration session
-    # (mail app, other device): resume the invitation stored on the token.
+    return JsonResponse(
+        {"redirect": _sign_in_from_link(request, activation, default=reverse("accounts:passkeys"))}
+    )
+
+
+def _sign_in_from_link(
+    request: HttpRequest, activation: ActivationToken, *, default: str, by_mail: bool = False
+) -> str:
+    """Session for the USER behind a redeemed mailed link; returns where to go.
+
+    `by_mail` = no passkey was used, the link alone proved the mailbox: the
+    session then lasts EMAIL_LOGIN_SESSION_DAYS instead of the 2-week default.
+    """
+    auth_login(request, activation.user, backend=DEFAULT_BACKEND)
+    if by_mail:
+        request.session.set_expiry(settings.EMAIL_LOGIN_SESSION_DAYS * 24 * 60 * 60)
+    # Link opened in a browser without the registration session (mail app,
+    # other device): resume the invitation stored on the token.
     if activation.pending_key and not any(
         request.session.get(k) for k in _PENDING_SESSION_KEYS
     ):
         request.session[activation.pending_key] = activation.pending_token
-    return JsonResponse({"redirect": _next_url_after_auth(request, default=reverse("accounts:passkeys"))})
+    return _next_url_after_auth(request, default=default)
+
+
+# ---------------------------------------------------------------------------
+# Without a passkey: help page + "Ohne Passkey fortfahren", and login by
+# mailed link. The mailbox is the proof — the same trust self-service recovery
+# already places in it. See CLAUDE.md / "Login by mail link".
+# ---------------------------------------------------------------------------
+
+
+def passkey_help(request: HttpRequest, token: str) -> HttpResponse:
+    """"Passkey klappt nicht?" — tips for the enrolment, plus the way on
+    without a passkey. Reached from the enrolment page, so `token` is the
+    activation (or recovery) link the visitor just opened."""
+    activation = get_object_or_404(ActivationToken, token=token, purpose__in=_ENROL_PURPOSES)
+    if not activation.is_valid():
+        return render(request, "auth/activate_invalid.html", {"token": activation}, status=410)
+    return render(
+        request,
+        "auth/passkey_help.html",
+        {
+            "token": activation.token,
+            "person": activation.person,
+            "session_days": settings.EMAIL_LOGIN_SESSION_DAYS,
+        },
+    )
+
+
+@require_POST
+def activate_without_passkey(request: HttpRequest, token: str) -> HttpResponse:
+    """Activate (or, for a recovery link, just sign in) without a passkey.
+
+    No second mail: opening the activation link already proved the mailbox,
+    exactly what the passkey path relies on too. POST-only, so a link scanner
+    fetching the help page activates nothing."""
+    activation = _load_active_token(token)
+    if activation is None or not activation.consume():
+        return render(request, "auth/activate_invalid.html", status=410)
+    user = activation.user
+    if not user.is_active:
+        if user.last_login is not None:
+            # Deactivated by an operator, not a never-activated stub: a still
+            # valid recovery link must not revive it.
+            return render(request, "auth/activate_invalid.html", status=410)
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+    log.info("activated without passkey: user=%s", user.pk)
+    return redirect(
+        _sign_in_from_link(request, activation, default=settings.LOGIN_REDIRECT_URL, by_mail=True)
+    )
+
+
+def email_login_request(request: HttpRequest) -> HttpResponse:
+    """Mail a short-lived login link to the address on file. Enumeration-
+    resistant and rate-limited like `recover_start`; a shared family mailbox
+    gets one link per account, labelled by name."""
+    if request.user.is_authenticated:
+        return redirect(settings.LOGIN_REDIRECT_URL)
+    context = {"link_minutes": settings.EMAIL_LOGIN_LINK_MINUTES}
+    if request.method == "GET":
+        return render(request, "auth/email_login_request.html", context)
+
+    email = (request.POST.get("email") or "").strip().lower()
+    if not email:
+        return render(
+            request,
+            "auth/email_login_request.html",
+            {**context, "error": "Bitte geben Sie Ihre E-Mail-Adresse an."},
+            status=400,
+        )
+    if not _check_registration_rate_limit(request):
+        return _rate_limited_response(request)
+
+    users = list(
+        User.objects.select_related("person").filter(
+            person__email__iexact=email, is_active=True
+        )
+    )
+    if users:
+        # Deliberately no `_pending_grant`: the requester is anonymous, so an
+        # invitation in *their* session must not ride on someone else's link —
+        # it would pull the account owner into a list of the requester's
+        # choosing. Opened in the same browser, the session still finishes it.
+        links: list[tuple[str, str]] = []
+        with transaction.atomic():
+            for user in users:
+                token = ActivationToken.issue(
+                    person=user.person,
+                    email=user.person.email or email,
+                    user=user,
+                    purpose=ActivationToken.Purpose.LOGIN,
+                    ttl=timedelta(minutes=settings.EMAIL_LOGIN_LINK_MINUTES),
+                )
+                links.append(
+                    (
+                        user.person.full_name,
+                        request.build_absolute_uri(
+                            reverse("accounts:email_login", args=[token.token])
+                        ),
+                    )
+                )
+        _send_login_link_mail(email, links)
+
+    # Identical response whether or not an account was found.
+    return render(
+        request, "auth/email_login_request.html", {**context, "sent": True, "email": email}
+    )
+
+
+def _send_login_link_mail(email: str, links: list[tuple[str, str]]) -> None:
+    minutes = settings.EMAIL_LOGIN_LINK_MINUTES
+    if len(links) == 1:
+        name, link = links[0]
+        intro = f"Hallo {name},\n\nmit diesem Link melden Sie sich bei Fichtelink an:\n\n{link}"
+    else:
+        lines = "\n".join(f"  - {name}: {link}" for name, link in links)
+        intro = (
+            "Hallo,\n\nunter dieser E-Mail-Adresse sind mehrere Fichtelink-Konten "
+            f"registriert. Wählen Sie den Link für Ihr Konto:\n\n{lines}"
+        )
+    body = (
+        f"{intro}\n\n"
+        f"Der Link ist {minutes} Minuten gültig und funktioniert nur einmal. "
+        f"Wenn Sie keine Anmeldung angefordert haben, ignorieren Sie diese Mail — "
+        f"ohne Klick passiert nichts."
+    )
+    try:
+        send_mail(
+            subject="Fichtelink — Ihr Anmeldelink",
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+        )
+    except (smtplib.SMTPException, OSError) as exc:
+        # Never surfaced (enumeration resistance); the operator sees the log.
+        log.error("login-link mail to %s failed: %s", email, exc)
+
+
+def email_login(request: HttpRequest, token: str) -> HttpResponse:
+    """Landing page of a mailed login link. GET only shows a button — mail
+    scanners (Outlook Safe Links & co.) prefetch links and must neither burn
+    the token nor end up signed in; the POST redeems it."""
+    activation = (
+        ActivationToken.objects.select_related("user", "person")
+        .filter(token=token, purpose=ActivationToken.Purpose.LOGIN)
+        .first()
+    )
+    if activation is None or not activation.is_valid() or not activation.user.is_active:
+        return render(request, "auth/email_login_confirm.html", {"invalid": True}, status=410)
+    if request.method == "POST":
+        if not activation.consume():
+            return render(request, "auth/email_login_confirm.html", {"invalid": True}, status=410)
+        return redirect(
+            _sign_in_from_link(
+                request, activation, default=settings.LOGIN_REDIRECT_URL, by_mail=True
+            )
+        )
+    return render(
+        request,
+        "auth/email_login_confirm.html",
+        {"person": activation.person, "session_days": settings.EMAIL_LOGIN_SESSION_DAYS},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -747,15 +925,8 @@ def passkey_add_finish(request: HttpRequest) -> JsonResponse:
 @login_required
 @require_POST
 def passkey_delete(request: HttpRequest, pk: int) -> HttpResponse:
+    # The last one may go too: sign-in then falls back to the mailed link.
     passkey = get_object_or_404(Passkey, pk=pk, user=request.user)
-    remaining = request.user.passkeys.exclude(pk=pk).count()
-    if remaining == 0:
-        messages.error(
-            request,
-            "Das ist Ihr letzter Passkey — Sie würden sich aussperren. "
-            "Bitte richten Sie zuerst einen weiteren ein.",
-        )
-        return redirect("accounts:passkeys")
     passkey.delete()
     messages.success(request, "Passkey gelöscht.")
     return redirect("accounts:passkeys")
@@ -780,6 +951,8 @@ def _json_options(options_json: str) -> JsonResponse:
     # Django serializes once at the HTTP layer.
     return JsonResponse(json.loads(options_json))
 
+
+_ENROL_PURPOSES = (ActivationToken.Purpose.ACTIVATE, ActivationToken.Purpose.RECOVER)
 
 _PENDING_SESSION_KEYS = (
     "pending_invite_token",
@@ -828,11 +1001,13 @@ def _next_url_after_auth(request: HttpRequest, *, default: str) -> str:
 
 
 def _load_active_token(token_value: str) -> ActivationToken | None:
+    """A usable activation/recovery token. Login-link tokens are excluded:
+    they sign in, they don't open the enrolment page."""
     if not token_value:
         return None
     try:
         activation = ActivationToken.objects.select_related("user", "person").get(
-            token=token_value
+            token=token_value, purpose__in=_ENROL_PURPOSES
         )
     except ActivationToken.DoesNotExist:
         return None

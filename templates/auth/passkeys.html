@@ -14,6 +14,14 @@
     bei Apple automatisch auf alle Ihre Geräte.
   </p>
 
+  {% if not passkeys %}
+    <div class="info">
+      Sie melden sich derzeit per E-Mail-Link an. Wenn Ihr Gerät Passkeys
+      unterstützt, richten Sie unten einen ein — dann entfällt der Umweg über
+      die Mail.
+    </div>
+  {% endif %}
+
   <div id="passkey-list">
     {% include "auth/_passkey_list.html" %}
   </div>

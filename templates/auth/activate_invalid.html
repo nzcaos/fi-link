@@ -11,7 +11,9 @@
     oder öffnen Sie den QR-Code bzw. Formular-Link erneut.
   </p>
   <p>
-    Falls Sie Ihr Konto bereits aktiviert hatten und nur den Passkey verloren
-    haben: <a href="{% url 'accounts:recover' %}">Zugang wiederherstellen</a>.
+    Falls Sie Ihr Konto bereits aktiviert hatten:
+    <a href="{% url 'accounts:email_login_request' %}">Anmeldelink per E-Mail</a>
+    oder, bei verlorenem Passkey,
+    <a href="{% url 'accounts:recover' %}">Zugang wiederherstellen</a>.
   </p>
 {% endblock %}

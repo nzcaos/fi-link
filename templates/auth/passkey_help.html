@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Passkey klappt nicht? — Fichtelink{% endblock %}
+{% block content %}
+  <p><a href="{% url 'accounts:activate' token %}">← Zurück zur Passkey-Einrichtung</a></p>
+  <h1>Passkey klappt nicht?</h1>
+  <p>
+    Konto: <strong>{{ person.full_name }}</strong> ({{ person.email }})
+  </p>
+  <p>Diese Punkte lösen die meisten Probleme:</p>
+  <ul>
+    <li>
+      <strong>Link im richtigen Browser öffnen.</strong> Mail-Apps (z.&nbsp;B. GMX,
+      Web.de, Outlook) öffnen Links oft in einem eigenen Mini-Browser, der keine
+      Passkeys kann. Öffnen Sie den Aktivierungslink in Safari, Chrome, Edge oder
+      Firefox, z.&nbsp;B. über „In Browser öffnen“ oder durch Kopieren des Links.
+    </li>
+    <li>
+      <strong>Bildschirmsperre einrichten.</strong> Ein Passkey braucht eine
+      Geräte-PIN, einen Code, Fingerabdruck oder Gesichtserkennung. Ohne
+      Bildschirmsperre lehnt das Gerät ab.
+    </li>
+    <li>
+      <strong>iPhone/iPad/Mac:</strong> iOS bzw. macOS aktuell halten und in den
+      Einstellungen den iCloud-Schlüsselbund (Passwörter) einschalten.
+    </li>
+    <li>
+      <strong>Android:</strong> ab Android 9, mit angemeldetem Google-Konto und
+      aktuellem Chrome.
+    </li>
+    <li>
+      <strong>Windows-PC:</strong> Windows Hello (PIN) einrichten. Alternativ
+      bietet der Browser „Anderes Gerät verwenden“ an: Dann scannen Sie mit dem
+      Smartphone einen QR-Code, und der Passkey liegt auf dem Smartphone.
+    </li>
+    <li>
+      <strong>Privates Fenster / alter Browser:</strong> Im privaten Modus und in
+      veralteten Browsern funktionieren Passkeys oft nicht.
+    </li>
+  </ul>
+
+  <h2 style="margin-top:2.5rem;font-size:1.1rem">Ohne Passkey weiter</h2>
+  <p>
+    Hat Ihr Gerät keine Passkey-Unterstützung, können Sie Fichtelink auch ohne
+    Passkey nutzen. Sie bleiben dann auf diesem Gerät {{ session_days }} Tage
+    angemeldet. Danach fordern Sie auf der Anmeldeseite einen
+    <strong>Anmeldelink per E-Mail</strong> an und klicken ihn an. Einen Passkey
+    können Sie jederzeit später unter „Passkeys“ einrichten.
+  </p>
+  <form method="post" action="{% url 'accounts:activate_without_passkey' token %}">
+    {% csrf_token %}
+    <button type="submit" class="secondary">Ohne Passkey fortfahren</button>
+  </form>
+{% endblock %}

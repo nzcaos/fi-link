@@ -338,11 +338,23 @@ Optional Synapse-backed class chats run **alongside** email for time-critical no
 
 This section draws on the `Fi-Planer` sibling project (also volunteer-run, also school-context, also Passkey-only), which runs the same flow in production. Where this section overlaps with Fi-Planer's `CLAUDE.md`, that's deliberate — same operational lessons apply.
 
-### Passkeys only, no passwords
+### Passkeys first, no passwords
 
-Authentication is **exclusively** via WebAuthn passkeys. No password storage, no password-reset flow, no password-based login backend. Rationale: passwords can be forgotten, chosen poorly, reused across services, and leaked in third-party breaches — none of these failure modes apply to passkeys.
+Authentication is via WebAuthn passkeys, with a **mailed login link as the fallback** for devices that can't hold one (see *Login by mail link* below). No password storage, no password-reset flow, no password-based login backend. Rationale: passwords can be forgotten, chosen poorly, reused across services, and leaked in third-party breaches — none of these failure modes apply to passkeys or to a mailbox-bound link.
 
-Trade-off: users without passkey-capable devices (older Windows, no smartphone) cannot use the system at all. This is accepted deliberately — the volunteer-run target audience is overwhelmingly on devices that support passkeys (iOS 16+, Android 9+, modern macOS / Windows / Linux with current browsers), and the security gain is judged to outweigh the exclusion. Setup documentation must call this requirement out clearly.
+Trade-off (changed decision): originally users without passkey-capable devices could not use the system at all. After go-live (2026-10), 8 of the first ~60 families' registrations stalled at the passkey step — including a person with no smartphone and no passkey-capable computer — so the exclusion was dropped in favour of the mail-link fallback.
+
+### Login by mail link
+
+The fallback for users whose device can't create a passkey. It adds **no new attack class**: since self-service recovery (*Account recovery*), control of the on-file mailbox already suffices to enrol a passkey for an account. Code: `accounts.views` (`passkey_help`, `activate_without_passkey`, `email_login_request`, `email_login`).
+
+- **At activation:** the enrolment page carries a small *Passkey klappt nicht?* link → help page with setup tips (mail-app in-app browsers, screen lock, iCloud Keychain, Windows Hello, private windows) and a secondary *Ohne Passkey fortfahren* button. Its POST activates the stub and signs in **without a second mail** — opening the activation link already proved the mailbox, which is all the passkey path relies on too. The pending invitation on the token is resumed exactly as after a passkey enrolment. Works for `RECOVER` links too (signs in an active account); an operator-deactivated account (inactive, `last_login` set) is not revived.
+- **Later logins:** *Anmeldelink per E-Mail* on the login page → `ActivationToken` with `purpose=LOGIN`, valid `EMAIL_LOGIN_LINK_MINUTES` (30), single-use (`ActivationToken.consume()`, a conditional UPDATE). Enumeration-resistant, rate-limited, one link per account on a shared mailbox — same rules as `/auth/recover/`. Unlike activation tokens, a login token carries **no** pending invitation: the requester is anonymous, and attaching their session's QR join to someone else's link would pull that account into a list of the requester's choosing. Opened in the same browser, the session still finishes the join.
+- **GET never signs in.** The link landing page only shows a button; the POST redeems. Mail scanners (Outlook Safe Links & co.) prefetch links and would otherwise burn them or end up signed in. Same M10 pattern as `mail_release`.
+- **Session length:** a session opened without a passkey lasts `EMAIL_LOGIN_SESSION_DAYS` (7); passkey sessions keep Django's 2-week default.
+- **Purposes don't cross:** `LOGIN` tokens never open the enrolment/help pages, `ACTIVATE`/`RECOVER` tokens are not login links.
+- Deleting the **last passkey** is allowed now — it no longer locks anyone out. Users without a passkey see a hint on the Passkeys page to set one up when their device can.
+- **Stalled registrations:** `manage.py resend_activation` lists never-activated stubs (inactive, no passkey, never logged in); `--send` mails each a fresh activation link that keeps the invitation of its latest earlier link (if not yet swept) and points to the passkey-less path.
 
 ### Library choice and topology
 
@@ -399,7 +411,7 @@ Not gated, for good reason: `/auth/activate/<token>/` (the link itself is the pr
 - **Registration:** user enters email → confirmation link sent to that address → on click, the browser prompts for passkey enrollment (Touch ID, Face ID, Windows Hello, or a hardware security key) → account is active.
 - **Retry after a lost activation mail:** re-submitting the registration form with the same email + name (case-insensitive) as a never-activated USER (inactive, no passkey, no `last_login` — an operator-deactivated account does not qualify and cannot revive itself this way) mails a fresh activation link to that stub instead of creating a second one (`register_start`). The new link carries the invitation of the stub's own previous link, never the submitter's session grant (name + email are no proof of identity). A different name under the same address is still treated as a further account (shared family mailbox).
 - **Invitation (family-triade activation):** the invitation link *is* the confirmation link — clicking it activates the stub USER previously created by the inviter and triggers passkey enrollment in a single step.
-- **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed. The login email-input field carries `autocomplete="email webauthn"` for the platform's conditional-UI / autofill path.
+- **Login:** preferred path is the *usernameless* / discoverable-credentials flow — the user clicks "Sign in", the browser presents available passkeys (labeled by WebAuthn `user.displayName`, e.g. "Anna Müller — Fichtelink"), the user picks one, the corresponding USER is signed in. No email entry needed. The login email-input field carries `autocomplete="email webauthn"` for the platform's conditional-UI / autofill path. Without a passkey: *Anmeldelink per E-Mail* (see *Login by mail link*).
 - **Multiple passkeys per account** are encouraged: the UI lets users enroll passkeys on additional devices (e.g. "iPhone", "Arbeit-Laptop") and delete individual ones. Multi-device enrollment is the primary defense against device loss and reduces the recovery burden.
 
 **Email is mandatory at every entry point, not optional.** Fichtelink's core purpose is mail-mediated communication; without an address a USER cannot receive list mail, release-click confirmations, or activation links. Concretely:
@@ -523,7 +535,7 @@ With this policy the smallest 5 GB provider tier holds long-term.
 
 ## Architecture decisions (application stack)
 
-- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `py_webauthn` covers passkey-only authentication in a hand-rolled flow (see *Architecture decisions (authentication)*); the per-object visibility model is expressed natively by `LIST_ADMIN`, `LIST_ACCESS` and `LIST_RECORD_ACCESS` plus a thin permission/visibility service module (see *Permission and visibility layer* below) — no `django-guardian`, no shadow-permission tables; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
+- **Django** as the web framework. Rationale: Python is widely known in the volunteer maintainer pool, which matters for long-term open-source maintainability; Django Admin is a free MVP for super-admin work on `LISTTEMPLATE`; `py_webauthn` covers passkey authentication in a hand-rolled flow (see *Architecture decisions (authentication)*); the per-object visibility model is expressed natively by `LIST_ADMIN`, `LIST_ACCESS` and `LIST_RECORD_ACCESS` plus a thin permission/visibility service module (see *Permission and visibility layer* below) — no `django-guardian`, no shadow-permission tables; mature mail libraries in Python (`email`, `aioimaplib`, `dkimpy`, `pyspf`).
 - **PostgreSQL** as the database — the canonical Django pairing, and required for some queue/scheduler options under consideration.
 - **Server-rendered UI** — see *Frontend* below.
 

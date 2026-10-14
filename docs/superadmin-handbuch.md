@@ -266,6 +266,24 @@ Familienbeziehungen bleiben erhalten.
 > personenbezogener Daten an andere bleibt davon unberührt — sie ist weiterhin
 > pro Liste opt-in.
 
+### Anmeldung ohne Passkey, hängengebliebene Registrierungen
+
+Wer keinen Passkey einrichten kann, wählt auf der Einrichtungsseite *„Passkey
+klappt nicht?“* → **„Ohne Passkey fortfahren“** und meldet sich danach per
+**Anmeldelink per E-Mail** an. Dafür ist kein Eingriff durch Sie nötig.
+
+Konten, deren Registrierung beim Passkey-Schritt stehengeblieben ist (inaktiv,
+kein Passkey, nie angemeldet), listet:
+
+```bash
+docker compose exec web python manage.py resend_activation
+```
+
+Mit `--send` bekommt jedes dieser Konten einen neuen Aktivierungslink, der auf
+den Weg ohne Passkey hinweist; `--user-id <id>` (mehrfach möglich) schränkt
+auf einzelne Konten ein. Die Klassen-Einladung des alten Links wird übernommen,
+sofern dessen Token noch nicht gelöscht ist (30 Tage nach Ablauf).
+
 ---
 
 ## 10. Löschanfragen und Aufbewahrungsfristen

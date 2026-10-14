@@ -15,6 +15,11 @@
   </p>
   <div id="status"></div>
 
+  <p style="margin-top:1.5rem">
+    Passkey klappt nicht oder Ihr Gerät kann keine Passkeys?
+    <a href="{% url 'accounts:email_login_request' %}">Anmeldelink per E-Mail</a>.
+  </p>
+
   <p style="margin-top:2rem">
     Noch kein Konto? Ein Konto entsteht über eine Einladung oder einen
     QR-Code — <a href="{% url 'accounts:register_start' %}">so bekommen Sie eins</a>.

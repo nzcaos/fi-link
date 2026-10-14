@@ -26,7 +26,7 @@ Fristen hier müssen zu den Einstellungen in .env passen (README / Data retentio
 <h2>Das Wichtigste in Kürze</h2>
 <p>Fichtelink ersetzt die Papier-Klassenliste und den E-Mail-Verteiler der Klasse. Sie entscheiden selbst, wer welche Ihrer Angaben sehen darf. Ohne Ihre Freigabe sieht niemand außer den Klassen-Admins Ihre Telefonnummer, Adresse oder E-Mail-Adresse.</p>
 <ul>
-  <li><strong>Anmeldung ohne Passwort:</strong> Sie melden sich per Passkey an (Face ID, Touch ID, Windows Hello). Wir speichern nur einen öffentlichen Schlüssel, kein Passwort und keine biometrischen Daten.</li>
+  <li><strong>Anmeldung ohne Passwort:</strong> Sie melden sich per Passkey an (Face ID, Touch ID, Windows Hello). Wir speichern nur einen öffentlichen Schlüssel, kein Passwort und keine biometrischen Daten. Kann Ihr Gerät keine Passkeys, melden Sie sich stattdessen über einen Link an, den wir an Ihre E-Mail-Adresse schicken.</li>
   <li><strong>Listeneinträge verschlüsselt:</strong> Alle Angaben in der Klassenliste (Telefon, Adresse, Angaben zum Kind) liegen verschlüsselt in der Datenbank.</li>
   <li><strong>Namen und E-Mail im Klartext:</strong> Name und E-Mail-Adresse werden unverschlüsselt gespeichert, weil das System damit Mails zustellt.</li>
   <li><strong>E-Mails an den Klassenverteiler:</strong> Sie werden weitergeleitet und danach höchstens 90 Tage aufbewahrt, damit Rückfragen, Fehlzustellungen und Antworten zugeordnet werden können.</li>
@@ -47,7 +47,7 @@ Fristen hier müssen zu den Einstellungen in .env passen (README / Data retentio
     <tr><td>Sichtbarkeits-Einstellungen</td><td>Datenbank</td><td>Klartext</td><td>Solange der Eintrag besteht</td><td>Durchsetzung Ihrer Freigaben</td></tr>
     <tr><td>Ihre Einwilligung (Zeitpunkt, Stand dieser Hinweise)</td><td>Datenbank</td><td>Klartext</td><td>Bis Konto-Löschung</td><td>Nachweis der Einwilligung</td></tr>
     <tr><td>Passkey (öffentlicher Schlüssel, Gerätename, letzte Nutzung)</td><td>Datenbank</td><td>Klartext, kein Geheimnis</td><td>Bis Sie ihn löschen oder Konto-Löschung</td><td>Anmeldung</td></tr>
-    <tr><td>Anmelde-Sitzung</td><td>Datenbank + Cookie im Browser</td><td>Zufalls-ID</td><td>2 Wochen, danach gelöscht</td><td>Angemeldet bleiben</td></tr>
+    <tr><td>Anmelde-Sitzung</td><td>Datenbank + Cookie im Browser</td><td>Zufalls-ID</td><td>2 Wochen (nach Anmeldung per E-Mail-Link 7 Tage), danach gelöscht</td><td>Angemeldet bleiben</td></tr>
     <tr><td>Einladungs- und Aktivierungslinks (inkl. Empfänger-Mail)</td><td>Datenbank</td><td>Klartext</td><td>Gültig 7–30 Tage, 30 Tage nach Ablauf oder Einlösung gelöscht</td><td>Registrierung, Einladung, Konto-Wiederherstellung</td></tr>
     <tr><td>E-Mail an den Klassenverteiler (vollständig inkl. Anhänge)</td><td>Postfach beim Mail-Anbieter</td><td>Wie empfangen</td><td>7 Tage nach Verarbeitung</td><td>Empfang</td></tr>
     <tr><td>Dieselbe E-Mail als Kopie</td><td>Datenbank</td><td>Klartext</td><td>90 Tage</td><td>Freigabe-Klick, Erkennung von Mail-Schleifen und Fehlzustellungen</td></tr>
@@ -67,8 +67,8 @@ Fristen hier müssen zu den Einstellungen in .env passen (README / Data retentio
 <ul>
   <li><strong>Gemeinsame Familien-Adresse:</strong> Beide Elternteile können eigene Konten mit derselben E-Mail-Adresse haben.</li>
   <li><strong>Passkeys:</strong> Gespeichert werden ein öffentlicher Schlüssel, ein von Ihnen vergebener Gerätename (z. B. „iPhone“), Anlage- und letzter Nutzungszeitpunkt. Der private Schlüssel und Ihr Fingerabdruck oder Gesicht verlassen Ihr Gerät nie.</li>
-  <li><strong>Einladungen:</strong> Wenn Sie eingeladen werden, speichern wir die Adresse, an die die Einladung ging, wer eingeladen hat, und wann der Link eingelöst wurde. Links gelten 7 Tage (Aktivierung, Wiederherstellung) bzw. 30 Tage (Einladung); 30 Tage nach Ablauf oder Einlösung wird der Datensatz gelöscht.</li>
-  <li><strong>Anmeldung:</strong> Ein Sitzungs-Cookie hält Sie bis zu 2 Wochen angemeldet. Weitere Cookies gibt es nur zum Schutz von Formularen (CSRF).</li>
+  <li><strong>Einladungen:</strong> Wenn Sie eingeladen werden, speichern wir die Adresse, an die die Einladung ging, wer eingeladen hat, und wann der Link eingelöst wurde. Links gelten 7 Tage (Aktivierung, Wiederherstellung), 30 Minuten (Anmeldelink per E-Mail) bzw. 30 Tage (Einladung); 30 Tage nach Ablauf oder Einlösung wird der Datensatz gelöscht.</li>
+  <li><strong>Anmeldung:</strong> Ein Sitzungs-Cookie hält Sie bis zu 2 Wochen angemeldet, nach einer Anmeldung per E-Mail-Link bis zu 7 Tage. Weitere Cookies gibt es nur zum Schutz von Formularen (CSRF).</li>
   <li><strong>Keine IP-Adressen im Konto:</strong> IP-Adressen werden nicht zu Ihrem Konto gespeichert. Sie erscheinen nur kurzzeitig im Speicher (Schutz vor massenhaften Registrierungsversuchen, 1 Stunde) und in Server-Protokollen.</li>
 </ul>
 

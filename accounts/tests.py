@@ -854,3 +854,360 @@ class DatenschutzPageTests(TestCase):
         resp = self.client.get("/datenschutz/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Stand: 12.10.2026")
+
+
+def _stub(email: str = "stub@example.org", given: str = "Paula") -> User:
+    """A never-activated registration stub, as `register_start` leaves it."""
+    person = Person.objects.create(given_name=given, family_name="Ohnepasskey", email=email)
+    return User.objects.create_user(person=person, username=random_username(), is_active=False)
+
+
+def _signed_in_as(client) -> int | None:
+    value = client.session.get("_auth_user_id")
+    return int(value) if value is not None else None
+
+
+class PasskeyHelpTests(TestCase):
+    """Activation without a passkey: the enrolment page links to a help page,
+    whose POST activates the stub and signs it in — no second mail, the
+    activation link already proved the mailbox."""
+
+    def setUp(self):
+        self.user = _stub()
+        self.tok = ActivationToken.issue(
+            person=self.user.person, email="stub@example.org", user=self.user
+        )
+
+    def test_enrol_page_links_to_help(self):
+        resp = self.client.get(reverse("accounts:activate", args=[self.tok.token]))
+        self.assertContains(resp, reverse("accounts:passkey_help", args=[self.tok.token]))
+        self.assertContains(resp, "Passkey klappt nicht?")
+
+    def test_help_page_has_tips_and_fallback_without_side_effects(self):
+        resp = self.client.get(reverse("accounts:passkey_help", args=[self.tok.token]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Bildschirmsperre")
+        self.assertContains(resp, "Ohne Passkey fortfahren")
+        self.user.refresh_from_db()
+        self.tok.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertIsNone(self.tok.consumed_at)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_help_page_for_expired_link_is_gone(self):
+        ActivationToken.objects.filter(pk=self.tok.pk).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        resp = self.client.get(reverse("accounts:passkey_help", args=[self.tok.token]))
+        self.assertEqual(resp.status_code, 410)
+
+    def test_continue_without_passkey_activates_and_signs_in(self):
+        resp = self.client.post(reverse("accounts:activate_without_passkey", args=[self.tok.token]))
+        self.assertRedirects(resp, "/lists/home/", fetch_redirect_response=False)
+        self.user.refresh_from_db()
+        self.tok.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertIsNotNone(self.tok.consumed_at)
+        self.assertEqual(self.user.passkeys.count(), 0)
+        self.assertEqual(_signed_in_as(self.client), self.user.pk)
+
+    @override_settings(EMAIL_LOGIN_SESSION_DAYS=7)
+    def test_session_lasts_the_configured_days(self):
+        self.client.post(reverse("accounts:activate_without_passkey", args=[self.tok.token]))
+        self.assertEqual(self.client.session.get_expiry_age(), 7 * 24 * 60 * 60)
+
+    def test_get_does_not_activate(self):
+        resp = self.client.get(reverse("accounts:activate_without_passkey", args=[self.tok.token]))
+        self.assertEqual(resp.status_code, 405)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_link_works_only_once(self):
+        url = reverse("accounts:activate_without_passkey", args=[self.tok.token])
+        self.client.post(url)
+        self.client.logout()
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 410)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_deactivated_account_is_not_revived(self):
+        User.objects.filter(pk=self.user.pk).update(last_login=timezone.now())
+        resp = self.client.post(reverse("accounts:activate_without_passkey", args=[self.tok.token]))
+        self.assertEqual(resp.status_code, 410)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_recovery_link_signs_in_without_passkey(self):
+        user = _make_user(email="aktiv@example.org")
+        tok = ActivationToken.issue(
+            person=user.person, email="aktiv@example.org", user=user,
+            purpose=ActivationToken.Purpose.RECOVER,
+        )
+        self.client.post(reverse("accounts:activate_without_passkey", args=[tok.token]))
+        self.assertEqual(_signed_in_as(self.client), user.pk)
+
+    def test_login_token_does_not_open_enrolment_or_help(self):
+        tok = ActivationToken.issue(
+            person=self.user.person, email="stub@example.org", user=self.user,
+            purpose=ActivationToken.Purpose.LOGIN,
+        )
+        self.assertEqual(
+            self.client.get(reverse("accounts:activate", args=[tok.token])).status_code, 404
+        )
+        self.assertEqual(
+            self.client.get(reverse("accounts:passkey_help", args=[tok.token])).status_code, 404
+        )
+        resp = self.client.post(reverse("accounts:activate_without_passkey", args=[tok.token]))
+        self.assertEqual(resp.status_code, 410)
+
+    def test_continue_without_passkey_still_joins_the_class(self):
+        from lists.models import List, ListAccess, ListJoinToken, ListTemplate
+
+        owner = _make_user(email="admin@example.org", given="Ada", family="Admin")
+        tpl = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        lst = List.objects.create(title="Klasse 5a", email_alias="5a-nopasskey", template=tpl)
+        join = ListJoinToken.objects.create(list=lst, created_by=owner)
+        tok = ActivationToken.issue(
+            person=self.user.person, email="stub@example.org", user=self.user,
+            pending_key="pending_join_token", pending_token=join.token,
+        )
+        resp = self.client.post(reverse("accounts:activate_without_passkey", args=[tok.token]))
+        self.assertRedirects(
+            resp,
+            reverse("lists:record_create_associate", kwargs={"pk": lst.pk}),
+            fetch_redirect_response=False,
+        )
+        self.assertTrue(ListAccess.objects.filter(list=lst, user=self.user).exists())
+
+
+class EmailLoginTests(TestCase):
+    """Login by mailed link: enumeration-resistant request, single-use link
+    that a GET (mail-scanner prefetch) never redeems."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.user = _make_user(email="mail@example.org")
+
+    def _request(self, email="mail@example.org"):
+        return self.client.post(reverse("accounts:email_login_request"), {"email": email})
+
+    def test_login_page_links_to_mail_login(self):
+        resp = self.client.get(reverse("accounts:login"))
+        self.assertContains(resp, reverse("accounts:email_login_request"))
+
+    @override_settings(EMAIL_LOGIN_LINK_MINUTES=30)
+    def test_known_email_gets_short_lived_login_link(self):
+        from django.core import mail
+
+        resp = self._request()
+        self.assertEqual(resp.status_code, 200)
+        tok = ActivationToken.objects.get(user=self.user)
+        self.assertEqual(tok.purpose, ActivationToken.Purpose.LOGIN)
+        self.assertLess(tok.expires_at, timezone.now() + timedelta(minutes=31))
+        self.assertGreater(tok.expires_at, timezone.now() + timedelta(minutes=29))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(reverse("accounts:email_login", args=[tok.token]), mail.outbox[0].body)
+
+    def test_unknown_email_is_enumeration_resistant(self):
+        from django.core import mail
+
+        resp = self._request("nobody@example.org")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Falls ein Konto")
+        self.assertEqual(ActivationToken.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_never_activated_stub_gets_no_login_link(self):
+        from django.core import mail
+
+        _stub(email="stub@example.org")
+        self._request("stub@example.org")
+        self.assertEqual(ActivationToken.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_shared_family_email_gets_one_link_per_account(self):
+        from django.core import mail
+
+        other = _make_user(email="mail@example.org", given="Bernd")
+        self._request()
+        self.assertEqual(len(mail.outbox), 1)
+        for user in (self.user, other):
+            tok = ActivationToken.objects.get(user=user)
+            self.assertIn(tok.token, mail.outbox[0].body)
+
+    def test_rate_limited(self):
+        from accounts.views import _REG_RATE_LIMIT
+
+        for _ in range(_REG_RATE_LIMIT):
+            self.assertEqual(self._request("x@example.org").status_code, 200)
+        self.assertEqual(self._request("x@example.org").status_code, 429)
+
+    def _login_token(self, **kwargs):
+        return ActivationToken.issue(
+            person=self.user.person, email="mail@example.org", user=self.user,
+            purpose=ActivationToken.Purpose.LOGIN, ttl=timedelta(minutes=30), **kwargs,
+        )
+
+    def test_get_shows_button_but_does_not_sign_in(self):
+        tok = self._login_token()
+        resp = self.client.get(reverse("accounts:email_login", args=[tok.token]))
+        self.assertContains(resp, "Jetzt anmelden")
+        tok.refresh_from_db()
+        self.assertIsNone(tok.consumed_at)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    @override_settings(EMAIL_LOGIN_SESSION_DAYS=7)
+    def test_post_signs_in_with_configured_session_length(self):
+        tok = self._login_token()
+        resp = self.client.post(reverse("accounts:email_login", args=[tok.token]))
+        self.assertRedirects(resp, "/lists/home/", fetch_redirect_response=False)
+        self.assertEqual(_signed_in_as(self.client), self.user.pk)
+        self.assertEqual(self.client.session.get_expiry_age(), 7 * 24 * 60 * 60)
+
+    def test_link_is_single_use(self):
+        tok = self._login_token()
+        url = reverse("accounts:email_login", args=[tok.token])
+        self.client.post(url)
+        self.client.logout()
+        self.assertEqual(self.client.post(url).status_code, 410)
+        self.assertEqual(self.client.get(url).status_code, 410)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_expired_link_is_gone(self):
+        tok = self._login_token()
+        ActivationToken.objects.filter(pk=tok.pk).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        resp = self.client.post(reverse("accounts:email_login", args=[tok.token]))
+        self.assertEqual(resp.status_code, 410)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_deactivated_account_cannot_sign_in(self):
+        tok = self._login_token()
+        User.objects.filter(pk=self.user.pk).update(is_active=False)
+        resp = self.client.post(reverse("accounts:email_login", args=[tok.token]))
+        self.assertEqual(resp.status_code, 410)
+        self.assertIsNone(_signed_in_as(self.client))
+
+    def test_activation_token_is_not_a_login_link(self):
+        tok = ActivationToken.issue(person=self.user.person, email="mail@example.org", user=self.user)
+        resp = self.client.post(reverse("accounts:email_login", args=[tok.token]))
+        self.assertEqual(resp.status_code, 410)
+
+    def _qr_join(self):
+        from lists.models import List, ListJoinToken, ListTemplate
+
+        owner = _make_user(email="admin@example.org", given="Ada", family="Admin")
+        tpl = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        lst = List.objects.create(title="Klasse 5b", email_alias="5b-mail-login", template=tpl)
+        return lst, ListJoinToken.objects.create(list=lst, created_by=owner)
+
+    def test_requesters_invitation_does_not_ride_on_the_link(self):
+        """The requester is anonymous: their QR join must not be attached to
+        the account owner's link (it would join the owner to that list)."""
+        _lst, join = self._qr_join()
+        session = self.client.session
+        session["pending_join_token"] = join.token
+        session.save()
+        self._request()
+        tok = ActivationToken.objects.get(user=self.user)
+        self.assertEqual(tok.pending_key, "")
+        self.assertEqual(tok.pending_token, "")
+
+    def test_same_browser_finishes_pending_join(self):
+        from lists.models import ListAccess
+
+        lst, join = self._qr_join()
+        session = self.client.session
+        session["pending_join_token"] = join.token
+        session.save()
+        tok = self._login_token()
+        self.client.post(reverse("accounts:email_login", args=[tok.token]))
+        self.assertTrue(ListAccess.objects.filter(list=lst, user=self.user).exists())
+
+
+class PasskeyDeleteTests(TestCase):
+    def test_last_passkey_can_be_deleted(self):
+        """No lockout any more — sign-in falls back to the mailed link."""
+        user = _make_user(email="del@example.org")
+        pk = _make_passkey(user)
+        self.client.force_login(user)
+        resp = self.client.post(reverse("accounts:passkey_delete", args=[pk.pk]))
+        self.assertRedirects(resp, reverse("accounts:passkeys"), fetch_redirect_response=False)
+        self.assertEqual(user.passkeys.count(), 0)
+
+    def test_page_without_passkey_explains_mail_login(self):
+        user = _make_user(email="none@example.org")
+        self.client.force_login(user)
+        resp = self.client.get(reverse("accounts:passkeys"))
+        self.assertContains(resp, "per E-Mail-Link an")
+
+
+@override_settings(RP_ORIGIN="https://fichtelink.example.org")
+class ResendActivationCommandTests(TestCase):
+    def _run(self, *args):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("resend_activation", *args, stdout=out)
+        return out.getvalue()
+
+    def test_dry_run_lists_without_sending(self):
+        from django.core import mail
+
+        stub = _stub()
+        out = self._run()
+        self.assertIn(f"#{stub.pk}", out)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(ActivationToken.objects.count(), 0)
+
+    def test_send_mails_fresh_link_keeping_the_invitation(self):
+        from django.core import mail
+
+        stub = _stub()
+        old = ActivationToken.issue(
+            person=stub.person, email="stub@example.org", user=stub,
+            pending_key="pending_join_token", pending_token="qr-123",
+        )
+        ActivationToken.objects.filter(pk=old.pk).update(
+            expires_at=timezone.now() - timedelta(days=3)
+        )
+        self._run("--send")
+        new = ActivationToken.objects.exclude(pk=old.pk).get(user=stub)
+        self.assertTrue(new.is_valid())
+        self.assertEqual(new.pending_key, "pending_join_token")
+        self.assertEqual(new.pending_token, "qr-123")
+        self.assertEqual(len(mail.outbox), 1)
+        body = mail.outbox[0].body
+        self.assertIn(f"https://fichtelink.example.org/auth/activate/{new.token}/", body)
+        self.assertIn("Passkey klappt nicht?", body)
+
+    def test_skips_activated_and_passkey_accounts(self):
+        from django.core import mail
+
+        _make_user(email="aktiv@example.org")
+        with_key = _stub(email="key@example.org")
+        _make_passkey(with_key)
+        out = self._run("--send")
+        self.assertIn("Keine nie aktivierten Konten", out)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_user_id_restricts(self):
+        from django.core import mail
+
+        a = _stub(email="a@example.org")
+        _stub(email="b@example.org", given="Berta")
+        self._run("--send", "--user-id", str(a.pk))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["a@example.org"])

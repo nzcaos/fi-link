@@ -265,19 +265,23 @@ class WebAuthnChallenge(models.Model):
 
 
 class ActivationToken(models.Model):
-    """One-shot email-bound link that grants the right to enroll a passkey.
+    """One-shot email-bound link: enrol a passkey, or sign in without one.
 
     Used for:
       - new-user registration (`person` set, `user` null until consumed)
       - invitation activation (`person`/`user` pre-created by inviter)
       - admin-triggered recovery (`reset_passkeys`)
-    A token alone never confers session access — clicking only opens the
-    enrollment page. See CLAUDE.md / "Account recovery" and "Admin handover".
+      - login by mail link (`LOGIN`, short-lived) for users without a passkey
+    Clicking only opens a page; the session is granted by the enrolment
+    ceremony or by an explicit POST ("Ohne Passkey fortfahren", the login-link
+    confirmation) so mail-scanner prefetches never sign anyone in. See
+    CLAUDE.md / "Account recovery" and "Login by mail link".
     """
 
     class Purpose(models.TextChoices):
         ACTIVATE = "activate", "Aktivierung"
         RECOVER = "recover", "Passkey-Wiederherstellung"
+        LOGIN = "login", "Anmeldelink"
 
     token = models.CharField(
         "Token",
@@ -330,6 +334,17 @@ class ActivationToken(models.Model):
 
     def is_valid(self) -> bool:
         return self.consumed_at is None and timezone.now() < self.expires_at
+
+    def consume(self) -> bool:
+        """Mark the token used. False if a concurrent request got there first —
+        a conditional UPDATE, so a double click can't redeem one link twice."""
+        now = timezone.now()
+        won = ActivationToken.objects.filter(pk=self.pk, consumed_at__isnull=True).update(
+            consumed_at=now
+        )
+        if won:
+            self.consumed_at = now
+        return bool(won)
 
     @classmethod
     def issue(

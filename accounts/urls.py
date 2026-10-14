@@ -9,6 +9,8 @@ urlpatterns = [
     path("register/", views.register_start, name="register_start"),
     path("register/force/", views.register_force, name="register_force"),
     path("activate/<str:token>/", views.activate, name="activate"),
+    path("activate/<str:token>/hilfe/", views.passkey_help, name="passkey_help"),
+    path("activate/<str:token>/ohne-passkey", views.activate_without_passkey, name="activate_without_passkey"),
     path("register/passkey-begin", views.register_passkey_begin, name="register_passkey_begin"),
     path("register/passkey-finish", views.register_passkey_finish, name="register_passkey_finish"),
 
@@ -20,6 +22,10 @@ urlpatterns = [
     path("login-begin", views.login_begin, name="login_begin"),
     path("login-finish", views.login_finish, name="login_finish"),
     path("logout", views.logout_view, name="logout"),
+
+    # Login by mailed link — the fallback for devices without passkey support
+    path("login/mail/", views.email_login_request, name="email_login_request"),
+    path("login/link/<str:token>/", views.email_login, name="email_login"),
 
     # Profile (own person)
     path("profil/", views.profile, name="profile"),

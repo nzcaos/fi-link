@@ -217,6 +217,12 @@ TASK_JOB_RETENTION_DAYS = int(os.environ.get("TASK_JOB_RETENTION_DAYS", "7"))
 # Expired / consumed / revoked invitation, activation and QR-join tokens (each
 # carrying a target email address) are deleted this many days afterwards.
 TOKEN_RETENTION_DAYS = int(os.environ.get("TOKEN_RETENTION_DAYS", "30"))
+# Login by mail link, the fallback for users whose devices can't hold a
+# passkey (CLAUDE.md / "Login by mail link"): how long a mailed login link
+# works, and how long the session it opens stays signed in. Passkey sessions
+# keep Django's default (SESSION_COOKIE_AGE, 2 weeks).
+EMAIL_LOGIN_LINK_MINUTES = int(os.environ.get("EMAIL_LOGIN_LINK_MINUTES", "30"))
+EMAIL_LOGIN_SESSION_DAYS = int(os.environ.get("EMAIL_LOGIN_SESSION_DAYS", "7"))
 # Archived lists (K2 after the final rollover, merged-away source classes) are
 # deleted with their records this many days after archiving.
 LIST_ARCHIVE_RETENTION_DAYS = int(os.environ.get("LIST_ARCHIVE_RETENTION_DAYS", "365"))

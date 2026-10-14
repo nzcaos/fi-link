@@ -14,7 +14,7 @@ The commands below are the live deployment procedure.
 
 - **Django + PostgreSQL + HTMX** — server-rendered, no SPA
 - **`procrastinate`** — Postgres-native task queue (no Redis)
-- **Passkeys only**, hand-rolled on `py_webauthn` (server) + `@simplewebauthn/browser` v9 vendored as a UMD bundle in `static/vendor/` — no passwords, no email-magic-link recovery
+- **Passkeys first**, hand-rolled on `py_webauthn` (server) + `@simplewebauthn/browser` v9 vendored as a UMD bundle in `static/vendor/` — no passwords; a short-lived mailed login link is the fallback for devices without passkey support
 - **Provider-agnostic mail** — IMAP IDLE on a catch-all mailbox, SMTP submission for outbound
 
 ## Deployment
@@ -157,6 +157,15 @@ docker compose exec web python manage.py reset_passkeys --email <user-email>
 ```
 
 The command **deletes** the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
+
+**Stalled registrations** (inactive, no passkey, never signed in — e.g. the device couldn't create a passkey before the mail-link fallback existed):
+
+```bash
+docker compose exec web python manage.py resend_activation          # list only
+docker compose exec web python manage.py resend_activation --send   # mail a fresh activation link to each
+```
+
+`--user-id <id>` (repeatable) restricts to single accounts. The new link keeps the invitation of the account's previous link while that token still exists.
 
 ## Forms (event signups)
 
