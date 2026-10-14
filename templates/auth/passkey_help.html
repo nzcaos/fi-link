@@ -41,10 +41,15 @@
   <h2 style="margin-top:2.5rem;font-size:1.1rem">Ohne Passkey weiter</h2>
   <p>
     Hat Ihr Gerät keine Passkey-Unterstützung, können Sie Fichtelink auch ohne
-    Passkey nutzen. Sie bleiben dann auf diesem Gerät {{ session_days }} Tage
-    angemeldet. Danach fordern Sie auf der Anmeldeseite einen
-    <strong>Anmeldelink per E-Mail</strong> an und klicken ihn an. Einen Passkey
-    können Sie jederzeit später unter „Passkeys“ einrichten.
+    Passkey nutzen. Ein Klick auf den Button genügt: Ihr Konto wird
+    <strong>sofort aktiviert</strong> und Sie sind angemeldet — es kommt keine
+    weitere E-Mail.
+  </p>
+  <p>
+    Sie bleiben auf diesem Gerät {{ session_days }} Tage angemeldet. Für spätere
+    Anmeldungen wählen Sie auf der Anmeldeseite <strong>„Anmeldelink per
+    E-Mail“</strong>. Einen Passkey können Sie jederzeit unter „Passkeys“
+    nachholen.
   </p>
   <form method="post" action="{% url 'accounts:activate_without_passkey' token %}">
     {% csrf_token %}
