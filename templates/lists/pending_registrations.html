@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Nicht abgeschlossene Anmeldungen{% if list_obj %} — {{ list_obj.title }}{% endif %}{% endblock %}
+{% block page_class %}page-wide{% endblock %}
 {% block content %}
   {% if list_obj %}
     <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
@@ -19,6 +20,7 @@
   </p>
 
   {% if entries %}
+    <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
       <thead>
         <tr style="background:#f4f4f4">
@@ -61,6 +63,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   {% else %}
     <p style="color:#666">Keine nicht abgeschlossenen Anmeldungen.</p>
   {% endif %}
