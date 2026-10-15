@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Nicht abgeschlossene Anmeldungen{% if list_obj %} — {{ list_obj.title }}{% endif %}{% endblock %}
+{% block content %}
+  {% if list_obj %}
+    <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
+  {% endif %}
+  <h1>Nicht abgeschlossene Anmeldungen</h1>
+  {% if list_obj %}
+    <p style="color:#666">Liste: <strong>{{ list_obj.title }}</strong></p>
+  {% else %}
+    <p style="color:#666">Alle Klassen</p>
+  {% endif %}
+  <p>
+    Diese Personen haben sich registriert, den Aktivierungslink aber nie
+    abgeschlossen, oft weil die Passkey-Einrichtung nicht geklappt hat. Ein
+    neuer Link gilt 7 Tage. Auf der Seite dahinter führt
+    „Passkey klappt nicht?“ auch ohne Passkey ins Konto. Nach der Aktivierung
+    landet die Person direkt in der Klasse.
+  </p>
+
+  {% if entries %}
+    <table style="width:100%;border-collapse:collapse;font-size:0.95rem">
+      <thead>
+        <tr style="background:#f4f4f4">
+          <th style="text-align:left;padding:0.4rem">Nachname</th>
+          <th style="text-align:left;padding:0.4rem">Vorname</th>
+          <th style="text-align:left;padding:0.4rem">E-Mail</th>
+          {% if not list_obj %}<th style="text-align:left;padding:0.4rem">Klasse</th>{% endif %}
+          <th style="text-align:left;padding:0.4rem">registriert</th>
+          <th style="text-align:left;padding:0.4rem">letzter Link</th>
+          <th style="padding:0.4rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+          <tr>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ e.person.family_name }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ e.person.given_name }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee">{{ e.person.email }}</td>
+            {% if not list_obj %}
+              <td style="padding:0.4rem;border-bottom:1px solid #eee">
+                {% if e.list %}<a href="{% url 'lists:detail' pk=e.list.pk %}">{{ e.list.title }}</a>{% else %}<span style="color:#666">unbekannt</span>{% endif %}
+              </td>
+            {% endif %}
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;white-space:nowrap">{{ e.registered_at|date:"d.m.Y" }}</td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;white-space:nowrap">
+              {% if e.last_sent_at %}
+                {{ e.last_sent_at|date:"d.m.Y H:i" }}
+                <span style="color:#666">({% if e.link_valid %}noch gültig{% else %}abgelaufen{% endif %})</span>
+              {% else %}—{% endif %}
+            </td>
+            <td style="padding:0.4rem;border-bottom:1px solid #eee;text-align:right;white-space:nowrap">
+              <form method="post" action="{% url 'lists:pending_registration_resend' user_pk=e.user.pk %}" style="display:inline"
+                    onsubmit="return confirm('Neuen Aktivierungslink an {{ e.person.email|escapejs }} senden?');">
+                {% csrf_token %}
+                {% if list_obj %}<input type="hidden" name="list" value="{{ list_obj.pk }}">{% endif %}
+                <button type="submit" style="padding:0.3rem 0.7rem">Link erneut senden</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color:#666">Keine nicht abgeschlossenen Anmeldungen.</p>
+  {% endif %}
+{% endblock %}

@@ -1,24 +1,17 @@
 """Mail a fresh activation link to accounts that were never activated.
 
-For stubs whose registration stalled at the passkey step (device without
-passkey support, lost mail): their links expire after 7 days. The new link
-keeps the invitation (class join) of the stub's latest activation link, if
-that token still exists, and the mail points out the way without a passkey
-(CLAUDE.md / "Login by mail link").
+The same list and re-send as the admins' "Nicht abgeschlossene Anmeldungen"
+pages (`lists.pending_registrations`), for the operator shell. From here the
+new link only keeps the previous invitation while it is still usable — a new
+class invitation needs an admin as inviter, so that is the web page's job.
 
 Without --send it only lists the accounts.
 """
 from __future__ import annotations
 
-import smtplib
-
-from django.conf import settings
-from django.core.mail import send_mail
 from django.core.management.base import BaseCommand
-from django.urls import reverse
-from django.utils import timezone
 
-from accounts.models import ActivationToken, User
+from lists.pending_registrations import pending_registrations, resend_activation
 
 
 class Command(BaseCommand):
@@ -40,80 +33,30 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        stubs = (
-            User.objects.select_related("person")
-            .filter(is_active=False, last_login__isnull=True, passkeys__isnull=True)
-            .exclude(person__email__isnull=True)
-            .exclude(person__email__exact="")
-            .order_by("pk")
-        )
+        entries = pending_registrations()
         if options["user_ids"]:
-            stubs = stubs.filter(pk__in=options["user_ids"])
-        stubs = list(stubs)
-        if not stubs:
+            entries = [e for e in entries if e.user.pk in options["user_ids"]]
+        if not entries:
             self.stdout.write("Keine nie aktivierten Konten gefunden.")
             return
 
-        origin = (settings.RP_ORIGIN or "").rstrip("/")
         sent = 0
-        for user in stubs:
-            person = user.person
-            previous = (
-                ActivationToken.objects.filter(user=user, purpose=ActivationToken.Purpose.ACTIVATE)
-                .order_by("-pk")
-                .first()
+        for entry in entries:
+            line = (
+                f"#{entry.user.pk}  {entry.person.full_name} <{entry.person.email}>  "
+                f"Klasse: {entry.list.title if entry.list else 'unbekannt'}"
             )
-            grant = (
-                {"pending_key": previous.pending_key, "pending_token": previous.pending_token}
-                if previous is not None
-                else {}
-            )
-            invitation = grant.get("pending_key") or "keine (Token schon gelöscht)"
-            line = f"#{user.pk}  {person.full_name} <{person.email}>  Einladung: {invitation}"
             if not options["send"]:
                 self.stdout.write(line)
                 continue
-
-            token = ActivationToken.issue(person=person, email=person.email, user=user, **grant)
-            link = f"{origin}{reverse('accounts:activate', args=[token.token])}"
-            try:
-                send_mail(
-                    subject="Fichtelink — Konto aktivieren (neuer Link)",
-                    message=_body(
-                        person.given_name, link, token, has_invitation=bool(grant.get("pending_key"))
-                    ),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[person.email],
-                )
-            except (smtplib.SMTPException, OSError) as exc:
-                self.stderr.write(f"FEHLER {line}: {exc}")
-                continue
-            sent += 1
-            self.stdout.write(f"gesendet  {line}")
+            if resend_activation(entry):
+                sent += 1
+                self.stdout.write(f"gesendet  {line}")
+            else:
+                self.stderr.write(f"FEHLER    {line} (siehe Log)")
 
         if options["send"]:
-            self.stdout.write(self.style.SUCCESS(f"{sent} von {len(stubs)} Mails versendet."))
+            self.stdout.write(self.style.SUCCESS(f"{sent} von {len(entries)} Mails versendet."))
         else:
             self.stdout.write("")
-            self.stdout.write(f"{len(stubs)} Konto/Konten. Mit --send verschicken.")
-
-
-def _body(given_name: str, link: str, token: ActivationToken, *, has_invitation: bool) -> str:
-    body = (
-        f"Hallo {given_name},\n\n"
-        f"Sie haben sich bei Fichtelink registriert, Ihr Konto ist aber noch nicht "
-        f"aktiviert. Mit diesem neuen Link schließen Sie die Aktivierung ab:\n\n"
-        f"{link}\n\n"
-        f"Der Link ist bis {timezone.localtime(token.expires_at):%d.%m.%Y %H:%M} gültig.\n\n"
-        f"Neu: Falls Ihr Gerät keinen Passkey einrichten kann, klicken Sie auf der "
-        f"Seite auf „Passkey klappt nicht?“. Dort finden Sie Tipps und können "
-        f"Fichtelink auch ohne Passkey nutzen — die Anmeldung läuft dann über einen "
-        f"Link per E-Mail."
-    )
-    if not has_invitation:
-        body += (
-            "\n\nFalls Sie nach der Aktivierung nicht automatisch in Ihrer Klasse "
-            "landen, öffnen Sie den QR-Code bzw. Einladungslink der Klasse einfach "
-            "noch einmal."
-        )
-    return body
+            self.stdout.write(f"{len(entries)} Konto/Konten. Mit --send verschicken.")

@@ -323,6 +323,18 @@ class ActivationToken(models.Model):
     # fresh account without its list. Restored into the session on enrolment.
     pending_key = models.CharField("Einladung (Art)", max_length=40, blank=True)
     pending_token = models.CharField("Einladung (Token)", max_length=64, blank=True)
+    # The list that invitation is for, kept as a real FK: the invitation token
+    # itself is short-lived (QR codes: 48 h) and swept 30 days after expiry,
+    # but the admins' "Nicht abgeschlossene Anmeldungen" page must still know
+    # which class a stalled registration belongs to.
+    pending_list = models.ForeignKey(
+        "lists.List",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="pending_activations",
+        verbose_name="Einladung (Liste)",
+    )
 
     class Meta:
         verbose_name = "Aktivierungs-Token"
@@ -357,7 +369,12 @@ class ActivationToken(models.Model):
         user: "User | None" = None,
         pending_key: str = "",
         pending_token: str = "",
+        pending_list=None,
     ) -> "ActivationToken":
+        if pending_list is None and pending_key:
+            from .grants import grant_list
+
+            pending_list = grant_list(pending_key, pending_token)
         return cls.objects.create(
             person=person,
             user=user,
@@ -366,4 +383,5 @@ class ActivationToken(models.Model):
             expires_at=timezone.now() + ttl,
             pending_key=pending_key,
             pending_token=pending_token,
+            pending_list=pending_list,
         )

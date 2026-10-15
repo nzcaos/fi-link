@@ -6039,3 +6039,150 @@ class InviteModeFollowsTemplateTests(TestCase):
         )
         tok = ListInviteToken.objects.get(list=lst)
         self.assertEqual(tok.mode, ListInviteToken.Mode.VIA_ASSOCIATE)
+
+
+@override_settings(RP_ORIGIN="https://fichtelink.example.org")
+class PendingRegistrationsTests(TestCase):
+    """"Nicht abgeschlossene Anmeldungen": class admins see the stalled
+    registrations of their class, the super-admin all of them; both can
+    re-send the activation link."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        self.list_a = List.objects.create(title="Klasse 5a", email_alias="5a-pending", template=self.template)
+        self.list_b = List.objects.create(title="Klasse 5b", email_alias="5b-pending", template=self.template)
+        self.admin_a = _make_user(username="admin_a", email="admin-a@example.org")
+        ListAdmin.objects.create(list=self.list_a, user=self.admin_a)
+        self.super = _make_super()
+        self.join_a = ListJoinToken.objects.create(list=self.list_a, created_by=self.admin_a)
+        self.join_b = ListJoinToken.objects.create(list=self.list_b, created_by=self.super)
+        self.stub_a = self._stub("stub_a", "Paula", "Pending", "paula@example.org", self.join_a)
+        self.stub_b = self._stub("stub_b", "Bruno", "Bwartet", "bruno@example.org", self.join_b)
+
+    def _stub(self, username, given, family, email, join):
+        from accounts.models import ActivationToken
+
+        user = _make_user(username=username, given=given, family=family, email=email, is_active=False)
+        ActivationToken.issue(
+            person=user.person, email=email, user=user,
+            pending_key="pending_join_token", pending_token=join.token,
+        )
+        return user
+
+    def _resend(self, user, *, list_pk=None):
+        data = {"list": str(list_pk)} if list_pk else {}
+        return self.client.post(
+            reverse("lists:pending_registration_resend", kwargs={"user_pk": user.pk}), data
+        )
+
+    def test_issue_records_the_list_of_the_invitation(self):
+        from accounts.models import ActivationToken
+
+        tok = ActivationToken.objects.get(user=self.stub_a)
+        self.assertEqual(tok.pending_list, self.list_a)
+
+    def test_class_admin_sees_only_own_class(self):
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "paula@example.org")
+        self.assertContains(resp, "Pending")
+        self.assertNotContains(resp, "bruno@example.org")
+
+    def test_class_admin_cannot_open_other_class(self):
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:pending_registrations", kwargs={"pk": self.list_b.pk}))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_super_admin_sees_all_with_class(self):
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse("lists:pending_registrations_all"))
+        self.assertEqual(resp.status_code, 200)
+        for text in ("paula@example.org", "bruno@example.org", "Klasse 5a", "Klasse 5b"):
+            self.assertContains(resp, text)
+
+    def test_class_admin_cannot_open_all_classes(self):
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:pending_registrations_all"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_menu_links(self):
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.list_a.pk}))
+        self.assertContains(resp, reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}))
+        self.assertNotContains(resp, reverse("lists:pending_registrations_all"))
+        self.client.force_login(self.super)
+        resp = self.client.get(reverse("lists:detail", kwargs={"pk": self.list_a.pk}))
+        self.assertContains(resp, reverse("lists:pending_registrations_all"))
+
+    def test_resend_keeps_usable_qr_invitation(self):
+        from accounts.models import ActivationToken
+
+        self.client.force_login(self.admin_a)
+        resp = self._resend(self.stub_a, list_pk=self.list_a.pk)
+        self.assertRedirects(
+            resp,
+            reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}),
+            fetch_redirect_response=False,
+        )
+        new = ActivationToken.objects.filter(user=self.stub_a).order_by("-pk").first()
+        self.assertEqual(new.pending_key, "pending_join_token")
+        self.assertEqual(new.pending_token, self.join_a.token)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["paula@example.org"])
+        self.assertIn(f"https://fichtelink.example.org/auth/activate/{new.token}/", mail.outbox[0].body)
+
+    def test_resend_after_qr_expired_invites_into_the_class(self):
+        """The QR code lives 48 h; the admin re-sending is the authorisation
+        for a fresh personal invitation, so activation still lands in the class."""
+        from accounts.models import ActivationToken
+
+        ListJoinToken.objects.filter(pk=self.join_a.pk).update(
+            expires_at=timezone.now() - timedelta(days=1)
+        )
+        self.client.force_login(self.admin_a)
+        self._resend(self.stub_a, list_pk=self.list_a.pk)
+        invite = ListInviteToken.objects.get(list=self.list_a)
+        self.assertEqual(invite.target_person, self.stub_a.person)
+        self.assertEqual(invite.invited_by, self.admin_a)
+        new = ActivationToken.objects.filter(user=self.stub_a).order_by("-pk").first()
+        self.assertEqual(new.pending_key, "pending_invite_token")
+        self.assertEqual(new.pending_token, invite.token)
+
+        # The person activates without a passkey and accepts the invitation.
+        visitor = Client()
+        resp = visitor.post(reverse("accounts:activate_without_passkey", args=[new.token]))
+        invite_url = reverse("lists:invite_accept", kwargs={"token": invite.token})
+        self.assertRedirects(resp, invite_url, fetch_redirect_response=False)
+        visitor.post(invite_url)
+        self.assertTrue(ListAccess.objects.filter(list=self.list_a, user=self.stub_a).exists())
+
+    def test_class_admin_cannot_resend_for_other_class(self):
+        self.client.force_login(self.admin_a)
+        resp = self._resend(self.stub_b)
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_super_admin_can_resend_for_any_class(self):
+        self.client.force_login(self.super)
+        resp = self._resend(self.stub_b)
+        self.assertRedirects(resp, reverse("lists:pending_registrations_all"), fetch_redirect_response=False)
+        self.assertEqual(mail.outbox[0].to, ["bruno@example.org"])
+
+    def test_activated_account_disappears(self):
+        User.objects.filter(pk=self.stub_a.pk).update(is_active=True)
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}))
+        self.assertNotContains(resp, "paula@example.org")
+        resp = self._resend(self.stub_a, list_pk=self.list_a.pk)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_class_survives_sweep_of_the_qr_token(self):
+        ListJoinToken.objects.filter(pk=self.join_a.pk).delete()
+        self.client.force_login(self.admin_a)
+        resp = self.client.get(reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}))
+        self.assertContains(resp, "paula@example.org")

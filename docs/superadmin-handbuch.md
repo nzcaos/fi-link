@@ -273,16 +273,27 @@ klappt nicht?“* → **„Ohne Passkey fortfahren“** und meldet sich danach p
 **Anmeldelink per E-Mail** an. Dafür ist kein Eingriff durch Sie nötig.
 
 Konten, deren Registrierung beim Passkey-Schritt stehengeblieben ist (inaktiv,
-kein Passkey, nie angemeldet), listet:
+kein Passkey, nie angemeldet), sehen Sie im Menü einer Liste unter
+**„Nicht abgeschlossene Anmeldungen (alle Klassen)“**: Name, E-Mail, die Klasse,
+für die sich die Person anmelden wollte, und wann der letzte Link ging. Mit
+**„Link erneut senden“** bekommt die Person einen neuen Aktivierungslink
+(7 Tage gültig), der auf den Weg ohne Passkey hinweist. Ist die ursprüngliche
+Einladung (z. B. der QR-Code) inzwischen abgelaufen, hängt Fichtelink eine
+persönliche Einladung in die Klasse an; die Person landet nach der Aktivierung
+also trotzdem in der Klasse. Klassen-Admins sehen dieselbe Liste für ihre
+eigene Klasse.
+
+Dasselbe auf der Shell:
 
 ```bash
 docker compose exec web python manage.py resend_activation
 ```
 
-Mit `--send` bekommt jedes dieser Konten einen neuen Aktivierungslink, der auf
-den Weg ohne Passkey hinweist; `--user-id <id>` (mehrfach möglich) schränkt
-auf einzelne Konten ein. Die Klassen-Einladung des alten Links wird übernommen,
-sofern dessen Token noch nicht gelöscht ist (30 Tage nach Ablauf).
+Mit `--send` bekommt jedes dieser Konten einen neuen Aktivierungslink;
+`--user-id <id>` (mehrfach möglich) schränkt auf einzelne Konten ein. Von der
+Shell wird die alte Einladung nur übernommen, solange sie noch gültig ist; eine
+neue Klassen-Einladung braucht einen Admin als Einladenden, das geht nur über
+die Seite.
 
 ---
 

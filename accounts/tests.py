@@ -751,6 +751,18 @@ class RetentionSweepTests(TestCase):
             list(ActivationToken.objects.values_list("pk", flat=True)), [live.pk]
         )
 
+    def test_sweep_keeps_tokens_of_never_activated_accounts(self):
+        """They carry the class of a stalled registration (pending_list)."""
+        from .tasks import sweep_activation_tokens
+
+        stub = _stub()
+        old = ActivationToken.issue(person=stub.person, email="stub@example.org", user=stub)
+        ActivationToken.objects.filter(pk=old.pk).update(
+            expires_at=timezone.now() - timedelta(days=40)
+        )
+        sweep_activation_tokens.func(timestamp=0)
+        self.assertTrue(ActivationToken.objects.filter(pk=old.pk).exists())
+
     def test_clear_expired_sessions(self):
         from django.contrib.sessions.models import Session
 
@@ -1175,10 +1187,16 @@ class ResendActivationCommandTests(TestCase):
     def test_send_mails_fresh_link_keeping_the_invitation(self):
         from django.core import mail
 
+        from lists.models import List, ListJoinToken, ListTemplate
+
+        owner = _make_user(email="admin@example.org", given="Ada", family="Admin")
+        tpl = ListTemplate.objects.create(name="Kurs")
+        lst = List.objects.create(title="Kurs", email_alias="kurs-resend", template=tpl)
+        join = ListJoinToken.objects.create(list=lst, created_by=owner)
         stub = _stub()
         old = ActivationToken.issue(
             person=stub.person, email="stub@example.org", user=stub,
-            pending_key="pending_join_token", pending_token="qr-123",
+            pending_key="pending_join_token", pending_token=join.token,
         )
         ActivationToken.objects.filter(pk=old.pk).update(
             expires_at=timezone.now() - timedelta(days=3)
@@ -1187,7 +1205,8 @@ class ResendActivationCommandTests(TestCase):
         new = ActivationToken.objects.exclude(pk=old.pk).get(user=stub)
         self.assertTrue(new.is_valid())
         self.assertEqual(new.pending_key, "pending_join_token")
-        self.assertEqual(new.pending_token, "qr-123")
+        self.assertEqual(new.pending_token, join.token)
+        self.assertEqual(new.pending_list, lst)
         self.assertEqual(len(mail.outbox), 1)
         body = mail.outbox[0].body
         self.assertIn(f"https://fichtelink.example.org/auth/activate/{new.token}/", body)

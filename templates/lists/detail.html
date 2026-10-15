@@ -30,10 +30,12 @@
       <a href="{% url 'lists:admin_manage' pk=list_obj.pk %}">Admins</a>
       <a href="{% url 'lists:cohort_edit' pk=list_obj.pk %}">Kohorten-Daten</a>
       <a href="{% url 'lists:transfers_pending' pk=list_obj.pk %}">Umzugs-Anträge</a>
+      <a href="{% url 'lists:pending_registrations' pk=list_obj.pk %}">Nicht abgeschlossene Anmeldungen</a>
     {% endif %}
     {% if request.user.is_superuser %}
       <a href="{% url 'lists:send_test' pk=list_obj.pk %}">Test-Mail senden</a>
       <a href="{% url 'lists:rollover_preview' %}">Schuljahres-Übergang</a>
+      <a href="{% url 'lists:pending_registrations_all' %}">Nicht abgeschlossene Anmeldungen (alle Klassen)</a>
     {% endif %}
   {% endif %}
 {% endblock %}

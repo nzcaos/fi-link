@@ -21,6 +21,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from . import pending_registrations
 from .forms import (
     AddAssociateForm,
     AdminInviteForm,
@@ -1257,6 +1258,65 @@ def transfers_pending(request, pk: int):
         {"list_obj": lst, "transfers": transfers},
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Stalled registrations ("Nicht abgeschlossene Anmeldungen"): accounts whose
+# activation link was never completed. Class admins see their class, the
+# super-admin sees all. See lists.pending_registrations.
+# ---------------------------------------------------------------------------
+
+
+@login_required
+def pending_registrations_list(request, pk: int):
+    lst = get_object_or_404(List, pk=pk)
+    if not can_user_admin_list(request.user, lst):
+        return HttpResponseForbidden("Nur Listen-Admins sehen die nicht abgeschlossenen Anmeldungen.")
+    return render(
+        request,
+        "lists/pending_registrations.html",
+        {"list_obj": lst, "entries": pending_registrations.pending_registrations(lst)},
+    )
+
+
+@login_required
+def pending_registrations_all(request):
+    if not is_super_admin(request.user):
+        return HttpResponseForbidden("Nur Super-Admins sehen alle nicht abgeschlossenen Anmeldungen.")
+    return render(
+        request,
+        "lists/pending_registrations.html",
+        {"list_obj": None, "entries": pending_registrations.pending_registrations()},
+    )
+
+
+@login_required
+@require_POST
+def pending_registration_resend(request, user_pk: int):
+    """Re-send one activation link. A class admin may do so for registrations
+    whose invitation was for a list they admin; the super-admin for any. The
+    `list` POST field only picks the page to return to."""
+    entry = pending_registrations.get_pending_registration(user_pk)
+    if entry is None:
+        messages.info(request, "Diese Anmeldung ist inzwischen abgeschlossen.")
+    elif not (
+        is_super_admin(request.user)
+        or (entry.list is not None and can_user_admin_list(request.user, entry.list))
+    ):
+        return HttpResponseForbidden("Keine Berechtigung für diese Anmeldung.")
+    elif pending_registrations.resend_activation(entry, by_user=request.user):
+        messages.success(request, f"Neuer Aktivierungslink an {entry.person.email} gesendet.")
+    else:
+        messages.error(
+            request,
+            f"Der Link an {entry.person.email} konnte nicht versendet werden "
+            f"(Mail-Server-Fehler). Bitte später erneut versuchen.",
+        )
+
+    back = request.POST.get("list")
+    if back and back.isdigit():
+        return redirect("lists:pending_registrations", pk=int(back))
+    return redirect("lists:pending_registrations_all")
 
 def _copy_record_access_to(src: ListRecord, new: ListRecord, dest_list: List) -> None:
     """Carry the source record's visibility matrix (the LIST_RECORD_ACCESS rows)

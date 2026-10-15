@@ -37,14 +37,20 @@ def sweep_expired_webauthn_challenges(timestamp: int) -> None:
 @app.periodic(cron="35 3 * * *")
 @app.task(queueing_lock="sweep_activation_tokens", pass_context=False)
 def sweep_activation_tokens(timestamp: int) -> None:
-    """Delete activation / recovery tokens that expired or were consumed more
-    than TOKEN_RETENTION_DAYS ago. Each row holds the address the link was
-    mailed to; once unusable it is no longer needed.
+    """Delete activation / recovery / login tokens that expired or were
+    consumed more than TOKEN_RETENTION_DAYS ago. Each row holds the address the
+    link was mailed to; once unusable it is no longer needed.
+
+    Kept: tokens of never-activated accounts. They record which class the
+    stalled registration belongs to (`pending_list`) for the admins' "Nicht
+    abgeschlossene Anmeldungen" page; the address is on the PERSON anyway.
     """
     cutoff = timezone.now() - timedelta(days=settings.TOKEN_RETENTION_DAYS)
-    deleted, _ = ActivationToken.objects.filter(
-        Q(expires_at__lt=cutoff) | Q(consumed_at__lt=cutoff)
-    ).delete()
+    deleted, _ = (
+        ActivationToken.objects.filter(Q(expires_at__lt=cutoff) | Q(consumed_at__lt=cutoff))
+        .exclude(user__is_active=False, user__last_login__isnull=True)
+        .delete()
+    )
     if deleted:
         log.info("sweep_activation_tokens: removed %d rows", deleted)
 

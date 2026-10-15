@@ -11,11 +11,18 @@ urlpatterns = [
     path("rollover/", views.rollover_preview, name="rollover_preview"),
     path("rollover/execute/", views.rollover_execute, name="rollover_execute"),
     path("transfers/<int:transfer_pk>/decide/", views.transfer_decide, name="transfer_decide"),
+    path("anmeldungen/", views.pending_registrations_all, name="pending_registrations_all"),
+    path(
+        "anmeldungen/<int:user_pk>/resend/",
+        views.pending_registration_resend,
+        name="pending_registration_resend",
+    ),
     path("<int:pk>/", views.list_detail, name="detail"),
     path("<int:pk>/invite/", views.list_invite, name="invite"),
     path("<int:pk>/admins/", views.admin_manage, name="admin_manage"),
     path("<int:pk>/cohort/", views.list_cohort_edit, name="cohort_edit"),
     path("<int:pk>/transfers/", views.transfers_pending, name="transfers_pending"),
+    path("<int:pk>/anmeldungen/", views.pending_registrations_list, name="pending_registrations"),
     path("<int:pk>/send-test/", views.list_send_test, name="send_test"),
     path("<int:pk>/join-tokens/", views.list_join_tokens, name="join_tokens"),
     path(

@@ -437,6 +437,12 @@ außerdem den Hinweis *„Sie sind Admin dieser Liste."*.
   (G8/G9) pflegen — Grundlage für den Schuljahres-Übergang.
 - **Umzugs-Anträge:** Anträge von Schülern, die in **Ihre** Klasse wechseln
   wollen, annehmen oder ablehnen.
+- **Nicht abgeschlossene Anmeldungen:** Personen, die sich für Ihre Klasse
+  registriert, den Aktivierungslink aber nie abgeschlossen haben (oft scheiterte
+  die Passkey-Einrichtung). Mit **„Link erneut senden“** bekommen sie einen
+  neuen Aktivierungslink (7 Tage gültig), der auch den Weg ohne Passkey zeigt.
+  Nach der Aktivierung landen sie direkt in der Klasse, auch wenn der
+  ursprüngliche QR-Code längst abgelaufen ist.
 
 > **Sichtbarkeit bleibt Sache der Betroffenen:** Als Admin dürfen Sie zwar Werte
 > korrigieren, aber **nicht** die Sichtbarkeits-Einstellungen anderer Personen

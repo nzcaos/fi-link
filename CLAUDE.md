@@ -354,7 +354,9 @@ The fallback for users whose device can't create a passkey. It adds **no new att
 - **Session length:** a session opened without a passkey lasts `EMAIL_LOGIN_SESSION_DAYS` (7); passkey sessions keep Django's 2-week default.
 - **Purposes don't cross:** `LOGIN` tokens never open the enrolment/help pages, `ACTIVATE`/`RECOVER` tokens are not login links.
 - Deleting the **last passkey** is allowed now — it no longer locks anyone out. Users without a passkey see a hint on the Passkeys page to set one up when their device can.
-- **Stalled registrations:** `manage.py resend_activation` lists never-activated stubs (inactive, no passkey, never logged in); `--send` mails each a fresh activation link that keeps the invitation of its latest earlier link (if not yet swept) and points to the passkey-less path.
+- **Stalled registrations** (never-activated stubs: inactive, no passkey, never logged in) are listed in the GUI — *Nicht abgeschlossene Anmeldungen* per class for its admins (`lists:pending_registrations`) and across all classes for the super-admin (`lists:pending_registrations_all`), with a *Link erneut senden* button. Logic in `lists/pending_registrations.py`; `manage.py resend_activation` is the shell front-end of the same functions.
+  - **Class association** is `ActivationToken.pending_list` (FK, `SET_NULL`), resolved from the invitation when the token is issued and copied onto every re-sent link. It must be a real FK: the invitation tokens are short-lived (QR: 48 h) and swept 30 days later, which used to orphan the association. `sweep_activation_tokens` therefore **keeps** the tokens of never-activated accounts (the address is on the PERSON anyway).
+  - **Re-send keeps a still-usable invitation.** If it has expired (the common case — the QR code is long gone), an admin's re-send attaches a fresh personal `LIST_INVITE_TOKEN` (`target_person` = the stub's PERSON, `invited_by` = the admin) for the stub's class, so activation still ends in the class: the admin re-sending is the authorisation, exactly like inviting someone. The shell command has no admin to act as inviter and only keeps a usable invitation.
 
 ### Library choice and topology
 
@@ -526,7 +528,7 @@ Prerequisite this exposes: `<MAIL_DOMAIN>` itself must have SPF + DKIM configure
 - **IMAP server:** `EXPUNGE` processed messages after a 7-day grace period.
 - **Local metadata (Inbound/Outbound rows):** keep 30–90 days for bounce correlation.
 - **Task-queue jobs:** finished procrastinate jobs are deleted after `TASK_JOB_RETENTION_DAYS` (7) — `send_outbound_message` carries the forwarded body in its args, so the job table must not outlive the mail metadata.
-- **Tokens and sessions:** expired/consumed invitation, activation and QR-join tokens are deleted `TOKEN_RETENTION_DAYS` (30) after they became unusable; expired Django sessions daily.
+- **Tokens and sessions:** expired/consumed invitation, activation and QR-join tokens are deleted `TOKEN_RETENTION_DAYS` (30) after they became unusable — except activation tokens of never-activated accounts, which carry the class of a stalled registration; expired Django sessions daily.
 - **Archived lists:** deleted `LIST_ARCHIVE_RETENTION_DAYS` (365) after `archived_at` (`purge_archived_lists`), cascading records, memberships and mail metadata; PERSONs left with no USER and no record are deleted too. USERs are never aged out. Lists scoping an `AGGREGATE_ALIAS` (PROTECT) are skipped.
 - **Logs:** container logs rotate by size (3 × 10 MB per service, `x-logging` in compose); routine INFO lines carry no mail addresses.
 - **Erasure:** `manage.py delete_person` (`lists/erasure.py`) is the only way to delete a PERSON — the PROTECT FKs on `User.person`, `ListRecord.subject` and the audit `created_by`/`invited_by` columns block plain ORM/admin deletes by design; the command deletes records first and reassigns audit references to a super-admin.

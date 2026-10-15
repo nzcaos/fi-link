@@ -158,7 +158,7 @@ docker compose exec web python manage.py reset_passkeys --email <user-email>
 
 The command **deletes** the user's existing passkeys and **prints a fresh enrollment link to stdout**. The super-admin relays the link to the user out-of-band (phone, in person, separate email). The user opens it and enrols a new passkey — their data, list memberships, and family relationships are retained. If the email matches multiple Users (shared family mailbox), the command refuses and lists candidates; re-run with `--user-id`.
 
-**Stalled registrations** (inactive, no passkey, never signed in — e.g. the device couldn't create a passkey before the mail-link fallback existed):
+**Stalled registrations** (inactive, no passkey, never signed in — e.g. the device couldn't create a passkey before the mail-link fallback existed) are listed in the web UI: per class for its admins and across all classes for the super-admin (list menu → *Nicht abgeschlossene Anmeldungen*), with a re-send button. The same from the shell:
 
 ```bash
 docker compose exec web python manage.py resend_activation          # list only

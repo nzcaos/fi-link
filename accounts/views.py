@@ -30,6 +30,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
+from .grants import FORM_GRANT_KEY, LIST_GRANT_KEYS, grant_is_usable
 from .models import ActivationToken, Passkey, Person, User
 from .webauthn_service import (
     begin_authentication,
@@ -130,28 +131,10 @@ def _registration_grant(request: HttpRequest) -> str | None:
     consumed invite is no better than none. Keys are read, never popped:
     `_next_url_after_auth` needs them after the passkey ceremony.
     """
-    from forms.models import Form
-    from lists.models import AdminInviteToken, ListInviteToken, ListJoinToken
-
-    # The three token-model grants; `_next_url_after_auth` pops the same keys
-    # after enrolment to finish the join — keep both lists in sync.
-    for session_key, model in (
-        ("pending_invite_token", ListInviteToken),
-        ("pending_join_token", ListJoinToken),
-        ("pending_admin_invite_token", AdminInviteToken),
-    ):
+    for session_key in (*LIST_GRANT_KEYS, FORM_GRANT_KEY):
         value = request.session.get(session_key)
-        if not value:
-            continue
-        token = model.objects.filter(token=value).first()
-        if token is not None and token.is_usable:
+        if value and grant_is_usable(session_key, value):
             return session_key
-
-    value = request.session.get("pending_form_token")
-    if value:
-        form = Form.objects.filter(share_token=value, is_open=True).first()
-        if form is not None and form.share_link_active:
-            return "pending_form_token"
     return None
 
 
@@ -287,7 +270,11 @@ def register_start(request: HttpRequest) -> HttpResponse:
             .first()
         )
         grant = (
-            {"pending_key": previous.pending_key, "pending_token": previous.pending_token}
+            {
+                "pending_key": previous.pending_key,
+                "pending_token": previous.pending_token,
+                "pending_list": previous.pending_list,
+            }
             if previous is not None
             else {}
         )
