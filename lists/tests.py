@@ -6368,3 +6368,121 @@ class ProxyAssociateInvitationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Einladung", mail.outbox[0].subject)
         self.assertNotIn("registriert", mail.outbox[0].body)
+
+
+class MergePersonTests(TestCase):
+    """`manage.py merge_person`: a proxy-captured duplicate is merged into the
+    person's own account (see `lists/merge.py`)."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von"],
+        )
+        self.phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE,
+            position=1, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.address = ListAttribute.objects.create(
+            template=self.template, name="Adresse", type=ListAttribute.Type.TEXT,
+            position=2, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a-merge", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        # Partner who ran the wizard and captured Catrin as proxy.
+        self.partner = _make_user(username="partner", given="Kai", family="Schmidt", email="kai@example.test")
+        ListAccess.objects.create(list=self.lst, user=self.partner)
+        self.child = Person.objects.create(given_name="Lea", family_name="Schmidt")
+        self.child_rec = ListRecord.objects.create(list=self.lst, subject=self.child, role=ListRecord.Role.MEMBER)
+        RecordManager.objects.create(record=self.child_rec, user=self.partner, basis=RecordManager.Basis.GUARDIAN)
+        self.proxy = Person.objects.create(given_name="Catrin", family_name="Schmidt", email="catrin@example.test")
+        self.proxy_rec = ListRecord.objects.create(list=self.lst, subject=self.proxy, role=ListRecord.Role.ASSOCIATE)
+        RecordManager.objects.create(record=self.proxy_rec, user=self.partner, basis=RecordManager.Basis.CREATOR)
+        ListRecordValue.objects.create(record=self.proxy_rec, attribute=self.phone, value="+49 1")
+        PersonRelationship.objects.create(subject_person=self.child, related_person=self.proxy, role="Mutter von")
+        # Catrin's own account, registered separately, without a record.
+        self.account = _make_user(username="catrin", given="Catrin", family="Schmidt", email="catrin@example.test")
+
+    def _merge(self, source, target, *extra):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("merge_person", "--from", str(source.pk), "--into", str(target.pk), *extra, stdout=out)
+        return out.getvalue()
+
+    def test_dry_run_changes_nothing(self):
+        out = self._merge(self.proxy, self.account.person)
+        self.assertIn("geht an das Ziel", out)
+        self.assertIn("Konto tritt „Klasse 5a“ bei", out)
+        self.assertTrue(Person.objects.filter(pk=self.proxy.pk).exists())
+
+    def test_proxy_record_moves_to_account(self):
+        self._merge(self.proxy, self.account.person, "--yes")
+        self.assertFalse(Person.objects.filter(pk=self.proxy.pk).exists())
+        self.proxy_rec.refresh_from_db()
+        self.assertEqual(self.proxy_rec.subject, self.account.person)
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=self.account).exists())
+        self.assertTrue(RecordManager.objects.filter(
+            record=self.proxy_rec, user=self.account, basis=RecordManager.Basis.SELF_REGISTERED).exists())
+        # The partner keeps co-edit rights.
+        self.assertTrue(RecordManager.objects.filter(record=self.proxy_rec, user=self.partner).exists())
+        self.assertTrue(RecordManager.objects.filter(
+            record=self.child_rec, user=self.account, basis=RecordManager.Basis.GUARDIAN).exists())
+        self.assertTrue(PersonRelationship.objects.filter(
+            subject_person=self.child, related_person=self.account.person, role="Mutter von").exists())
+        rows = build_composed_rows(self.account, self.lst)
+        self.assertEqual(len(rows[0]["parents"]), 1)
+
+    def test_both_have_records_keeps_the_accounts(self):
+        own = ListRecord.objects.create(list=self.lst, subject=self.account.person, role=ListRecord.Role.ASSOCIATE)
+        ListRecordValue.objects.create(record=own, attribute=self.address, value="Weg 2")
+        RecordManager.objects.create(record=own, user=self.account, basis=RecordManager.Basis.SELF_REGISTERED)
+        PersonRelationship.objects.create(
+            subject_person=self.child, related_person=self.account.person, role="Mutter von")
+        self._merge(self.proxy, self.account.person, "--yes")
+        self.assertFalse(ListRecord.objects.filter(pk=self.proxy_rec.pk).exists())
+        vals = {v.attribute_id: v.value for v in own.values.all()}
+        self.assertEqual(vals, {self.address.pk: "Weg 2", self.phone.pk: "+49 1"})
+        self.assertTrue(RecordManager.objects.filter(record=own, user=self.partner).exists())
+        self.assertEqual(PersonRelationship.objects.filter(subject_person=self.child).count(), 1)
+
+    def test_source_with_account_is_refused(self):
+        from django.core.management.base import CommandError
+
+        with self.assertRaises(CommandError):
+            self._merge(self.account.person, self.proxy, "--yes")
+
+    def test_duplicate_child_is_reported(self):
+        twin = Person.objects.create(given_name="Lea", family_name="Schmidt")
+        ListRecord.objects.create(list=self.lst, subject=twin, role=ListRecord.Role.MEMBER)
+        PersonRelationship.objects.create(subject_person=twin, related_person=self.account.person, role="Mutter von")
+        out = self._merge(self.proxy, self.account.person)
+        self.assertIn(f"merge_person --from {twin.pk} --into {self.child.pk}", out)
+        self._merge(self.proxy, self.account.person, "--yes")
+        self._merge(twin, self.child, "--yes")
+        self.assertEqual(ListRecord.objects.filter(list=self.lst, role=ListRecord.Role.MEMBER).count(), 1)
+        self.assertEqual(PersonRelationship.objects.filter(subject_person=self.child).count(), 1)
+
+    def test_suggestions(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # Shared mailbox, different first name: not a duplicate.
+        michael = Person.objects.create(given_name="Michael", family_name="Schmidt", email="kai@example.test")
+        ListRecord.objects.create(list=self.lst, subject=michael, role=ListRecord.Role.ASSOCIATE)
+        # Typo in the family name, same mail as an account.
+        typo_user = _make_user(username="chris", given="Christian", family="Kowollik", email="ck@example.test")
+        typo = Person.objects.create(given_name="Christian", family_name="Kowolllik", email="ck@example.test")
+        ListRecord.objects.create(list=self.lst, subject=typo, role=ListRecord.Role.ASSOCIATE)
+        out = StringIO()
+        call_command("merge_person", "--suggest", stdout=out)
+        text = out.getvalue()
+        self.assertIn(f"--from {self.proxy.pk} --into {self.account.person.pk}", text)
+        self.assertIn(f"--from {typo.pk} --into {typo_user.person.pk}", text)
+        self.assertNotIn(f"--from {michael.pk}", text)
