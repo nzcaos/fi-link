@@ -124,10 +124,20 @@ def resend_activation(entry: PendingRegistration, *, by_user: User | None = None
         )
     entry.user.activate_tokens = [token, *entry.user.activate_tokens]
     link = f"{(settings.RP_ORIGIN or '').rstrip('/')}{reverse('accounts:activate', args=[token.token])}"
+    if _is_proxy_invitation(entry):
+        # A parent captured by the other one never registered themselves —
+        # "Sie haben sich registriert" would be wrong; re-send the invitation.
+        from .associate_invites import invitation_body
+
+        subject = f"Fichtelink — Einladung zur Liste „{entry.list.title}“ (Erinnerung)"
+        message = invitation_body(person, entry.list, None, link, token.expires_at)  # names the capturing parent
+    else:
+        subject = "Fichtelink — Konto aktivieren (neuer Link)"
+        message = _body(person.given_name, link, token, joins=bool(grant.get("pending_key")))
     try:
         send_mail(
-            subject="Fichtelink — Konto aktivieren (neuer Link)",
-            message=_body(person.given_name, link, token, joins=bool(grant.get("pending_key"))),
+            subject=subject,
+            message=message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[person.email],
         )
@@ -136,6 +146,23 @@ def resend_activation(entry: PendingRegistration, *, by_user: User | None = None
         return False
     log.info("activation re-sent: user=%s by=%s", entry.user.pk, by_user.pk if by_user else "cli")
     return True
+
+
+def _is_proxy_invitation(entry: PendingRegistration) -> bool:
+    """Stub created by `associate_invites` for a proxy-captured parent: no
+    consent of their own yet, and already an associate record in the list."""
+    from .models import ListRecord
+
+    return (
+        entry.user.privacy_consent_at is None
+        and entry.list is not None
+        and ListRecord.objects.filter(
+            list=entry.list,
+            subject=entry.person,
+            role=ListRecord.Role.ASSOCIATE,
+            archived_at__isnull=True,
+        ).exists()
+    )
 
 
 def _body(given_name: str, link: str, token: ActivationToken, *, joins: bool) -> str:

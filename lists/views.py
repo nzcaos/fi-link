@@ -325,6 +325,17 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
             return redirect("lists:detail", pk=invite.list_id)
 
         if invite.mode == ListInviteToken.Mode.VIA_ASSOCIATE:
+            # A parent the other one already captured as proxy (second-parent
+            # block / *Weitere Bezugsperson*): the record exists, so take it
+            # over instead of running the wizard, which would duplicate them.
+            own = ListRecord.objects.filter(
+                list=invite.list,
+                subject=invite.target_person,
+                role=ListRecord.Role.ASSOCIATE,
+                archived_at__isnull=True,
+            ).first()
+            if own is not None:
+                return _take_over_associate_record(request, invite, own)
             # Accepting joins the Benutzergruppe right away (as for a QR
             # join); only the token's consumption waits for the wizard save.
             ListAccess.objects.get_or_create(list=invite.list, user=request.user)
@@ -358,6 +369,46 @@ def _consume_invite_and_redirect(request, invite: ListInviteToken):
         invite.consumed_at = timezone.now()
         invite.save(update_fields=["consumed_at"])
     return redirect("lists:record_edit", pk=invite.list_id, record_pk=record.pk)
+
+
+def _take_over_associate_record(request, invite: ListInviteToken, own: ListRecord):
+    """Finish an invitation for a parent whose associate record already exists
+    (captured by the other parent). Joins the Benutzergruppe — from now on they
+    get the list's mail — and makes them manager of their own record and
+    guardian of their child(ren) in this list. Runs inside the caller's
+    transaction; lands on the child's family dialog so they can check their
+    data and set their own visibility (self-consent replaces the proxy's).
+    """
+    user = request.user
+    ListAccess.objects.get_or_create(list=invite.list, user=user)
+    RecordManager.objects.get_or_create(
+        record=own, user=user, defaults={"basis": RecordManager.Basis.INVITED}
+    )
+    child_ids = PersonRelationship.objects.filter(
+        related_person=invite.target_person
+    ).values_list("subject_person_id", flat=True)
+    children = list(
+        ListRecord.objects.filter(
+            list=invite.list,
+            subject_id__in=child_ids,
+            role=ListRecord.Role.MEMBER,
+            archived_at__isnull=True,
+        ).order_by("pk")
+    )
+    for child in children:
+        RecordManager.objects.get_or_create(
+            record=child, user=user, defaults={"basis": RecordManager.Basis.GUARDIAN}
+        )
+    invite.consumed_at = timezone.now()
+    invite.save(update_fields=["consumed_at"])
+    messages.success(
+        request,
+        f'Willkommen in „{invite.list.title}“! Sie erhalten jetzt die E-Mails an '
+        f"die Liste. Bitte prüfen Sie Ihre Angaben und legen Sie fest, wer was "
+        f"sehen darf.",
+    )
+    target = children[0] if children else own
+    return redirect("lists:record_edit", pk=invite.list_id, record_pk=target.pk)
 
 
 def invite_accept(request, token: str):
@@ -449,6 +500,15 @@ def invite_accept(request, token: str):
             "list_obj": invite.list,
             "invite": invite,
             "next_action": next_action,
+            # Proxy-captured parent taking their record over — say so.
+            "takeover": next_action == "accept"
+            and invite.mode == ListInviteToken.Mode.VIA_ASSOCIATE
+            and ListRecord.objects.filter(
+                list=invite.list,
+                subject_id=invite.target_person_id,
+                role=ListRecord.Role.ASSOCIATE,
+                archived_at__isnull=True,
+            ).exists(),
         },
     )
 
@@ -594,6 +654,29 @@ def record_edit(request, pk: int, record_pk: int):
     )
 
 
+def _send_associate_invitations(request, invitations) -> None:
+    """Mail the take-over invitations prepared by a wizard / add-associate
+    save (after its transaction committed) and tell the saver about it."""
+    from .associate_invites import send_invitation
+
+    for inv in invitations:
+        person = inv.activation.person
+        if send_invitation(inv):
+            messages.info(
+                request,
+                f"{person} hat eine Einladung an {inv.activation.email} bekommen. "
+                f"Sobald sie angenommen ist, erhält {person.given_name} die "
+                f"E-Mails an die Liste.",
+            )
+        else:
+            messages.warning(
+                request,
+                f"Die Einladung an {person} konnte nicht verschickt werden. "
+                f"Die Listen-Admins können sie unter „Nicht abgeschlossene "
+                f"Anmeldungen“ erneut senden.",
+            )
+
+
 @login_required
 def record_add_associate(request, pk: int, record_pk: int):
     """Add a further parent/guardian to an existing child record — for when
@@ -618,6 +701,7 @@ def record_add_associate(request, pk: int, record_pk: int):
             messages.error(request, " ".join(exc.messages))
         else:
             messages.success(request, f'„{assoc.subject}" wurde als Bezugsperson hinzugefügt.')
+            _send_associate_invitations(request, form.invitations)
             return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
     return render(
         request,
@@ -863,6 +947,7 @@ def record_create_associate(request, pk: int):
                 request,
                 f'„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.',
             )
+            _send_associate_invitations(request, form.invitations)
             return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
     else:
         form = AssociateWizardForm(list_obj=lst, user=request.user)

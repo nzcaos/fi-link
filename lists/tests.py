@@ -2458,8 +2458,9 @@ class AssociateWizardMultiPersonTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         child = Person.objects.get(given_name="Lina")
         p2 = Person.objects.get(given_name="Olaf", family_name="Mueller")
-        # Second parent is a PERSON only — no USER, no ListAccess.
-        self.assertFalse(User.objects.filter(person=p2).exists())
+        # Second parent is not a member yet: only an inactive stub USER
+        # (invited to take the record over), no ListAccess.
+        self.assertFalse(User.objects.get(person=p2).is_active)
         self.assertFalse(ListAccess.objects.filter(list=self.lst, user__person=p2).exists())
         # Own associate record with their own phone, managed by the registering
         # user as proxy creator.
@@ -2534,7 +2535,7 @@ class AssociateWizardMultiPersonTests(TestCase):
             reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk}),
         )
         p2 = Person.objects.get(given_name="Olaf")
-        self.assertFalse(User.objects.filter(person=p2).exists())
+        self.assertFalse(User.objects.get(person=p2).is_active)
         self.assertTrue(PersonRelationship.objects.filter(
             subject_person=child_rec.subject, related_person=p2, role="Vater von",
         ).exists())
@@ -6186,3 +6187,184 @@ class PendingRegistrationsTests(TestCase):
         self.client.force_login(self.admin_a)
         resp = self.client.get(reverse("lists:pending_registrations", kwargs={"pk": self.list_a.pk}))
         self.assertContains(resp, "paula@example.org")
+
+
+class ProxyAssociateInvitationTests(TestCase):
+    """A second parent captured by the first one gets an invitation to take
+    their record over — without an account they receive no list mail (the
+    2026-10 incident). See `lists/associate_invites.py`."""
+
+    def setUp(self):
+        self.client = Client()
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+            relationship_roles=["Mutter von", "Vater von"],
+        )
+        self.attr_phone = ListAttribute.objects.create(
+            template=self.template, name="Telefon", type=ListAttribute.Type.PHONE,
+            position=1, applies_to_role=ListAttribute.AppliesTo.ASSOCIATE,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a-proxy", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.parent = _make_user(
+            username="parent", given="Eva", family="Mueller", email="eva@example.test"
+        )
+        ListAccess.objects.create(list=self.lst, user=self.parent)
+
+    def _wizard(self, **overrides):
+        data = {
+            "given_name": "Lina", "family_name": "Mueller", "member_email": "",
+            "role": "Mutter von",
+            "add_second_parent": "on", "p2_given_name": "Olaf",
+            "p2_family_name": "Mueller", "p2_role": "Vater von",
+            "p2_email": "Olaf@Example.test",
+            f"p1_attr_{self.attr_phone.pk}": "+49 111",
+        }
+        data.update(overrides)
+        self.client.force_login(self.parent)
+        return self.client.post(
+            reverse("lists:record_create_associate", kwargs={"pk": self.lst.pk}), data
+        )
+
+    def _activation(self, person):
+        from accounts.models import ActivationToken
+
+        return ActivationToken.objects.filter(person=person).order_by("-pk").first()
+
+    def test_wizard_invites_second_parent(self):
+        self.assertEqual(self._wizard().status_code, 302)
+        olaf = Person.objects.get(given_name="Olaf")
+        stub = User.objects.get(person=olaf)
+        self.assertFalse(stub.is_active)
+        self.assertIsNone(stub.privacy_consent_at)
+        invite = ListInviteToken.objects.get(list=self.lst, target_person=olaf)
+        self.assertEqual(invite.invited_by, self.parent)
+        self.assertEqual(invite.target_email, "olaf@example.test")
+        act = self._activation(olaf)
+        self.assertEqual(act.pending_key, "pending_invite_token")
+        self.assertEqual(act.pending_token, invite.token)
+        self.assertEqual(act.pending_list, self.lst)
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.to, ["olaf@example.test"])
+        self.assertIn("Eva Mueller hat Sie als Vater von Lina Mueller", sent.body)
+        self.assertIn(f"/auth/activate/{act.token}/", sent.body)
+
+    def test_no_invitation_without_email(self):
+        self._wizard(p2_email="")
+        olaf = Person.objects.get(given_name="Olaf")
+        self.assertFalse(User.objects.filter(person=olaf).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_no_invitation_for_shared_mailbox(self):
+        # Shared family address: that mailbox already gets the list mail, and
+        # a stub there would usually duplicate an existing account.
+        self._wizard(p2_email="eva@example.test")
+        olaf = Person.objects.get(given_name="Olaf")
+        self.assertFalse(User.objects.filter(person=olaf).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_add_associate_later_invites(self):
+        self._wizard(add_second_parent="", p2_given_name="", p2_family_name="",
+                     p2_role="", p2_email="")
+        child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        self.client.post(
+            reverse("lists:record_add_associate",
+                    kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk}),
+            {"given_name": "Olaf", "family_name": "Mueller", "role": "Vater von",
+             "email": "olaf@example.test"},
+        )
+        olaf = Person.objects.get(given_name="Olaf")
+        self.assertTrue(ListInviteToken.objects.filter(target_person=olaf).exists())
+        self.assertEqual(mail.outbox[-1].to, ["olaf@example.test"])
+
+    def test_activation_takes_the_record_over(self):
+        self._wizard()
+        olaf = Person.objects.get(given_name="Olaf")
+        stub = User.objects.get(person=olaf)
+        child_rec = ListRecord.objects.get(list=self.lst, role=ListRecord.Role.MEMBER)
+        own = ListRecord.objects.get(list=self.lst, subject=olaf)
+        invite = ListInviteToken.objects.get(target_person=olaf)
+        persons_before = Person.objects.count()
+
+        visitor = Client()
+        resp = visitor.post(reverse("accounts:activate_without_passkey",
+                                    args=[self._activation(olaf).token]))
+        invite_url = reverse("lists:invite_accept", kwargs={"token": invite.token})
+        self.assertRedirects(resp, invite_url, fetch_redirect_response=False)
+        self.assertContains(visitor.get(invite_url), "Eintrag übernehmen")
+        resp = visitor.post(invite_url)
+        self.assertRedirects(
+            resp,
+            reverse("lists:record_edit", kwargs={"pk": self.lst.pk, "record_pk": child_rec.pk}),
+            fetch_redirect_response=False,
+        )
+        stub.refresh_from_db()
+        self.assertTrue(stub.is_active)
+        self.assertTrue(ListAccess.objects.filter(list=self.lst, user=stub).exists())
+        self.assertTrue(RecordManager.objects.filter(
+            record=own, user=stub, basis=RecordManager.Basis.INVITED).exists())
+        self.assertTrue(RecordManager.objects.filter(
+            record=child_rec, user=stub, basis=RecordManager.Basis.GUARDIAN).exists())
+        invite.refresh_from_db()
+        self.assertIsNotNone(invite.consumed_at)
+        # No duplicate PERSON, no second associate record, no wizard.
+        self.assertEqual(Person.objects.count(), persons_before)
+        self.assertEqual(ListRecord.objects.filter(list=self.lst, subject=olaf).count(), 1)
+        # Now a mail recipient of the list.
+        from .tasks import list_recipient_emails
+
+        self.assertIn("olaf@example.test", [e.lower() for e in list_recipient_emails(self.lst)])
+        # The family dialog opens and shows both parents.
+        self.assertEqual(visitor.get(resp["Location"]).status_code, 200)
+
+    def test_backfill_command(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        # A proxy parent from before invitations existed: no stub.
+        child = Person.objects.create(given_name="Tom", family_name="Alt")
+        old = Person.objects.create(given_name="Ute", family_name="Alt", email="ute@example.test")
+        dup = Person.objects.create(given_name="Eva", family_name="Mueller", email="eva@example.test")
+        for p in (old, dup):
+            rec = ListRecord.objects.create(list=self.lst, subject=p, role=ListRecord.Role.ASSOCIATE)
+            RecordManager.objects.create(record=rec, user=self.parent, basis=RecordManager.Basis.CREATOR)
+            PersonRelationship.objects.create(subject_person=child, related_person=p, role="Mutter von")
+        ListRecord.objects.create(list=self.lst, subject=child, role=ListRecord.Role.MEMBER)
+
+        out = StringIO()
+        call_command("invite_proxy_associates", "--list", str(self.lst.pk), stdout=out)
+        self.assertIn("würde einladen", out.getvalue())
+        self.assertIn("Adresse gehört bereits zum Konto", out.getvalue())
+        self.assertFalse(User.objects.filter(person=old).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+        call_command("invite_proxy_associates", "--list", str(self.lst.pk), "--send", stdout=StringIO())
+        self.assertFalse(User.objects.get(person=old).is_active)
+        self.assertFalse(User.objects.filter(person=dup).exists())
+        self.assertEqual([m.to for m in mail.outbox], [["ute@example.test"]])
+        self.assertIn("Eva Mueller hat Sie als Mutter von Tom Alt", mail.outbox[0].body)
+
+        # Idempotent: a second run finds nobody left to invite.
+        call_command("invite_proxy_associates", "--send", stdout=StringIO())
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_resend_uses_invitation_wording(self):
+        self._wizard()
+        olaf = Person.objects.get(given_name="Olaf")
+        stub = User.objects.get(person=olaf)
+        admin = _make_user(username="admin", given="Ada", family="Admin")
+        ListAdmin.objects.create(list=self.lst, user=admin)
+        mail.outbox.clear()
+        self.client.force_login(admin)
+        self.client.post(
+            reverse("lists:pending_registration_resend", kwargs={"user_pk": stub.pk}),
+            {"list": str(self.lst.pk)},
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("Einladung", mail.outbox[0].subject)
+        self.assertNotIn("registriert", mail.outbox[0].body)

@@ -654,10 +654,13 @@ def _write_associate_values(list_obj: List, cleaned_data: dict, record, attrs: d
 def _create_proxy_associate(
     *, list_obj: List, child: Person, user, given_name: str, family_name: str,
     email: str | None, role: str, cleaned_data: dict, attrs: dict, prefix: str,
+    invitations: list,
 ) -> ListRecord:
     """A further parent captured by `user` as proxy: a new PERSON (not a USER)
     with their own associate record, linked to the child, managed by `user`
-    (basis=creator). They can later take the record over via an invitation."""
+    (basis=creator). With an email, an invitation to take the record over is
+    prepared and appended to `invitations` — the caller mails it after commit
+    (`associate_invites.send_invitation`)."""
     person = Person.objects.create(
         given_name=given_name.strip(),
         family_name=family_name.strip(),
@@ -679,6 +682,11 @@ def _create_proxy_associate(
         basis=RecordManager.Basis.CREATOR,
     )
     _write_associate_values(list_obj, cleaned_data, record, attrs, prefix)
+    from .associate_invites import create_invitation
+
+    invitation = create_invitation(person=person, list_obj=list_obj, invited_by=user)
+    if invitation is not None:
+        invitations.append(invitation)
     return record
 
 
@@ -747,8 +755,9 @@ class AssociateWizardForm(forms.Form):
         label="E-Mail der zweiten Bezugsperson (optional)",
         required=False,
         help_text=(
-            "Optional. Sie können diese Person später per Einladung selbst "
-            "übernehmen lassen — dann setzt sie ihre Freigaben selbst."
+            "Mit E-Mail-Adresse bekommt die Person eine Einladung, ihren "
+            "Eintrag selbst zu übernehmen — erst dann erhält sie die E-Mails "
+            "an die Liste und setzt ihre Freigaben selbst."
         ),
     )
     p2_role = forms.ChoiceField(
@@ -759,6 +768,7 @@ class AssociateWizardForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.list_obj = list_obj
         self.user = user
+        self.invitations: list = []  # filled by save(); mailed by the view
 
         roles = list_obj.template.relationship_roles or _DEFAULT_ROLES
         role_choices = [(r, r) for r in roles]
@@ -897,6 +907,7 @@ class AssociateWizardForm(forms.Form):
                 cleaned_data=self.cleaned_data,
                 attrs=self._associate_attrs,
                 prefix=_P2_ATTR_PREFIX,
+                invitations=self.invitations,
             )
 
         # The view lands on the child record's edit form for refinement.
@@ -924,6 +935,7 @@ class AddAssociateForm(forms.Form):
         self.record = record
         self.list_obj = record.list
         self.user = user
+        self.invitations: list = []  # filled by save(); mailed by the view
         roles = self.list_obj.template.relationship_roles or _DEFAULT_ROLES
         self.fields["role"].choices = [("", "—")] + [(r, r) for r in roles]
         self._associate_attrs: dict[int, ListAttribute] = {}
@@ -951,6 +963,7 @@ class AddAssociateForm(forms.Form):
             cleaned_data=self.cleaned_data,
             attrs=self._associate_attrs,
             prefix=_ATTR_FIELD_PREFIX,
+            invitations=self.invitations,
         )
 
 

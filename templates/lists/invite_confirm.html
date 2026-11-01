@@ -23,6 +23,18 @@
       <button type="submit">Anmelden und beitreten</button>
     </form>
 
+  {% elif takeover %}
+    <p>
+      Sie sind bereits in der Liste eingetragen{% if invite.invited_by %}
+      ({{ invite.invited_by.person }} hat Ihre Angaben erfasst){% endif %}.
+      Mit dem Beitritt erhalten Sie die E-Mails an die Liste und verwalten
+      Ihren Eintrag und Ihre Freigaben selbst.
+    </p>
+    <form method="post" action="{% url 'lists:invite_accept' token=invite.token %}">
+      {% csrf_token %}
+      <button type="submit">Eintrag übernehmen und beitreten</button>
+    </form>
+
   {% else %}
     <p>
       Sie sind eingeloggt und können der Liste jetzt beitreten.
