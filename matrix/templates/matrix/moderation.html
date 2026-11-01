@@ -2,10 +2,10 @@
 {% block title %}Klassenraum-Moderation — {{ list_obj.title }}{% endblock %}
 {% block content %}
   <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
-  <h1>Klassenraum-Moderation „{{ list_obj.title }}"</h1>
+  <h1>Klassenraum-Moderation „{{ list_obj.title }}“</h1>
   <p style="color:#666;max-width:42rem">
     Notfallwerkzeug: Ein Bann hält ein Mitglied aus dem Matrix-Raum fern, ohne es
-    aus der Liste zu entfernen. „Bann aufheben" hebt die Sperre auf und lädt die
+    aus der Liste zu entfernen. „Bann aufheben“ hebt die Sperre auf und lädt die
     Person zugleich wieder ein. Wer die Liste verlässt, wird ohnehin automatisch
     aus dem Raum entfernt.
   </p>

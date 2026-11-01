@@ -6486,3 +6486,39 @@ class MergePersonTests(TestCase):
         self.assertIn(f"--from {self.proxy.pk} --into {self.account.person.pk}", text)
         self.assertIn(f"--from {typo.pk} --into {typo_user.person.pk}", text)
         self.assertNotIn(f"--from {michael.pk}", text)
+
+
+class RowSortingTests(TestCase):
+    """Class lists render in phone-book order (family, then given name of the
+    child), umlauts filed under the base letter; rows with a hidden name last."""
+
+    def setUp(self):
+        self.template = ListTemplate.objects.create(
+            name="Schulklasse",
+            member_subject_mode=ListTemplate.MemberSubjectMode.VIA_ASSOCIATE,
+        )
+        self.lst = List.objects.create(
+            title="Klasse 5a", email_alias="5a-sort", template=self.template,
+            visibility=List.Visibility.PRIVATE,
+        )
+        self.viewer = _make_user(username="viewer")
+        ListAccess.objects.create(list=self.lst, user=self.viewer)
+        for given, family in [("Zoe", "Abel"), ("Eva", "Köhler"), ("Max", "Kohl"),
+                              ("Anna", "abel"), ("Ben", "Zander"), ("Lea", "Kraus")]:
+            p = Person.objects.create(given_name=given, family_name=family)
+            ListRecord.objects.create(list=self.lst, subject=p, role=ListRecord.Role.MEMBER)
+
+    def test_composed_rows_sorted_by_family_then_given(self):
+        names = [r["subject_display"] for r in build_composed_rows(self.viewer, self.lst)]
+        self.assertEqual(names, ["Anna abel", "Zoe Abel", "Max Kohl", "Eva Köhler", "Lea Kraus", "Ben Zander"])
+
+    def test_hidden_names_go_last(self):
+        hidden = ListRecord.objects.get(subject__given_name="Anna")
+        ListRecordAccess.objects.filter(record=hidden, attribute__isnull=True).delete()
+        names = [r["subject_display"] for r in build_composed_rows(self.viewer, self.lst)]
+        self.assertEqual(names[-1], "?1")
+        self.assertEqual(names[0], "Zoe Abel")
+
+    def test_self_mode_rows_sorted_too(self):
+        names = [r["subject_display"] for r in build_visible_rows(self.viewer, self.lst)]
+        self.assertEqual(names[:3], ["Anna abel", "Zoe Abel", "Max Kohl"])

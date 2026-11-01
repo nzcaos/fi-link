@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Beitritt zu „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block title %}Beitritt zu „{{ list_obj.title }}“ — Fichtelink{% endblock %}
 {% block content %}
-  <h1>Beitritt zur Liste „{{ list_obj.title }}"</h1>
+  <h1>Beitritt zur Liste „{{ list_obj.title }}“</h1>
 
   {% if next_action == "register" %}
     <p>
@@ -15,7 +15,7 @@
 
   {% else %}
     <p>
-      Sie sind eingeloggt und können der Liste „{{ list_obj.title }}" jetzt beitreten.
+      Sie sind eingeloggt und können der Liste „{{ list_obj.title }}“ jetzt beitreten.
     </p>
     <form method="post" action="{% url 'lists:join_via_token' token=join_token.token %}">
       {% csrf_token %}

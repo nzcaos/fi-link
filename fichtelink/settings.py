@@ -178,6 +178,15 @@ EMAIL_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "30"))
 # the alias/bounce tokens used in Phase 4 outbound. Tests fall back to a literal.
 MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "example.invalid")
 
+# Django builds the Message-ID of every mail it sends without an explicit one
+# (activation, invitation, release notices, …) from the host's FQDN — inside
+# the container that is its random hostname ("<…@ce042f1024b8>"), which spam
+# filters score as a non-domain id. Use the mail domain instead. List forwards
+# set their own Message-ID on MAIL_DOMAIN already (lists.tasks).
+from django.core.mail.utils import DNS_NAME  # noqa: E402
+
+DNS_NAME._fqdn = MAIL_DOMAIN
+
 # Attachments of forwarded list mail (taken from the stored original at send
 # time). Over this total size they are dropped with a note in the text — the
 # mail is sent once per recipient, so large files multiply quickly, and the

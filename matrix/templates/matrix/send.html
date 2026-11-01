@@ -2,11 +2,11 @@
 {% block title %}Nachricht an Klassenraum — {{ list_obj.title }}{% endblock %}
 {% block content %}
   <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
-  <h1>Nachricht an den Klassenraum „{{ list_obj.title }}"</h1>
+  <h1>Nachricht an den Klassenraum „{{ list_obj.title }}“</h1>
   <p style="color:#666;max-width:42rem">
     Die Nachricht erscheint sofort im Matrix-Klassenraum bei allen Mitgliedern,
     die Element verbunden haben — gedacht für kurzfristige Infos (z. B. „Ausflug
-    wegen Wetter abgesagt", „Bus verspätet sich um 45 Minuten"). Sie wird im
+    wegen Wetter abgesagt“, „Bus verspätet sich um 45 Minuten“). Sie wird im
     Namen des Systems gesendet, nicht unter deinem Klarnamen.
   </p>
 

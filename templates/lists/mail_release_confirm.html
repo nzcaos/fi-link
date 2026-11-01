@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Mail-Freigabe für „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block title %}Mail-Freigabe für „{{ list_obj.title }}“ — Fichtelink{% endblock %}
 {% block content %}
   {% if rel.kind == "member" %}
-    <h1>Ihre Mail an „{{ list_obj.title }}" freigeben</h1>
+    <h1>Ihre Mail an „{{ list_obj.title }}“ freigeben</h1>
     <p>
-      Sie haben eine Mail an die Liste „{{ list_obj.title }}" gesendet. Aus
+      Sie haben eine Mail an die Liste „{{ list_obj.title }}“ gesendet. Aus
       Sicherheitsgründen wird sie erst nach Ihrer Bestätigung an die
       Mitglieder weitergeleitet.
     </p>
   {% else %}
-    <h1>Freigabe einer Mail an „{{ list_obj.title }}"</h1>
+    <h1>Freigabe einer Mail an „{{ list_obj.title }}“</h1>
     <p>
       {{ inbound.from_email|default:"(unbekannter Absender)" }} möchte eine Mail
-      an die Liste „{{ list_obj.title }}" senden, ist aber kein berechtigter
+      an die Liste „{{ list_obj.title }}“ senden, ist aber kein berechtigter
       Absender. Als Listen-Admin entscheiden Sie über die Weiterleitung.
     </p>
   {% endif %}

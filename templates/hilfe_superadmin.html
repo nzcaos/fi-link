@@ -71,7 +71,7 @@ HTML-Fassung von docs/superadmin-handbuch.md, ausgeliefert unter
 <p>
   Super-Admin-Funktionen erscheinen an den passenden Stellen automatisch, sobald
   Sie als Super-Admin angemeldet sind (z. B. der Eintrag
-  <strong>„Schuljahres-Übergang"</strong> und <strong>„Test-Mail senden"</strong>
+  <strong>„Schuljahres-Übergang“</strong> und <strong>„Test-Mail senden“</strong>
   im Admin-Menü einer Liste).
 </p>
 </section>
@@ -115,8 +115,8 @@ HTML-Fassung von docs/superadmin-handbuch.md, ausgeliefert unter
     <code>self</code> (die registrierende Person ist selbst das Mitglied, z. B.
     VHS-Kurs) oder <code>via_associate</code> (sie meldet ein anderes Mitglied an,
     z. B. Schulklasse),</li>
-  <li>die <strong>Rollen-Taxonomie</strong> für Beziehungen („Mutter von", „Vater
-    von", „Erziehungsberechtigte von", …) — konfigurierbar <strong>je
+  <li>die <strong>Rollen-Taxonomie</strong> für Beziehungen („Mutter von“, „Vater
+    von“, „Erziehungsberechtigte von“, …) — konfigurierbar <strong>je
     Vorlage</strong>,</li>
   <li>die <strong>Anzeige-Voreinstellung</strong>: welche Felder in welcher
     Zeile/Reihenfolge erscheinen (Mehr-Personen-Zeile bei Schulklassen).</li>
@@ -138,7 +138,7 @@ HTML-Fassung von docs/superadmin-handbuch.md, ausgeliefert unter
 <p>
   Reguläre Nutzer können darunter <strong>Unterlisten</strong> erstellen (z. B.
   einzelne Klassen) und werden deren Admin. Die Hierarchie ist ein
-  <strong>expliziter Baum</strong> über die „übergeordnete Liste":
+  <strong>expliziter Baum</strong> über die „übergeordnete Liste“:
 </p>
 <pre><code>Elternbeirat
 ├── Klasse 5a
@@ -159,8 +159,8 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <p>
   Ein <strong>Aggregat-Alias</strong> ist eine E-Mail-Adresse, die über
   <strong>mehrere Listen hinweg</strong> nach Beziehungsrolle ausfächert — z. B.
-  <code>eltern@&lt;domain&gt;</code> erreicht alle Personen mit Rolle „Mutter",
-  „Vater" oder „Erziehungsberechtigte" innerhalb eines konfigurierten Teilbaums.
+  <code>eltern@&lt;domain&gt;</code> erreicht alle Personen mit Rolle „Mutter“,
+  „Vater“ oder „Erziehungsberechtigte“ innerhalb eines konfigurierten Teilbaums.
   Konfiguration ist <strong>Super-Admin-only</strong> (Django-Administration).
 </p>
 <p>Felder eines Alias:</p>
@@ -191,7 +191,7 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <p>
   Eine <strong>Stapeloperation für Schulklassen</strong>, üblicherweise in der
   letzten Woche der Sommerferien. Aufruf über das Admin-Menü einer Liste →
-  <strong>„Schuljahres-Übergang"</strong> (oder <code>/lists/rollover/</code>).
+  <strong>„Schuljahres-Übergang“</strong> (oder <code>/lists/rollover/</code>).
 </p>
 <p>Ablauf:</p>
 <ol>
@@ -230,7 +230,7 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <p>
   Voraussetzung: Die teilnehmenden Klassen brauchen gepflegte
   <strong>Kohorten-Daten</strong> (Jahrgang, Zug, G8/G9) — diese setzen die
-  jeweiligen Listen-Admins über <strong>„Kohorten-Daten"</strong> (siehe
+  jeweiligen Listen-Admins über <strong>„Kohorten-Daten“</strong> (siehe
   Benutzerhandbuch, Abschnitt 13). Ohne gesetzten Schulzweig nimmt eine Liste
   nicht am Übergang teil.
 </p>
@@ -239,7 +239,7 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <section id="testmail">
 <h2>7. Test-Mail senden</h2>
 <p>
-  Über das Admin-Menü einer Liste → <strong>„Test-Mail senden"</strong>
+  Über das Admin-Menü einer Liste → <strong>„Test-Mail senden“</strong>
   (<code>/lists/&lt;id&gt;/send-test/</code>) versenden Sie eine Nachricht
   <strong>direkt an die Benutzergruppe</strong> der Liste — unter Umgehung des
   regulären Inbound-/Freigabe-Pfads. Die Seite zeigt vorab die
@@ -265,9 +265,9 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
   <li><strong><code>html</code></strong> — statischer, vertrauenswürdig
     gerenderter HTML-Text mit Bild-Assets (Super-Admin-autorisiert),</li>
   <li><strong><code>slots</code></strong> — Positionen mit Kapazität (z. B.
-    „Aufbau Freitag, 2 Plätze"),</li>
+    „Aufbau Freitag, 2 Plätze“),</li>
   <li><strong><code>contributions</code></strong> — offene Freitext-Beiträge
-    (z. B. „Wer bringt was mit?").</li>
+    (z. B. „Wer bringt was mit?“).</li>
 </ul>
 <p>Weitere Punkte:</p>
 <ul>
@@ -298,7 +298,7 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <p>
   <strong>Der Normalfall läuft als Selbstbedienung, ohne Sie:</strong> Ein
   ausgesperrter Nutzer fordert über <em>„Passkey verloren? Zugang
-  wiederherstellen"</em> auf der Anmeldeseite selbst einen Einrichtungs-Link an
+  wiederherstellen“</em> auf der Anmeldeseite selbst einen Einrichtungs-Link an
   seine hinterlegte E-Mail-Adresse an (siehe Benutzerhandbuch, Abschnitt 12). Der
   Super-Admin wird dafür <strong>nicht</strong> mehr benötigt.
 </p>
@@ -324,7 +324,7 @@ Lehrerkollegium   (eigene oberste Liste, nicht im Eltern-Baum)</code></pre>
 <div class="warn">
   <strong>Sicherheits-Hinweis:</strong> Die Selbstbedienungs-Wiederherstellung
   bedeutet, dass wer Zugriff auf das Postfach eines Nutzers hat, einen neuen
-  Passkey einrichten kann („gekapertes Postfach = möglicher Zugriff"). Das ist
+  Passkey einrichten kann („gekapertes Postfach = möglicher Zugriff“). Das ist
   eine bewusste Produktentscheidung zugunsten der Bedienbarkeit. Die Offenlegung
   personenbezogener Daten an andere bleibt davon unberührt — sie ist weiterhin
   pro Liste opt-in.

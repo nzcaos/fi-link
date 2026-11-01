@@ -216,6 +216,32 @@ class _VisibilityContext:
         return self._audience_grants(key)
 
 
+_DIN5007 = str.maketrans({"ä": "a", "ö": "o", "ü": "u", "ß": "ss", "é": "e", "è": "e", "á": "a", "à": "a"})
+
+
+def _name_key(person) -> tuple[str, str]:
+    """Phone-book order: family name, then given name, case-insensitive, with
+    umlauts filed under their base letter (DIN 5007-1: Köhler next to Kohl) —
+    done in Python, so it doesn't depend on the database collation."""
+    return (
+        (person.family_name or "").strip().casefold().translate(_DIN5007),
+        (person.given_name or "").strip().casefold().translate(_DIN5007),
+    )
+
+
+def _sorted_for_display(records, ctx) -> list:
+    """Records ordered by the subject's family name, then given name. Rows the
+    viewer may not see the name of go last (in creation order): sorting them
+    among the named rows would place them alphabetically and so hint at the
+    hidden name."""
+    return sorted(
+        records,
+        key=lambda r: (0, *_name_key(r.subject), r.pk)
+        if ctx.name_visible(r)
+        else (1, "", "", r.pk),
+    )
+
+
 def build_visible_rows(user, lst: List) -> list[dict]:
     """Render-ready flat rows for `lst`'s active records as seen by `user`.
 
@@ -240,7 +266,7 @@ def build_visible_rows(user, lst: List) -> list[dict]:
 
     rows: list[dict] = []
     anon_counter = 0
-    for record in records:
+    for record in _sorted_for_display(records, ctx):
         fields = []
         values_map = {v.attribute_id: v.value for v in record.values.all()}
         for attribute in attributes:
@@ -366,7 +392,9 @@ def build_composed_rows(user, lst: List) -> list[dict]:
 
     ctx = _VisibilityContext(user, lst, records)
 
-    member_records = [r for r in records if r.role == ListRecord.Role.MEMBER]
+    member_records = _sorted_for_display(
+        [r for r in records if r.role == ListRecord.Role.MEMBER], ctx
+    )
     associate_by_person: dict[int, ListRecord] = {
         r.subject_id: r for r in records if r.role == ListRecord.Role.ASSOCIATE
     }

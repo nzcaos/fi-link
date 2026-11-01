@@ -539,10 +539,10 @@ def list_invite(request, pk: int):
             )
             safe_title = _sanitize_header_value(lst.title)
             sent = _send_mail_safe(
-                subject=f'Einladung zur Liste „{safe_title}"',
+                subject=f'Einladung zur Liste „{safe_title}“',
                 message=(
                     f"Hallo,\n\n"
-                    f'{request.user.person} hat Sie zur Liste „{safe_title}" eingeladen.\n\n'
+                    f'{request.user.person} hat Sie zur Liste „{safe_title}“ eingeladen.\n\n'
                     f"Klicken Sie hier, um beizutreten:\n{link}\n\n"
                     f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
                 ),
@@ -700,7 +700,7 @@ def record_add_associate(request, pk: int, record_pk: int):
         except ValidationError as exc:
             messages.error(request, " ".join(exc.messages))
         else:
-            messages.success(request, f'„{assoc.subject}" wurde als Bezugsperson hinzugefügt.')
+            messages.success(request, f'„{assoc.subject}“ wurde als Bezugsperson hinzugefügt.')
             _send_associate_invitations(request, form.invitations)
             return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
     return render(
@@ -945,7 +945,7 @@ def record_create_associate(request, pk: int):
                 ).update(consumed_at=timezone.now())
             messages.success(
                 request,
-                f'„{record.subject}" wurde zur Liste „{lst.title}" hinzugefügt.',
+                f'„{record.subject}“ wurde zur Liste „{lst.title}“ hinzugefügt.',
             )
             _send_associate_invitations(request, form.invitations)
             return redirect("lists:record_edit", pk=lst.pk, record_pk=record.pk)
@@ -1314,7 +1314,7 @@ def transfer_initiate(request, pk: int, record_pk: int):
                 )
                 messages.success(
                     request,
-                    f'Umzug von „{record.subject}" nach „{to_list.title}" beantragt — '
+                    f'Umzug von „{record.subject}“ nach „{to_list.title}“ beantragt — '
                     "die Ziel-Admins müssen zustimmen.",
                 )
             return redirect("lists:detail", pk=lst.pk)
@@ -1547,7 +1547,7 @@ def transfer_decide(request, transfer_pk: int):
         messages.success(request, "Umzug abgelehnt.")
     else:
         messages.success(
-            request, f'„{transfer.person}" wurde nach „{transfer.to_list.title}" übernommen.'
+            request, f'„{transfer.person}“ wurde nach „{transfer.to_list.title}“ übernommen.'
         )
     return redirect("lists:transfers_pending", pk=transfer.to_list_id)
 
@@ -1616,10 +1616,10 @@ def admin_manage(request, pk: int):
             )
             safe_title = _sanitize_header_value(lst.title)
             sent = _send_mail_safe(
-                subject=f'Admin-Einladung: Liste „{safe_title}"',
+                subject=f'Admin-Einladung: Liste „{safe_title}“',
                 message=(
                     f"Hallo,\n\n"
-                    f'Sie wurden als Admin der Liste „{safe_title}" vorgesehen.\n\n'
+                    f'Sie wurden als Admin der Liste „{safe_title}“ vorgesehen.\n\n'
                     f"Öffnen Sie den folgenden Link und melden Sie sich an, um die "
                     f"Admin-Rolle zu übernehmen:\n{link}\n\n"
                     f"Der Link ist gültig bis {token.expires_at:%d.%m.%Y}.\n"
@@ -1731,7 +1731,7 @@ def admin_invite_accept(request, token: str):
                 ).delete()
             locked.consumed_at = timezone.now()
             locked.save(update_fields=["consumed_at"])
-        messages.success(request, f'Sie sind jetzt Admin der Liste „{lst.title}".')
+        messages.success(request, f'Sie sind jetzt Admin der Liste „{lst.title}“.')
         return redirect("lists:detail", pk=lst.pk)
 
     # GET: confirmation page, no side effects.

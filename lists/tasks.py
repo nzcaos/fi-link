@@ -670,10 +670,10 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
             kind=MailReleaseToken.Kind.MEMBER,
             offer_anonymize=offer_anonymize,
             recipients=[inbound.from_email],
-            notify_subject=f'Freigabe für Ihre Mail an „{target.title}"',
+            notify_subject=f'Freigabe für Ihre Mail an „{target.title}“',
             notify_body=(
                 f"Hallo,\n\n"
-                f'Sie haben eine Mail an die Liste „{target.title}" gesendet.\n'
+                f'Sie haben eine Mail an die Liste „{target.title}“ gesendet.\n'
                 f"Aus Sicherheitsgründen wird sie erst nach Ihrer Bestätigung "
                 f"weitergeleitet.\n\n"
                 f"Bitte klicken Sie zum Freigeben:\n__LINK__\n\n"
@@ -697,7 +697,7 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
         # aggregate aliases use, which have no list-admin by construction.
         admin_emails = _super_admin_emails()
         fallback_note = (
-            f'Die Liste „{target.title}" hat keinen Admin mit hinterlegter '
+            f'Die Liste „{target.title}“ hat keinen Admin mit hinterlegter '
             f"E-Mail-Adresse — deshalb erhalten Sie diese Anfrage als "
             f"Super-Admin.\n"
         )
@@ -707,11 +707,11 @@ def _dispatch_decision(inbound: InboundMessage, target: List, decision, msg) -> 
         kind=MailReleaseToken.Kind.ADMIN,
         offer_anonymize=False,
         recipients=admin_emails,
-        notify_subject=f'Freigabe nötig: Mail an „{target.title}"',
+        notify_subject=f'Freigabe nötig: Mail an „{target.title}“',
         notify_body=(
             f"Hallo,\n\n"
             f'{inbound.from_email or "(unbekannt)"} möchte eine Mail an die '
-            f'Liste „{target.title}" senden, ist aber nicht berechtigt.\n'
+            f'Liste „{target.title}“ senden, ist aber nicht berechtigt.\n'
             f'Betreff: {inbound.subject or "(kein Betreff)"}\n'
             f"{fallback_note}\n"
             f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"
@@ -765,10 +765,10 @@ def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) ->
             kind=MailReleaseToken.Kind.MEMBER,
             offer_anonymize=False,
             recipients=[inbound.from_email],
-            notify_subject=f'Freigabe für Ihre Mail an „{agg.title}"',
+            notify_subject=f'Freigabe für Ihre Mail an „{agg.title}“',
             notify_body=(
                 f"Hallo,\n\n"
-                f'Sie haben eine Mail an den Verteiler „{agg.title}" gesendet.\n'
+                f'Sie haben eine Mail an den Verteiler „{agg.title}“ gesendet.\n'
                 f"Aus Sicherheitsgründen wird sie erst nach Ihrer Bestätigung "
                 f"weitergeleitet.\n\n"
                 f"Bitte klicken Sie zum Freigeben:\n__LINK__\n\n"
@@ -788,11 +788,11 @@ def _dispatch_aggregate_decision(inbound: InboundMessage, agg, decision, msg) ->
         kind=MailReleaseToken.Kind.ADMIN,
         offer_anonymize=False,
         recipients=super_emails,
-        notify_subject=f'Freigabe nötig: Mail an Verteiler „{agg.title}"',
+        notify_subject=f'Freigabe nötig: Mail an Verteiler „{agg.title}“',
         notify_body=(
             f"Hallo,\n\n"
             f'{inbound.from_email or "(unbekannt)"} möchte eine Mail an den '
-            f'Verteiler „{agg.title}" senden, ist aber nicht für alle '
+            f'Verteiler „{agg.title}“ senden, ist aber nicht für alle '
             f"betroffenen Listen berechtigt.\n"
             f'Betreff: {inbound.subject or "(kein Betreff)"}\n\n'
             f"Bitte entscheiden Sie über die Weiterleitung:\n__LINK__\n"

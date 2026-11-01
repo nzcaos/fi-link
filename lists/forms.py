@@ -234,10 +234,10 @@ def _audience_choices_for(list_obj: List) -> list[tuple[str, str]]:
     options: list[tuple[str, str]] = [("public", "Alle in dieser Liste")]
     if list_obj.parent_id:
         options.append(
-            (f"list-{list_obj.parent_id}", f'Mitglieder von „{list_obj.parent.title}"')
+            (f"list-{list_obj.parent_id}", f'Mitglieder von „{list_obj.parent.title}“')
         )
     for child in list_obj.children.filter(archived_at__isnull=True):
-        options.append((f"list-{child.pk}", f'Mitglieder von „{child.title}"'))
+        options.append((f"list-{child.pk}", f'Mitglieder von „{child.title}“'))
     return options
 
 

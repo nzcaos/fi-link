@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}QR-Codes für „{{ list_obj.title }}" — Fichtelink{% endblock %}
+{% block title %}QR-Codes für „{{ list_obj.title }}“ — Fichtelink{% endblock %}
 {% block content %}
   <p><a href="{% url 'lists:detail' pk=list_obj.pk %}">← Zurück zur Liste</a></p>
-  <h1>QR-Codes für „{{ list_obj.title }}"</h1>
+  <h1>QR-Codes für „{{ list_obj.title }}“</h1>
   <p style="color:#666">
     QR-Codes lassen Personen ohne persönliche Einladung beitreten — z. B. ausgedruckt
     auf einer Pinnwand beim Elternabend. Jeder Code läuft nach 48 Stunden automatisch ab
