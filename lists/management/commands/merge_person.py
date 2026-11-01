@@ -53,5 +53,6 @@ class Command(BaseCommand):
         if not options["yes"]:
             self.stdout.write("Dry-Run — mit --yes ausführen.")
             return
+        source_pk = source.pk  # gone after the merge
         execute_merge(plan)
-        self.stdout.write(self.style.SUCCESS(f"person={source.pk} in person={target.pk} zusammengeführt."))
+        self.stdout.write(self.style.SUCCESS(f"person={source_pk} in person={target.pk} zusammengeführt."))

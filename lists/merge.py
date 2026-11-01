@@ -92,7 +92,8 @@ def plan_merge(source: Person, target: Person) -> MergePlan:
         kept = target_active.get(rec.list_id) if rec.archived_at is None else None
         if kept is None:
             plan.moved_records.append(rec)
-            plan.lines.append(f"  Eintrag {rec.pk} ({rec.role}) in „{rec.list.title}“ → geht an das Ziel")
+            state = ", archiviert" if rec.archived_at is not None else ""
+            plan.lines.append(f"  Eintrag {rec.pk} ({rec.role}{state}) in „{rec.list.title}“ → geht an das Ziel")
             continue
         if kept.role != rec.role:
             raise MergeError(
