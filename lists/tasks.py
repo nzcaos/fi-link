@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import NamedTuple
 from email.utils import formataddr, make_msgid
 from smtplib import SMTPException
 
@@ -110,7 +111,68 @@ def _list_unsubscribe_header(message: OutboundMessage) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
+class ForwardEmail(EmailMessage):
+    """A forward: the text body, plus — when the original had one — the
+    sender's HTML body as ``text/html`` alternative with the images it shows
+    via ``cid:`` in a ``multipart/related``::
+
+        multipart/mixed                 (only with attachments)
+          multipart/alternative
+            text/plain                  ← body
+            multipart/related           (only with inline images)
+              text/html                 ← html_body
+              image/*  Content-ID       ← inline_images
+          attachments …
+
+    The HTML goes out as the sender wrote it, so a mail looks the same for
+    every recipient as in the sender's outbox. Django's
+    ``EmailMultiAlternatives`` cannot nest ``related`` inside
+    ``alternative``, hence the hook on ``_create_message`` (present in
+    Django 5.1/5.2, the pinned range — Django 6 rebuilt the mail module, so
+    revisit on upgrade; the tests in ``SendOutboundMessageTests`` catch it).
+    """
+
+    def __init__(self, *args, html_body: str | None = None, inline_images=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.html_body = html_body
+        self.inline_images = list(inline_images or [])
+
+    def _create_message(self, msg):
+        if self.html_body:
+            from email import encoders
+            from email.mime.base import MIMEBase
+
+            from django.core.mail.message import SafeMIMEMultipart, SafeMIMEText
+
+            encoding = self.encoding or settings.DEFAULT_CHARSET
+            html_part = SafeMIMEText(self.html_body, "html", encoding)
+            if self.inline_images:
+                related = SafeMIMEMultipart(_subtype="related", encoding=encoding)
+                related.attach(html_part)
+                for cid, filename, data, ctype in self.inline_images:
+                    maintype, _, subtype = ctype.partition("/")
+                    img = MIMEBase(maintype, subtype or "octet-stream")
+                    img.set_payload(data)
+                    encoders.encode_base64(img)
+                    img["Content-ID"] = f"<{cid}>"
+                    if filename:
+                        try:
+                            filename.encode("ascii")
+                        except UnicodeEncodeError:
+                            filename = ("utf-8", "", filename)
+                        img.add_header("Content-Disposition", "inline", filename=filename)
+                    else:
+                        img.add_header("Content-Disposition", "inline")
+                    related.attach(img)
+                html_part = related
+            alternative = SafeMIMEMultipart(_subtype="alternative", encoding=encoding)
+            alternative.attach(msg)
+            alternative.attach(html_part)
+            msg = alternative
+        return super()._create_message(msg)
+
+
+def build_outbound_email(message: OutboundMessage, body: str) -> ForwardEmail:
     """Construct the EmailMessage for a single OutboundMessage row.
 
     Envelope-from (= SMTP MAIL FROM, used by Django's SMTP backend as the
@@ -161,7 +223,7 @@ def build_outbound_email(message: OutboundMessage, body: str) -> EmailMessage:
         )
         if sender:
             headers["Reply-To"] = sender
-    return EmailMessage(
+    return ForwardEmail(
         subject=message.subject,
         body=body,
         from_email=alias_address("bounce", message.alias_token),
@@ -179,13 +241,50 @@ _BLOCKED_ATTACHMENT_EXTENSIONS = {
 }
 
 
-def _forward_attachments(inbound_id: int | None) -> tuple[list[tuple[str, bytes, str]], str]:
-    """Attachments to put on a forward of inbound ``inbound_id``, plus a note
-    for the text body naming anything left out (blocked type, over
-    ``MAIL_MAX_ATTACHMENT_BYTES`` in total, original no longer stored)."""
+class _ForwardContent(NamedTuple):
+    attachments: list  # (filename, data, content_type)
+    html: str | None
+    inline_images: list  # (content_id, filename, data, content_type)
+    note_lines: list[str]
+
+    def text_note(self) -> str:
+        if not self.note_lines:
+            return ""
+        return "\n\n-- \n[Fichtelink] " + "\n[Fichtelink] ".join(self.note_lines) + "\n"
+
+    def html_with_note(self) -> str | None:
+        """The HTML body with the same ``[Fichtelink]`` note appended, so
+        HTML readers (who never see the text part) learn what was left out."""
+        if not self.html or not self.note_lines:
+            return self.html
+        from django.utils.html import escape
+
+        note = (
+            '<hr><p style="font-family:sans-serif;font-size:12px;color:#555555">'
+            + "<br>".join("[Fichtelink] " + escape(line) for line in self.note_lines)
+            + "</p>"
+        )
+        idx = self.html.lower().rfind("</body")
+        if idx == -1:
+            return self.html + note
+        return self.html[:idx] + note + self.html[idx:]
+
+
+def _forward_content(inbound_id: int | None) -> _ForwardContent:
+    """What a forward of inbound ``inbound_id`` carries besides the text body,
+    read from the stored original at send time: its attachments, its HTML
+    body with the images that body embeds, and the notes naming anything left
+    out (blocked type, over ``MAIL_MAX_ATTACHMENT_BYTES`` in total). A missing
+    original (pruned) yields a text-only forward."""
+    empty = _ForwardContent([], None, [], [])
     if inbound_id is None:
-        return [], ""
-    from .inbound_pipeline import extract_attachments, parse_message
+        return empty
+    from .inbound_pipeline import (
+        extract_attachments,
+        forward_html_body,
+        html_inline_images,
+        parse_message,
+    )
 
     raw = (
         InboundMessage.objects.filter(pk=inbound_id)
@@ -193,21 +292,28 @@ def _forward_attachments(inbound_id: int | None) -> tuple[list[tuple[str, bytes,
         .first()
     )
     if not raw:
-        log.warning("send_outbound_message: inbound %s gone, sending without attachments", inbound_id)
-        return [], ""
-    found = extract_attachments(parse_message(bytes(raw)))
-    if not found:
-        return [], ""
+        log.warning("send_outbound_message: inbound %s gone, sending text only", inbound_id)
+        return empty
+    original = parse_message(bytes(raw))
+    html = forward_html_body(original)
+    inline = html_inline_images(original, html)
+    found = extract_attachments(original)
 
     blocked = [n for n, _d, _c in found
                # Windows ignores trailing dots/spaces ("x.exe." runs as x.exe).
                if any(n.lower().rstrip(" .").endswith(ext) for ext in _BLOCKED_ATTACHMENT_EXTENSIONS)]
     kept = [a for a in found if a[0] not in blocked]
-    total = sum(len(d) for _n, d, _c in kept)
+    limit = settings.MAIL_MAX_ATTACHMENT_BYTES
+    inline_total = sum(len(d) for _c, _n, d, _t in inline)
     dropped_size: list[str] = []
-    if total > settings.MAIL_MAX_ATTACHMENT_BYTES:
+    if inline_total + sum(len(d) for _n, d, _c in kept) > limit:
+        # The mail goes out once per recipient: drop the files first, the
+        # images in the text only if they alone are still too big.
         dropped_size = [n for n, _d, _c in kept]
         kept = []
+    dropped_inline = inline_total > limit
+    if dropped_inline:
+        inline = []
 
     lines = []
     if blocked:
@@ -215,15 +321,19 @@ def _forward_attachments(inbound_id: int | None) -> tuple[list[tuple[str, bytes,
             "Aus Sicherheitsgründen nicht weitergeleitet (Dateityp gesperrt): "
             + ", ".join(blocked)
         )
+    limit_mb = limit // (1024 * 1024)
     if dropped_size:
-        limit_mb = settings.MAIL_MAX_ATTACHMENT_BYTES // (1024 * 1024)
         lines.append(
             f"Anhänge zusammen größer als {limit_mb} MB, nicht weitergeleitet: "
             + ", ".join(dropped_size)
             + ". Bitte beim Absender erfragen."
         )
-    note = ("\n\n-- \n[Fichtelink] " + "\n[Fichtelink] ".join(lines) + "\n") if lines else ""
-    return kept, note
+    if dropped_inline:
+        lines.append(
+            f"Im Text eingebettete Bilder zusammen größer als {limit_mb} MB, "
+            "nicht weitergeleitet. Bitte beim Absender erfragen."
+        )
+    return _ForwardContent(kept, html, inline, lines)
 
 
 # ---------------------------------------------------------------------------
@@ -250,20 +360,23 @@ def send_outbound_message(outbound_id: int, body: str, inbound_id: int | None = 
     row is flipped to FAILED so the admin UI can surface it (Phase 5b will
     add resend/cancel buttons).
 
-    ``inbound_id`` names the forwarded original: its attachments are read from
-    the stored MIME copy here, at send time, rather than travelling in the
-    task args (the job table must not fill up with files). Optional, so jobs
+    ``inbound_id`` names the forwarded original: its HTML body, embedded
+    images and attachments are read from the stored MIME copy here, at send
+    time, rather than travelling in the task args (the job table must not fill
+    up with files). Optional, so jobs
     queued before attachments were supported still run.
     """
     om = OutboundMessage.objects.select_related("list", "aggregate").get(pk=outbound_id)
     if om.status == OutboundMessage.Status.SENT:
         return
 
-    attachments, note = _forward_attachments(inbound_id)
+    content = _forward_content(inbound_id)
     om.attempts += 1
     try:
-        msg = build_outbound_email(om, body + note)
-        for name, data, ctype in attachments:
+        msg = build_outbound_email(om, body + content.text_note())
+        msg.html_body = content.html_with_note()
+        msg.inline_images = content.inline_images
+        for name, data, ctype in content.attachments:
             msg.attach(name, data, ctype)
         msg.send(fail_silently=False)
     except (SMTPException, OSError) as exc:  # transient: retried by RetryStrategy

@@ -3369,10 +3369,79 @@ class SendOutboundMessageTests(TestCase):
         send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
         sent = mail.outbox[0]
         names = [a[0] for a in sent.attachments]
-        # The real attachment goes along; the HTML-embedded signature logo does not.
+        # The real attachment goes along; the HTML-embedded signature logo is
+        # not a file of its own (it travels inline with the HTML body).
         self.assertEqual(names, ["Elternbrief.pdf"])
         self.assertEqual(sent.attachments[0][1], b"%PDF-1.4 x")
         self.assertEqual(sent.body, "Text")
+
+    @staticmethod
+    def _parsed(sent):
+        import email
+        import email.policy
+
+        return email.message_from_bytes(sent.message().as_bytes(), policy=email.policy.default)
+
+    def test_html_body_forwarded_unchanged_with_inline_images(self):
+        inbound = self._inbound_with(("Elternbrief.pdf", b"%PDF-1.4 x"), html_logo=True)
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        out = self._parsed(mail.outbox[0])
+        self.assertEqual(out.get_content_type(), "multipart/mixed")
+        alternative = next(out.iter_parts())
+        self.assertEqual(alternative.get_content_type(), "multipart/alternative")
+        plain, related = list(alternative.iter_parts())
+        self.assertEqual(plain.get_content(), "Text")
+        self.assertEqual(related.get_content_type(), "multipart/related")
+        html, logo = list(related.iter_parts())
+        self.assertIn('<img src="cid:logo1">', html.get_content())
+        self.assertEqual(logo["Content-ID"], "<logo1>")
+        self.assertEqual(logo.get_payload(decode=True), b"\x89PNG")
+        self.assertEqual([p.get_filename() for p in out.iter_attachments()], ["Elternbrief.pdf"])
+
+    def test_html_only_mail_gets_text_part_and_original_html(self):
+        # 2026-11: an HTML-only mail arrived as "<html><body><div style=…"
+        # in a text/plain forward.
+        from email.message import EmailMessage
+
+        from .inbound_pipeline import extract_subject_and_body, parse_message
+
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = "lehrer@schule.example", "5a@caos.cloud", "Ausflug"
+        html_src = (
+            '<html><body><div style="font-family:Arial">Liebe Eltern,<br>'
+            'bitte <a href="https://example.org/umfrage">hier</a> eintragen.</div></body></html>'
+        )
+        m.set_content(html_src, subtype="html")
+        inbound = InboundMessage.objects.create(
+            imap_uidvalidity=9, imap_uid=4242, message_id="html@x", from_email="lehrer@schule.example",
+            to_alias="5a", to_domain="caos.cloud", subject="Ausflug",
+            raw_eml=m.as_bytes(), received_at=timezone.now(), matched_list=self.lst,
+        )
+        _subject, body = extract_subject_and_body(parse_message(bytes(inbound.raw_eml)))
+        self.assertNotIn("<", body)
+        self.assertIn("Liebe Eltern,\nbitte hier (https://example.org/umfrage) eintragen.", body)
+
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body=body, inbound_id=inbound.pk)
+        out = self._parsed(mail.outbox[0])
+        self.assertEqual(out.get_content_type(), "multipart/alternative")
+        self.assertEqual(out.get_body(("plain",)).get_content().strip(), body)
+        self.assertEqual(out.get_body(("html",)).get_content().strip(), html_src)
+
+    def test_note_on_left_out_files_also_in_html(self):
+        inbound = self._inbound_with(("tool.exe", b"MZ"), html_logo=True)
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        out = self._parsed(mail.outbox[0])
+        self.assertIn("Dateityp gesperrt): tool.exe", out.get_body(("plain",)).get_content())
+        self.assertIn("Dateityp gesperrt): tool.exe", out.get_body(("html",)).get_content())
+
+    def test_plain_only_mail_stays_text_plain(self):
+        inbound = self._inbound_with()
+        mail.outbox = []
+        send_outbound_message.func(outbound_id=self.om.pk, body="Text", inbound_id=inbound.pk)
+        self.assertEqual(self._parsed(mail.outbox[0]).get_content_type(), "text/plain")
 
     def test_blocked_type_and_size_limit_leave_a_note(self):
         inbound = self._inbound_with(("tool.exe", b"MZ"), ("Foto.jpg", b"x" * 2048))
@@ -4213,6 +4282,14 @@ class DsnParseTests(TestCase):
         subject, body = extract_subject_and_body(msg)
         self.assertEqual(subject, "Hallo")
         self.assertIn("Inhalt", body)
+
+    def test_extract_body_of_html_only_mail_is_text(self):
+        raw = (
+            b"Subject: x\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+            b"<html><body><div style=\"color:red\">Hallo &amp; tsch&uuml;ss</div><p>Zeile 2</p></body></html>\r\n"
+        )
+        _subject, body = extract_subject_and_body(parse_message(raw))
+        self.assertEqual(body, "Hallo & tsch\u00fcss\nZeile 2")
 
 
 @override_settings(

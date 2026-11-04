@@ -42,37 +42,171 @@ def parse_message(raw_eml: bytes) -> email.message.EmailMessage:
 
 
 def extract_subject_and_body(msg: email.message.EmailMessage) -> tuple[str, str]:
-    """Pull the Subject and a text body out of a parsed message.
+    """Pull the Subject and the **text** body out of a parsed message.
 
-    Prefers ``text/plain``; falls back to ``text/html`` (raw markup — we do not
-    attempt to strip tags in v1, the recipient's MUA renders it). Returns
-    ``("", "")``-ish defaults rather than raising on odd structures.
+    Prefers ``text/plain``. An HTML-only mail is reduced to its text
+    (`html_to_text`) — this body goes out as the ``text/plain`` part of the
+    forward, and raw markup there is what recipients saw as
+    ``<html><body><div style=…`` (2026-11). The HTML itself is forwarded
+    unchanged as the ``text/html`` alternative, read from the stored original
+    at send time (`forward_html_body`). Returns ``("", "")``-ish defaults rather
+    than raising on odd structures.
     """
     subject = (msg.get("Subject") or "").strip()
     body = ""
     try:
         part = msg.get_body(preferencelist=("plain",))
-        if part is None:
-            part = msg.get_body(preferencelist=("html",))
         if part is not None:
             body = part.get_content()
+        else:
+            part = msg.get_body(preferencelist=("html",))
+            if part is not None:
+                body = html_to_text(part.get_content())
     except Exception as exc:  # noqa: BLE001
         log.warning("extract_subject_and_body: %s", exc)
         body = ""
     return subject, body if isinstance(body, str) else str(body)
 
 
-def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
-    """Readable text of a held mail plus its attachment names, for the people
-    deciding on a release (admin approval). An HTML-only mail is reduced to
-    its text — the preview is rendered escaped, never as markup. Attachments
-    are listed because the forward carries only the text body (see
-    `extract_subject_and_body`); the approver should know what gets dropped.
-    """
+def html_to_text(html: str) -> str:
+    """Readable text of an HTML body: line breaks at block ends, tags dropped,
+    entities resolved, link targets kept as ``Text (URL)``. Only for the text
+    alternative and previews — the HTML part is forwarded as sent."""
     from html import unescape
 
     from django.utils.html import strip_tags
 
+    html = str(html or "")
+    html = re.sub(r"(?is)<(script|style|head|title)\b.*?</\1\s*>", "", html)
+
+    def _link(m: re.Match) -> str:
+        href, label = m.group(2).strip(), m.group(3)
+        shown = unescape(strip_tags(label)).strip()
+        target = unescape(href)
+        if not target or target.lower().startswith(("mailto:", "#", "javascript:")) or target in shown:
+            return label
+        return f"{label} ({href})"
+
+    html = re.sub(r'(?is)<a\b[^>]*?\bhref\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a\s*>', _link, html)
+    html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</tr>|</h[1-6]>|</blockquote>", "\n", html)
+    text = unescape(strip_tags(html)).replace("\xa0", " ")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", text).strip()
+
+
+def _contains(container, part) -> bool:
+    """Whether ``part`` lies within ``container``'s MIME subtree (not
+    descending into attached ``message/rfc822`` mails)."""
+    if container is part:
+        return True
+    if container.get_content_type() == "message/rfc822" or not container.is_multipart():
+        return False
+    return any(_contains(sub, part) for sub in container.iter_parts())
+
+
+def forward_html_body(msg: email.message.EmailMessage) -> str | None:
+    """The sender's HTML body, to forward unchanged as the ``text/html``
+    alternative — formatting, links and embedded images arrive as written.
+    The HTML is not sanitised: it reaches the list only after the sender's
+    release click or an admin's approval.
+
+    ``None`` when there is no HTML body, or when it is not an alternative of
+    the text body (e.g. ``multipart/mixed`` carrying a separate inline HTML
+    part next to the text) — forwarding that as "the same mail in HTML" would
+    show recipients different content than the text part.
+    """
+    try:
+        html_part = msg.get_body(preferencelist=("html",))
+        if html_part is None:
+            return None
+        plain_part = msg.get_body(preferencelist=("plain",))
+        if plain_part is not None and not any(
+            p.get_content_type() == "multipart/alternative"
+            and _contains(p, plain_part)
+            and _contains(p, html_part)
+            for p in _mime_parts(msg)
+        ):
+            return None
+        html = html_part.get_content()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("forward_html_body: %s", exc)
+        return None
+    if not isinstance(html, str) or not html.strip():
+        return None
+    # The part is re-encoded as UTF-8; a stale <meta charset> would make some
+    # clients decode it with the original charset.
+    return re.sub(r"(?i)(<meta\b[^>]*?charset\s*=\s*[\"']?)[\w.:-]+", r"\g<1>utf-8", html)
+
+
+def _mime_parts(msg):
+    """All MIME parts, depth-first, without descending into attached mails."""
+    yield msg
+    if msg.get_content_type() != "message/rfc822" and msg.is_multipart():
+        for sub in msg.iter_parts():
+            yield from _mime_parts(sub)
+
+
+_CID_REF_RE = re.compile(r"(?i)\bcid:([^\s\"'<>)]+)")
+
+
+def html_inline_images(
+    msg: email.message.EmailMessage, html: str | None
+) -> list[tuple[str, str, bytes, str]]:
+    """Images the HTML body shows via ``cid:`` references, as
+    ``(content_id, filename, data, content_type)`` — they go into the
+    forward's ``multipart/related`` next to the HTML. Looked up anywhere in the
+    mail (some clients put them in ``multipart/mixed``), so they are not
+    forwarded a second time as attachments (`extract_attachments`)."""
+    from urllib.parse import unquote
+
+    if not html:
+        return []
+    refs = {unquote(r).lower() for r in _CID_REF_RE.findall(html)}
+    if not refs:
+        return []
+    out: list[tuple[str, str, bytes, str]] = []
+    seen: set[str] = set()
+    try:
+        for part in _mime_parts(msg):
+            if part.is_multipart() or part.get_content_maintype() != "image":
+                continue
+            cid = str(part.get("Content-ID") or "").strip().strip("<>").strip()
+            if not cid or cid.lower() not in refs or cid.lower() in seen:
+                continue
+            data = part.get_payload(decode=True)
+            if not data:
+                continue
+            seen.add(cid.lower())
+            out.append((cid, clean_filename(part.get_filename()), data, part.get_content_type()))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("html_inline_images: %s", exc)
+    return out
+
+
+def clean_filename(name: str | None) -> str:
+    """A MIME filename safe to put back into a header.
+
+    RFC 2231 names are percent-decoded, so CR/LF and other controls can
+    arrive here; they would break (or inject into) the forward's
+    Content-Disposition header. Unicode spaces (NBSP, the narrow NBSP in
+    macOS screenshot names) are not "printable" but harmless: keep them as
+    plain spaces.
+    """
+    import unicodedata
+
+    return "".join(
+        " " if unicodedata.category(ch) == "Zs" else ch
+        for ch in (name or "")
+        if ch.isprintable() or unicodedata.category(ch) == "Zs"
+    ).strip()
+
+
+def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
+    """Readable text of a held mail plus its attachment names, for the people
+    deciding on a release (admin approval). An HTML-only mail is reduced to
+    its text — the preview is rendered escaped, never as markup. Attachments
+    are listed so the approver knows which files go along.
+    """
     text = ""
     try:
         part = msg.get_body(preferencelist=("plain",))
@@ -81,9 +215,7 @@ def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
         else:
             part = msg.get_body(preferencelist=("html",))
             if part is not None:
-                html = re.sub(r"(?is)<(script|style)\b.*?</\1>", "", part.get_content())
-                html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</tr>", "\n", html)
-                text = unescape(strip_tags(html))
+                text = html_to_text(part.get_content())
     except Exception as exc:  # noqa: BLE001
         log.warning("message_preview: %s", exc)
     text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", str(text or "")).strip()
@@ -94,18 +226,17 @@ def message_preview(msg: email.message.EmailMessage) -> tuple[str, list[str]]:
 
 def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, bytes, str]]:
     """The attachments of a mail as ``(filename, data, content_type)``, in
-    order — what a forward carries alongside the text body.
+    order — what a forward carries alongside the text and HTML body.
 
-    Everything that is not the chosen text/HTML body counts, with one
-    exception: images embedded in an HTML body (``multipart/related`` parts
-    with a Content-ID — Outlook signature logos and the like). We forward the
-    text body, so those would only turn up as stray ``image001.png`` files.
-    Inline images Apple Mail puts in ``multipart/mixed`` *are* kept: there
-    they are the content. A forwarded mail (``message/rfc822``) becomes an
-    ``.eml`` attachment.
+    Everything that is not the chosen text/HTML body counts, except images
+    embedded in the HTML body: those referenced via ``cid:`` travel inside the
+    forward's ``multipart/related`` (`html_inline_images`), and unreferenced
+    ``multipart/related`` parts with a Content-ID are not files of their own.
+    Inline images Apple Mail puts in ``multipart/mixed`` without an HTML
+    reference *are* kept: there they are the content. A forwarded mail
+    (``message/rfc822``) becomes an ``.eml`` attachment.
     """
     import mimetypes
-    import unicodedata
 
     body_ids = set()
     for pref in (("plain",), ("html",)):
@@ -115,20 +246,14 @@ def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, byte
             part = None
         if part is not None:
             body_ids.add(id(part))
+    inline_cids = {
+        cid.lower() for cid, _n, _d, _c in html_inline_images(msg, forward_html_body(msg))
+    }
 
     out: list[tuple[str, bytes, str]] = []
 
     def _name(part, fallback_ext: str = "") -> str:
-        # RFC 2231 names are percent-decoded, so CR/LF and other controls can
-        # arrive here; they would break (or inject into) the forward's
-        # Content-Disposition header.
-        # Unicode spaces (NBSP, the narrow NBSP in macOS screenshot names) are
-        # not "printable" but harmless: keep them as plain spaces.
-        name = "".join(
-            " " if unicodedata.category(ch) == "Zs" else ch
-            for ch in (part.get_filename() or "")
-            if ch.isprintable() or unicodedata.category(ch) == "Zs"
-        ).strip()
+        name = clean_filename(part.get_filename())
         if name:
             return name
         ext = mimetypes.guess_extension(part.get_content_type()) or fallback_ext
@@ -150,8 +275,11 @@ def extract_attachments(msg: email.message.EmailMessage) -> list[tuple[str, byte
         if id(part) in body_ids:
             return
         disposition = part.get_content_disposition()
-        if in_related and part.get("Content-ID"):
-            return  # referenced from the HTML body (cid:), not a file of its own
+        cid = str(part.get("Content-ID") or "").strip().strip("<>").strip().lower()
+        if cid and part.get_content_maintype() == "image" and cid in inline_cids:
+            return  # shown in the HTML body, forwarded inline with it
+        if in_related and cid:
+            return  # part of the HTML body, not a file of its own
         if part.get_content_maintype() == "text" and not part.get_filename() and disposition != "attachment":
             return  # an alternative body part, not a file
         data = part.get_payload(decode=True)
