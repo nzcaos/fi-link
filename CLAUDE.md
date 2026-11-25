@@ -648,6 +648,12 @@ Manual `git pull` + `docker compose` on the VM, **no CI/CD in v1**. Rationale: t
 
 Migrations and `collectstatic` are explicit `docker compose run --rm` steps in the deploy procedure, **not auto-on-start**. Auto-migrate on startup risks restart loops if a migration is broken and obscures the failure; explicit steps make the deploy procedure inspectable and recoverable.
 
+**Every deploy command handed to the operator includes `migrate`** — after `build`, before `up -d` — **even when the commit itself adds no migration.** Dependencies are version ranges, not a lockfile, so a rebuild can pull a newer `procrastinate` whose code needs schema changes shipped as `procrastinate.contrib.django` migrations. On 2026-11-25 a deploy without `migrate` left every `defer` failing (`procrastinate_defer_periodic_job_v3 does not exist`): inbound mail stayed `pending` with no release link, periodic tasks stopped. The operator runs the given commands and reports back only on problems, so the command itself must be complete. Canonical form (prod; the test instance is `/opt/fi-link`):
+
+```
+cd /opt/fi-link-prod && git pull && docker compose build && docker compose run --rm web python manage.py migrate && docker compose run --rm web python manage.py test lists && docker compose up -d web worker imap_idle
+```
+
 ### Super-admin bootstrap
 
 Management command `manage.py bootstrap_super_admin`, invoked once at install time. It prompts for an email, creates a USER + PERSON marked as super-admin, and sends a passkey-enrollment link. There is no password — activation is by link only, identical to the regular invitation flow. Same pattern is used for `manage.py reset_passkeys --email <…>` in the manual-recovery path.
