@@ -590,13 +590,28 @@ def _super_admin_emails() -> list[str]:
         retry_exceptions={SMTPException, ConnectionError, OSError},
     ),
 )
-def send_notification_mail(recipients: list[str], subject: str, body: str) -> None:
+def send_notification_mail(
+    recipients: list[str], subject: str, body: str, auto_reply: bool = False
+) -> None:
     """Send a plain release/approval notification mail. Retryable so a flaky
     SMTP submission doesn't lose the link. Decoupled from process_inbound so a
     mail failure never re-runs the (non-idempotent-on-retry) decision logic.
+
+    ``auto_reply`` marks the mail ``Auto-Submitted: auto-replied`` (RFC 3834)
+    — for notices answering an inbound mail, so the recipient's own
+    autoresponder stays quiet.
     """
     recipients = [r for r in recipients if r]
     if not recipients:
+        return
+    if auto_reply:
+        EmailMessage(
+            subject=subject,
+            body=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=recipients,
+            headers={"Auto-Submitted": "auto-replied"},
+        ).send(fail_silently=False)
         return
     send_mail(
         subject=subject,
@@ -611,6 +626,39 @@ def _mark(inbound: InboundMessage, decision: str, reason: str) -> None:
     inbound.decision = decision
     inbound.reason = reason[:2000]
     inbound.save(update_fields=["decision", "reason"])
+
+
+def _suppress_list_mail(inbound: InboundMessage, reason: str, target_title: str) -> None:
+    """Mark a list-addressed mail SUPPRESSED. When it was suppressed only for
+    referencing one of our forwards (no autoresponder header), a person may
+    well have written it — tell them instead of dropping it silently
+    (2026-11-23). Only registered senders are told: the From address is
+    unverified, and a notice to a forged address would be backscatter.
+    """
+    from .inbound_pipeline import REPLY_TO_OUTBOUND_REASON, identify_sender_users
+
+    _mark(inbound, InboundMessage.Decision.SUPPRESSED, reason)
+    if reason != REPLY_TO_OUTBOUND_REASON or not inbound.from_email:
+        return
+    if not identify_sender_users(inbound.from_email).exists():
+        return
+    subject = inbound.subject or "(kein Betreff)"
+    send_notification_mail.defer(
+        recipients=[inbound.from_email],
+        subject=f"Ihre Mail an „{target_title}“ wurde nicht verteilt",
+        body=(
+            f"Hallo,\n\n"
+            f"Ihre Mail an „{target_title}“ (Betreff: {subject}) wurde nicht "
+            f"verteilt: Sie bezieht sich auf eine Mail, die über den Verteiler "
+            f"verschickt wurde, und wurde deshalb als automatische Antwort "
+            f"(z. B. Abwesenheitsnotiz) eingestuft.\n\n"
+            f"Wenn Sie sie an alle schicken möchten, senden Sie den Text bitte "
+            f"als neue Mail (nicht über „Antworten“) an die Adresse des "
+            f"Verteilers.\n"
+        ),
+        auto_reply=True,
+    )
+    log.info("process_inbound: suppressed inbound=%d, sender notified", inbound.pk)
 
 
 def _handle_bounce(inbound: InboundMessage, msg) -> None:
@@ -973,7 +1021,7 @@ def process_inbound(inbound_id: int) -> None:
         if agg is not None:
             reason = suppression_reason(msg, check_in_reply_to=True)
             if reason:
-                _mark(inbound, InboundMessage.Decision.SUPPRESSED, reason)
+                _suppress_list_mail(inbound, reason, agg.title)
                 return
             from .aggregates import decide_aggregate
 
@@ -996,7 +1044,7 @@ def process_inbound(inbound_id: int) -> None:
 
     reason = suppression_reason(msg, check_in_reply_to=True)
     if reason:
-        _mark(inbound, InboundMessage.Decision.SUPPRESSED, reason)
+        _suppress_list_mail(inbound, reason, target.title)
         return
 
     sender_users = list(identify_sender_users(inbound.from_email))

@@ -502,7 +502,8 @@ A message addressed to a list must be **suppressed** (not forwarded) if **any** 
 - `Auto-Submitted` header is present with any value other than `no` (RFC 3834).
 - Empty `Return-Path: <>` (bounce convention — also handles DSNs).
 - `Precedence: bulk` / `list` / `junk` (legacy, still widely set).
-- `In-Reply-To` / `References` matches a `Message-ID` in the Outbound table — i.e. the inbound is a reply to a mail we forwarded out. In practice this is the strongest OOO signal.
+- `X-Autoreply` / `X-Autorespond` present (non-standard autoresponders).
+- `In-Reply-To` / `References` matches a `Message-ID` in the Outbound table — i.e. the inbound is a reply to a mail we forwarded out. In practice this is the strongest OOO signal. **Except** when the Subject carries a human reply/forward prefix (`Re:`, `AW:`, `Fwd:`, `WG:`, … — `inbound_pipeline.is_human_reply_or_forward`): Gmail sets these headers even on a *forward*, and on 2026-11-23 a class admin's forward of a list mail back to the class was silently dropped. Such mail runs through the normal release/approval flow. When a mail *is* suppressed on this signal alone, a registered sender gets a notice (`Auto-Submitted: auto-replied`) to resend it as a new mail; unregistered From addresses get nothing (backscatter).
 
 Outgoing list mail must carry `List-Id`, `List-Post`, and `List-Unsubscribe` headers so RFC-conformant autoresponders skip it before any of the above triggers are needed.
 

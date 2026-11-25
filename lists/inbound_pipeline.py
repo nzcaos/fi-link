@@ -328,8 +328,10 @@ def suppression_reason(
     * ``Auto-Submitted`` header present and not ``no`` (RFC 3834).
     * Empty ``Return-Path: <>`` (bounce convention; also DSNs).
     * ``Precedence: bulk | list | junk`` (legacy, still widely set).
+    * ``X-Autoreply`` / ``X-Autorespond`` present (non-standard autoresponders).
     * Only when ``check_in_reply_to``: ``In-Reply-To`` / ``References``
-      matching a Message-ID we sent — the strongest OOO signal. This is
+      matching a Message-ID we sent — the strongest OOO signal — unless the
+      Subject carries a human reply/forward prefix (`is_human_reply_or_forward`). This is
       checked **only for list-addressed mail**; for replies to anonymisation
       aliases the In-Reply-To always matches by construction, so applying it
       there would suppress every legitimate reply.
@@ -346,7 +348,14 @@ def suppression_reason(
     if precedence in ("bulk", "list", "junk"):
         return f"Precedence: {precedence}"
 
-    if check_in_reply_to:
+    # Non-standard autoresponder markers (older vacation scripts, cPanel). They
+    # matter more since a "Re:" reply to a list mail is no longer suppressed by
+    # the In-Reply-To signal alone.
+    for header in ("X-Autoreply", "X-Autorespond"):
+        if msg.get(header):
+            return f"{header} gesetzt"
+
+    if check_in_reply_to and not is_human_reply_or_forward(msg):
         refs = referenced_message_ids(msg)
         if refs:
             # Imported lazily to keep this module import-cheap and avoid a
@@ -354,8 +363,30 @@ def suppression_reason(
             from .models import OutboundMessage
 
             if OutboundMessage.objects.filter(message_id__in=refs).exists():
-                return "Antwort auf eine von uns weitergeleitete Nachricht"
+                return REPLY_TO_OUTBOUND_REASON
     return None
+
+
+REPLY_TO_OUTBOUND_REASON = "Antwort auf eine von uns weitergeleitete Nachricht"
+
+# "Re:", "AW:", "Fwd:", "WG:", … optionally numbered ("Re[2]:"). Mail clients
+# put these in front when a *person* replies or forwards; autoresponders use
+# their own wording ("Abwesenheitsnotiz:", "Automatische Antwort:", "Out of
+# Office:") or headers caught above.
+_HUMAN_PREFIX_RE = re.compile(
+    r"^\s*(re|aw|antw|sv|fwd?|wg|wtr|tr)\s*(\[\d+\]|\(\d+\))?\s*:", re.IGNORECASE
+)
+
+
+def is_human_reply_or_forward(msg: email.message.Message) -> bool:
+    """True when the Subject carries a reply/forward prefix a person's mail
+    client sets. Such mail references our outbound Message-ID legitimately —
+    Gmail sets In-Reply-To/References even on a *forward* — so the In-Reply-To
+    loop signal must not suppress it (2026-11-23: a class admin forwarded a
+    list mail back to the class and it was silently dropped). It still goes
+    through the release-link / approval flow like any other list mail.
+    """
+    return bool(_HUMAN_PREFIX_RE.match(str(msg.get("Subject") or "")))
 
 
 # ---------------------------------------------------------------------------

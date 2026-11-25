@@ -4145,6 +4145,42 @@ class SuppressionTests(TestCase):
         # Alias-reply path must NOT check it (always matches by construction).
         self.assertIsNone(suppression_reason(msg, check_in_reply_to=False))
 
+    def _outbound(self):
+        template = ListTemplate.objects.create(name="T")
+        lst = List.objects.create(title="L", email_alias="l", template=template)
+        OutboundMessage.objects.create(
+            list=lst,
+            message_id="out1@caos.cloud",
+            alias_token="A1",
+            from_email="s@x",
+            recipient_email="r@x",
+        )
+
+    def test_human_reply_or_forward_of_our_mail_passes(self):
+        """Gmail sets In-Reply-To/References even on a forward; a person
+        forwarding or answering a list mail to the list must not be dropped
+        (2026-11-23)."""
+        self._outbound()
+        for subject in ("Fwd: Umfrage", "WG: Umfrage", "Fw: Umfrage", "Re: Umfrage",
+                        "AW: Umfrage", "Re[2]: Umfrage", "Wtr: Umfrage"):
+            msg = parse_message(_eml(subject=subject, extra_headers={
+                "In-Reply-To": "<out1@caos.cloud>",
+                "References": "<out1@caos.cloud>",
+            }))
+            self.assertIsNone(suppression_reason(msg, check_in_reply_to=True), subject)
+
+    def test_autoreply_subject_referencing_our_mail_still_suppressed(self):
+        self._outbound()
+        msg = parse_message(_eml(
+            subject="Automatische Antwort: Umfrage",
+            extra_headers={"In-Reply-To": "<out1@caos.cloud>"},
+        ))
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=True))
+
+    def test_x_autoreply_header_suppresses_even_with_re_prefix(self):
+        msg = parse_message(_eml(subject="Re: Umfrage", extra_headers={"X-Autoreply": "yes"}))
+        self.assertIsNotNone(suppression_reason(msg, check_in_reply_to=False))
+
 
 class SenderIdentificationTests(TestCase):
     def test_resolves_by_email_case_insensitive(self):
@@ -4455,6 +4491,72 @@ class ProcessInboundTests(TestCase):
         inbound.refresh_from_db()
         self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
         self.assertFalse(MailReleaseToken.objects.filter(inbound=inbound).exists())
+
+    def _reply_to_forward_raw(self, *, from_addr, subject):
+        OutboundMessage.objects.create(
+            list=self.lst,
+            message_id="out1@caos.cloud",
+            alias_token="A1",
+            from_email="s@x",
+            recipient_email=from_addr,
+        )
+        return _eml(
+            from_addr=from_addr,
+            subject=subject,
+            extra_headers={"In-Reply-To": "<out1@caos.cloud>"},
+        )
+
+    def test_member_forwarding_list_mail_gets_release_link(self):
+        member = _make_user(username="m", email="m@x.org")
+        ListAccess.objects.create(list=self.lst, user=member)
+        raw = self._reply_to_forward_raw(from_addr="m@x.org", subject="Fwd: Umfrage")
+        inbound = self._inbound(from_email="m@x.org", subject="Fwd: Umfrage", raw=raw)
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.PENDING_APPROVAL)
+        self.assertTrue(MailReleaseToken.objects.filter(inbound=inbound).exists())
+        notify.assert_called_once()
+
+    def test_suppressed_reply_notifies_registered_sender(self):
+        member = _make_user(username="m", email="m@x.org")
+        ListAccess.objects.create(list=self.lst, user=member)
+        raw = self._reply_to_forward_raw(from_addr="m@x.org", subject="Umfrage")
+        inbound = self._inbound(from_email="m@x.org", subject="Umfrage", raw=raw)
+        with patch.object(send_notification_mail, "defer") as notify:
+            with self.captureOnCommitCallbacks(execute=True):
+                process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipients"], ["m@x.org"])
+        self.assertTrue(notify.call_args.kwargs["auto_reply"])
+        self.assertIn("neue Mail", notify.call_args.kwargs["body"])
+
+    def test_suppressed_reply_from_unknown_sender_not_notified(self):
+        raw = self._reply_to_forward_raw(from_addr="stranger@ext.example", subject="Umfrage")
+        inbound = self._inbound(from_email="stranger@ext.example", subject="Umfrage", raw=raw)
+        with patch.object(send_notification_mail, "defer") as notify:
+            process_inbound.func(inbound_id=inbound.pk)
+        inbound.refresh_from_db()
+        self.assertEqual(inbound.decision, InboundMessage.Decision.SUPPRESSED)
+        notify.assert_not_called()
+
+    def test_auto_reply_notice_carries_auto_submitted_header(self):
+        send_notification_mail.func(
+            recipients=["m@x.org"], subject="S", body="B", auto_reply=True
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].extra_headers.get("Auto-Submitted"), "auto-replied")
+
+    def test_auto_submitted_suppression_not_notified(self):
+        _make_user(username="m", email="m@x.org")
+        raw = _eml(from_addr="m@x.org", extra_headers={"Auto-Submitted": "auto-replied"})
+        inbound = self._inbound(from_email="m@x.org", raw=raw)
+        with patch.object(send_notification_mail, "defer") as notify:
+            process_inbound.func(inbound_id=inbound.pk)
+        notify.assert_not_called()
 
     def test_unknown_alias(self):
         inbound = self._inbound(to_alias="ghost", matched_list=None)
