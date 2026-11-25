@@ -19,6 +19,9 @@ Responsibilities (strict):
       pushes from flaky networks / NAT timeouts / half-broken proxies)
     - `IMAP_IDLE_TIMEOUT` elapsed → DONE + re-IDLE so the server's 30-min
       kick never lands while we're blocked.
+* After `IMAP_SESSION_MAX_AGE`: log out and reconnect (planned, no backoff) —
+  the provider drops connections after ~3 h, which otherwise surfaced as a
+  TimeoutError crash plus backoff every 3 h.
 * On connection drop / unexpected exception: outer loop reconnects with
   exponential backoff (capped at 5 min).
 * On SIGTERM / SIGINT: graceful logout + exit.
@@ -50,6 +53,18 @@ log = logging.getLogger(__name__)
 # Outer reconnect backoff: 1s, 2s, 4s, 8s, …, capped.
 _BACKOFF_INITIAL = 1.0
 _BACKOFF_CAP = 300.0
+# A session that ran at least this long before failing was healthy — the
+# failure is a fresh incident, not a crash loop, so the backoff starts over.
+# Without this the backoff only ever grew (a session never returns normally
+# except on stop), and every connection drop cost the full 5-minute cap.
+_HEALTHY_SESSION_SECONDS = 60.0
+
+
+def _next_backoff(current: float, session_seconds: float) -> tuple[float, float]:
+    """Return ``(wait_now, next_backoff)`` after a failed session."""
+    if session_seconds >= _HEALTHY_SESSION_SECONDS:
+        current = _BACKOFF_INITIAL
+    return current, min(current * 2, _BACKOFF_CAP)
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +313,13 @@ async def run_session(stop_event: asyncio.Event) -> None:
 
         idle_timeout = settings.IMAP_IDLE_TIMEOUT
         fallback_interval = settings.IMAP_FALLBACK_POLL_INTERVAL
+        session_deadline = time.monotonic() + settings.IMAP_SESSION_MAX_AGE
 
         while not stop_event.is_set():
-            idle_deadline = time.monotonic() + idle_timeout
+            if time.monotonic() >= session_deadline:
+                log.info("IMAP session max age reached — reconnecting")
+                break
+            idle_deadline = min(time.monotonic() + idle_timeout, session_deadline)
             idle = await client.idle_start(timeout=idle_timeout)
             try:
                 reason = await _wait_for_activity(
@@ -319,7 +338,7 @@ async def run_session(stop_event: asyncio.Event) -> None:
                 break
             if reason in ("push", "fallback"):
                 await _drain_unseen(client, uidvalidity)
-            # reason == "refresh" → just re-enter IDLE
+            # reason == "refresh" → re-enter IDLE (or reconnect, checked above)
     finally:
         try:
             await asyncio.wait_for(client.logout(), timeout=10)
@@ -349,18 +368,20 @@ async def main() -> None:
 
     backoff = _BACKOFF_INITIAL
     while not stop_event.is_set():
+        started = time.monotonic()
         try:
             await run_session(stop_event)
             backoff = _BACKOFF_INITIAL
         except asyncio.CancelledError:
             break
         except Exception:
+            ran = time.monotonic() - started
+            wait, backoff = _next_backoff(backoff, ran)
             log.exception(
-                "imap_idle: session crashed; backing off %.1fs", backoff
+                "imap_idle: session crashed after %.0fs; backing off %.1fs", ran, wait
             )
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+                await asyncio.wait_for(stop_event.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
-            backoff = min(backoff * 2, _BACKOFF_CAP)
     log.info("imap_idle: daemon stopped cleanly")

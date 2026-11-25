@@ -206,6 +206,11 @@ IMAP_IDLE_TIMEOUT = int(os.environ.get("IMAP_IDLE_TIMEOUT", str(29 * 60)))
 IMAP_FALLBACK_POLL_INTERVAL = int(
     os.environ.get("IMAP_FALLBACK_POLL_INTERVAL", str(5 * 60))
 )
+# Planned reconnect: end the IMAP session cleanly after this many seconds and
+# log in again. The provider drops connections after ~3 h (prod, 2026-11:
+# a TimeoutError every 3 h 00 min of session time, each followed by a 5-min
+# backoff); a voluntary reconnect well before that costs one login.
+IMAP_SESSION_MAX_AGE = int(os.environ.get("IMAP_SESSION_MAX_AGE", str(60 * 60)))
 
 # Phase 5b retention (CLAUDE.md / "Retention").
 # IMAP EXPUNGE grace: processed (\Seen) catch-all mail is deleted from the

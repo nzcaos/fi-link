@@ -3692,7 +3692,10 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from .imap_consumer import (
+    _BACKOFF_CAP,
+    _BACKOFF_INITIAL,
     _is_new_mail_signal,
+    _next_backoff,
     _parse_fetch_response,
     _parse_internaldate,
 )
@@ -3987,6 +3990,23 @@ class ParseAndPersistTests(TestCase):
         after = timezone.now()
         self.assertGreaterEqual(row.received_at, before)
         self.assertLessEqual(row.received_at, after)
+
+
+class ImapBackoffTests(TestCase):
+    def test_crash_loop_backoff_grows_to_cap(self):
+        wait, nxt = _next_backoff(_BACKOFF_INITIAL, session_seconds=2)
+        self.assertEqual(wait, _BACKOFF_INITIAL)
+        self.assertEqual(nxt, _BACKOFF_INITIAL * 2)
+        wait, nxt = _next_backoff(_BACKOFF_CAP, session_seconds=2)
+        self.assertEqual(wait, _BACKOFF_CAP)
+        self.assertEqual(nxt, _BACKOFF_CAP)
+
+    def test_drop_after_healthy_session_retries_immediately(self):
+        """A connection that ran for hours and then dropped must not wait the
+        5-minute cap left over from earlier failures (prod, 2026-11)."""
+        wait, nxt = _next_backoff(_BACKOFF_CAP, session_seconds=3 * 3600)
+        self.assertEqual(wait, _BACKOFF_INITIAL)
+        self.assertEqual(nxt, _BACKOFF_INITIAL * 2)
 
 
 class ImapFetchParsingTests(TestCase):
